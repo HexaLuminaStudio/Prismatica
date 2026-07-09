@@ -4,10 +4,10 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 from qfluentwidgets import BodyLabel, CardWidget, ImageLabel
 from qframelesswindow import TitleBar
 
-from app.core.utils import cfg, qconfig
+from app.core.utils import cfg, qconfig, signalBus
 
 
-class UserTokenWidget(CardWidget):
+class UserStatusWidget(CardWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedHeight(self.parent().height() - 10)
@@ -15,14 +15,54 @@ class UserTokenWidget(CardWidget):
         self.hBoxLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hBoxLayout.setContentsMargins(10, 2, 10, 2)
 
-        self.tokenImageLabel = ImageLabel(self)
-        self.tokenImageLabel.setImage(QPixmap(":app/icons/Token.svg"))
-        self.tokenImageLabel.scaledToHeight(20)
-        self.tokenLabel = BodyLabel("", self)
+        # 未激活图标
+        self.publicImageLabel = ImageLabel(self)
+        self.publicImageLabel.setImage(QPixmap(":app/icons/Public.svg"))
+        self.publicImageLabel.scaledToHeight(20)
 
-        self.hBoxLayout.addWidget(self.tokenImageLabel)
+        # 激活后图标
+        self.advanceImageLabel = ImageLabel(self)
+        self.advanceImageLabel.setImage(QPixmap(":app/icons/Advance.svg"))
+        self.advanceImageLabel.scaledToHeight(20)
+        self.advanceImageLabel.setVisible(False)
+
+        self.tokenLabel = BodyLabel("公益版", self)
+
+        self.hBoxLayout.addWidget(self.publicImageLabel)
+        self.hBoxLayout.addWidget(self.advanceImageLabel)
         self.hBoxLayout.addWidget(self.tokenLabel)
 
+        # 初始化时检查激活状态
+        self._updateActivationStatus()
+
+        # 连接激活状态变更信号
+        signalBus.activationStatusChanged.connect(self._onActivationStatusChanged)
+
+    def _updateActivationStatus(self):
+        """更新激活状态显示"""
+        from app.core.utils.license import getLicenseManager
+
+        licenseManager = getLicenseManager()
+
+        if licenseManager.isActivated():
+            # 已激活
+            userType = licenseManager.getUserType()
+            self.tokenLabel.setText(userType)
+            self.publicImageLabel.setVisible(False)
+            self.advanceImageLabel.setVisible(True)
+        else:
+            # 未激活
+            self.tokenLabel.setText("公益版")
+            self.publicImageLabel.setVisible(True)
+            self.advanceImageLabel.setVisible(False)
+
+    def refreshStatus(self):
+        """刷新激活状态（供外部调用）"""
+        self._updateActivationStatus()
+
+    def _onActivationStatusChanged(self, isActivated: bool):
+        """处理激活状态变更信号"""
+        self._updateActivationStatus()
 
 
 class CustomTitleBar(TitleBar):
@@ -59,7 +99,7 @@ class CustomTitleBar(TitleBar):
         self.titleLabel.setObjectName("titleLabel")
         self.window().windowTitleChanged.connect(self.setTitle)
 
-        self.userTokenCard = UserTokenWidget(self)
+        self.userTokenCard = UserStatusWidget(self)
         self.hBoxLayout.addWidget(
             self.userTokenCard,
             1,

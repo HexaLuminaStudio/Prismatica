@@ -9,7 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .trae
-.vscode
+.vscode/
 logs/
 app/config/
 app/download/
+test/

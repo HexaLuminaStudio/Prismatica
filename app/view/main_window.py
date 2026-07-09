@@ -3,10 +3,12 @@
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import NavigationItemPosition, SplashScreen,MSFluentWindow
+from qfluentwidgets import NavigationItemPosition, SplashScreen, MSFluentWindow
 
 from app.core.utils import signalBus, logger
 from .widgets.titlebar_widget import CustomTitleBar
+from .hsk_interface import HskInterface
+from .setting_interface import SettingInterface
 
 
 class MainWindow(MSFluentWindow):
@@ -17,6 +19,8 @@ class MainWindow(MSFluentWindow):
         self.setTitleBar(CustomTitleBar(self))
         self.initWindow()
 
+        self.hskInterface = HskInterface(self)
+        self.settingInterface = SettingInterface(self)
 
         self.connectSignalToSlot()
 
@@ -26,10 +30,20 @@ class MainWindow(MSFluentWindow):
     def connectSignalToSlot(self):
         logger.debug("连接信号和槽")
 
-
-
     def initNavigation(self):
         logger.info("开始初始化导航界面")
+        self.addSubInterface(
+            self.hskInterface,
+            QIcon(":app/icons/Hsk.svg"),
+            "HSK下载",
+            position=NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
+            self.settingInterface,
+            QIcon(":app/icons/Setting.svg"),
+            "设置",
+            position=NavigationItemPosition.BOTTOM,
+        )
         self.splashScreen.finish()
         logger.info("导航界面初始化完成")
 

@@ -1,6 +1,20 @@
 <RCC>
     <qresource prefix="/app">
         <file>images/logo.png</file>
-
+        <file>icons/Setting.svg</file>
+        <file>icons/Number.svg</file>
+        <file>icons/Thread.svg</file>
+        <file>icons/SavePath.svg</file>
+        <file>icons/Hsk.svg</file>
+        <file>icons/Information.svg</file>
+        <file>icons/Feedback.svg</file>
+        <file>icons/Global.svg</file>
+        <file>icons/MaxTries.svg</file>
+        <file>icons/SystemInfo.svg</file>
+        <file>icons/Advance.svg</file>
+        <file>icons/Check.svg</file>
+        <file>icons/Copy.svg</file>
+        <file>icons/Status.svg</file>
+        <file>icons/Public.svg</file>
     </qresource>
 </RCC>

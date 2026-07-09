@@ -186,8 +186,12 @@ class DeviceIdentifier:
         sortedFeatures = sorted(self.deviceFeatures.items())
         combined = "|".join(f"{k}:{v}" for k, v in sortedFeatures)
         
+        # 使用固定的盐（基于设备特征的哈希）确保每次派生相同密钥
+        saltSource = "|".join(f"{k}:{v}" for k, v in sortedFeatures)
+        fixedSalt = hash256(saltSource).encode()[:32]
+        
         # 使用PBKDF2派生密钥（迭代100000次）
-        key, salt = deriveKey(combined, iterations=100000, keyLength=32)
+        key, _ = deriveKey(combined, iterations=100000, keyLength=32, salt=fixedSalt)
         
         return key
     

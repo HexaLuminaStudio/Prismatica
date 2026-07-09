@@ -20,7 +20,7 @@ setLicense(
 autoSetup(MODE)
 
 # enable dpi scale
-_dpi_scale = cfg.get(cfg.dpiScale)
+_dpi_scale = cfg.get(cfg.DpiScale)
 if _dpi_scale != "Auto":
     try:
         scale = float(_dpi_scale)
@@ -30,7 +30,9 @@ if _dpi_scale != "Auto":
         os.environ["QT_SCALE_FACTOR"] = str(scale)
         logger.info(f"[Main] DPI缩放已设置为 {scale}x")
     except (TypeError, ValueError) as e:
-        logger.warning(f"[Main] DPI缩放配置无效 ({_dpi_scale!r})，使用系统自动缩放: {e}")
+        logger.warning(
+            f"[Main] DPI缩放配置无效 ({_dpi_scale!r})，使用系统自动缩放: {e}"
+        )
 
 # create application
 app = QApplication(sys.argv)
