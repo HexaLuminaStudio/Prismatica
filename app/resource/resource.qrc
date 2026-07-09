@@ -16,5 +16,10 @@
         <file>icons/Copy.svg</file>
         <file>icons/Status.svg</file>
         <file>icons/Public.svg</file>
+        <file>icons/Write.svg</file>
+        <file>icons/EssayTitle.svg</file>
+        <file>icons/Level.svg</file>
+        <file>icons/Refresh.svg</file>
+        <file>icons/Task.svg</file>
     </qresource>
 </RCC>

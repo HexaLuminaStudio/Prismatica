@@ -19,7 +19,7 @@ class DeviceIdentifier:
         """
         初始化设备标识管理器
         
-        :param storagePath: 设备标识存储路径，默认使用 %APPDATA%\6D-CorpusClient\device.bin
+        :param storagePath: 设备标识存储路径，默认使用 %APPDATA%\Prismatica\device.bin
         """
         self.storagePath = storagePath
         self.deviceId = None
@@ -33,7 +33,7 @@ class DeviceIdentifier:
         
         # 根据操作系统获取 APPDATA 路径
         appData = Path.home() / "AppData" / "Roaming" if platform.system() == "Windows" else Path.home() / ".config"
-        appPath = appData / "6D-CorpusClient"
+        appPath = appData / "Prismatica"
         appPath.mkdir(parents=True, exist_ok=True)
         return appPath / "device.bin"
     

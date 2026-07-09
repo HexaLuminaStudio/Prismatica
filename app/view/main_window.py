@@ -3,11 +3,17 @@
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import NavigationItemPosition, SplashScreen, MSFluentWindow
+from qfluentwidgets import (
+    NavigationItemPosition,
+    SplashScreen,
+    MSFluentWindow,
+    setThemeColor,
+)
 
 from app.core.utils import signalBus, logger
 from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
+from .task_interface import TaskInterface
 from .setting_interface import SettingInterface
 
 
@@ -16,12 +22,13 @@ class MainWindow(MSFluentWindow):
     def __init__(self):
         logger.info("开始初始化主窗口")
         super().__init__()
+        setThemeColor("#00b09c")
         self.setTitleBar(CustomTitleBar(self))
         self.initWindow()
 
         self.hskInterface = HskInterface(self)
+        self.taskInterface = TaskInterface(self)
         self.settingInterface = SettingInterface(self)
-
         self.connectSignalToSlot()
 
         self.initNavigation()
@@ -39,6 +46,12 @@ class MainWindow(MSFluentWindow):
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
+            self.taskInterface,
+            QIcon(":app/icons/Task.svg"),
+            "任务管理",
+            position=NavigationItemPosition.BOTTOM,
+        )
+        self.addSubInterface(
             self.settingInterface,
             QIcon(":app/icons/Setting.svg"),
             "设置",
@@ -49,11 +62,11 @@ class MainWindow(MSFluentWindow):
 
     def initWindow(self):
         logger.info("开始初始化窗口设置")
-        self.resize(1050, 800)
-        self.setMinimumWidth(760)
-        self.setMinimumHeight(800)
+        self.resize(1000, 750)
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))
-        self.setWindowTitle("六维语宙客户端")
+        self.setWindowTitle("棱溯客户端")
 
         logger.debug("已设置窗口基本属性")
 

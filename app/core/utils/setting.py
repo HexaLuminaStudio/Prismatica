@@ -12,7 +12,7 @@ YEAR = 2026
 AUTHOR = "猫叁零"
 VERSION = "v1.0.0"
 INNER_VERSION = "100"
-APP_NAME = "6DCorpusClient-Refactor"
+APP_NAME = "Prismatica"
 
 
 def get_install_dir() -> Path:
@@ -27,16 +27,17 @@ def get_install_dir() -> Path:
         return Path(sys.executable).parent
     else:
         # 开发环境：项目根目录 = app/ 的父目录
-        return Path(__file__).resolve().parent.parent.parent
+        return Path(__file__).resolve().parent.parent.parent.parent
 
 INSTALL_DIR = get_install_dir()
 CONFIG_FOLDER = INSTALL_DIR / "config"
 CONFIG_FILE = CONFIG_FOLDER / "config.json"
 DOWNLOAD_FOLDER = INSTALL_DIR / "download"
+LOG_FOLDER = INSTALL_DIR / "logs"
 
 # 确保目录存在
 CONFIG_FOLDER.mkdir(parents=True, exist_ok=True)
 DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
-
+LOG_FOLDER.mkdir(parents=True, exist_ok=True)
 
 MODE: Literal["DEV", "TEST", "RES"] = "DEV"

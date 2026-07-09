@@ -1,0 +1,23 @@
+{
+    "CorpusDownload": {
+        "DownloadSavePath": "E:/Prismatica/download",
+        "GlobalLoginToken": "e92aa8cdd80826ef8991151690edf688",
+        "HSKLoginToken": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ4MTU0NzEsInN1YiI6IjEzMzYwMCJ9.HGBma8WDDaOpdD2B8FNi2F_ROOWTXpdS1xVx1EKxTT0",
+        "MaximumAttempts": 3,
+        "NumberPerDownloads": 100,
+        "ThreadPerDownloads": 3
+    },
+    "MainWindow": {
+        "DpiScale": "Auto",
+        "MicaEnabled": true
+    },
+    "QFluentWidgets": {
+        "FontFamilies": [
+            "Segoe UI",
+            "Microsoft YaHei",
+            "PingFang SC"
+        ],
+        "ThemeColor": "#ff00b09c",
+        "ThemeMode": "Auto"
+    }
+}

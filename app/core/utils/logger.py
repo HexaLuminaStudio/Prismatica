@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Pattern
 
 from loguru import logger as _logger
+from app.core.utils.setting import LOG_FOLDER
 
 
 # 敏感信息模式列表（常量：全大写+下划线）
@@ -247,7 +248,7 @@ def _autoSetup(environment: str = "DEV"):
     
     level = levelMap.get(environment, "INFO")
     
-    loggerInstance = Logger(level=level)
+    loggerInstance = Logger(logDir=LOG_FOLDER, level=level)
     loggerInstance.setup()
     
     return loggerInstance

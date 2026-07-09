@@ -42,8 +42,14 @@ class Config(QConfig):
         3,
         OptionsValidator([i for i in range(1, 11)]),
     )
-    HSKLoginToken = ConfigItem("CorpusDownload", "HSKLoginToken", "")
-    GlobalLoginToken = ConfigItem("CorpusDownload", "GlobalLoginToken", "")
+    HSKLoginToken = ConfigItem(
+        "CorpusDownload",
+        "HSKLoginToken",
+        "",  # 请通过环境变量 HSK_USERNAME 和 HSK_PASSWORD 配置
+    )
+    GlobalLoginToken = ConfigItem(
+        "CorpusDownload", "GlobalLoginToken", ""  # 请通过环境变量配置
+    )
 
     MicaEnabled = ConfigItem("MainWindow", "MicaEnabled", isWin11(), BoolValidator())
     DpiScale = OptionsConfigItem(

@@ -1,7 +1,12 @@
 # coding: utf-8
+"""
+HSK搜索组件模块
+包含各种HSK语料库检索组件
+"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CheckBox,
     ComboBox,
@@ -12,7 +17,56 @@ from qfluentwidgets import (
 )
 
 
+class HskSearchContainer(QWidget):
+    """HSK搜索容器组件，包含滚动布局"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._initLayout()
+
+    def _initLayout(self):
+        """初始化滚动布局"""
+        vBoxLayout = QVBoxLayout(self)
+        vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        vBoxLayout.setSpacing(0)
+
+        # 创建滚动区域
+        scrollArea = ScrollArea(self)
+        scrollArea.setStyleSheet("background:transparent;border:none;")
+        scrollArea.setWidgetResizable(True)
+        scrollArea.setFrameShape(QFrame.NoFrame)
+        scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # 创建滚动内容widget
+        scrollWidget = QWidget()
+        scrollLayout = QVBoxLayout(scrollWidget)
+        scrollLayout.setContentsMargins(0, 0, 0, 0)
+        scrollLayout.setSpacing(0)
+
+        # 搜索组件容器
+        self.searchWidget = QWidget()
+        self.searchLayout = QVBoxLayout(self.searchWidget)
+        self.searchLayout.setContentsMargins(0, 0, 0, 0)
+        self.searchLayout.setSpacing(10)
+
+        scrollLayout.addWidget(self.searchWidget)
+        scrollArea.setWidget(scrollWidget)
+        vBoxLayout.addWidget(scrollArea)
+
+    def addSearchWidget(self, widget):
+        """添加搜索组件"""
+        self.searchLayout.addWidget(widget)
+
+    def getSearchWidgets(self):
+        """获取所有搜索组件"""
+        return [
+            self.searchLayout.itemAt(i).widget()
+            for i in range(self.searchLayout.count())
+        ]
+
+
 class StringGeneralSearchWidget(GroupHeaderCardWidget):
+    """字符串一般检索组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,6 +92,7 @@ class StringGeneralSearchWidget(GroupHeaderCardWidget):
 
 
 class SpecificConditionSearchWidget(GroupHeaderCardWidget):
+    """特定条件检索组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,19 +127,19 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
             self.initialString,
         )
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "前词",
             "输入前词",
             self.previousWords,
         )
         self.addGroup(
-            QIcon(":app/icons/Link.svg"),
+            QIcon(":app/icons/Write.svg"),
             "距离",
             "输入距离",
             self.compactSpinBox,
         )
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "后词",
             "输入后词",
             self.postWord,
@@ -111,6 +166,7 @@ from app.core.utils import syntacticRelationshipList
 
 
 class WordCombinationSearchWidget(GroupHeaderCardWidget):
+    """词语搭配检索组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,6 +206,7 @@ from app.core.utils import wrongSentencePattern
 
 
 class WrongSentenceSearchWidget(GroupHeaderCardWidget):
+    """错误句检索组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -161,7 +218,7 @@ class WrongSentenceSearchWidget(GroupHeaderCardWidget):
         self.sentencePatternComBobox.setFixedWidth(200)
 
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "句式",
             "选择句式",
             self.sentencePatternComBobox,
@@ -180,6 +237,8 @@ from app.core.utils import hskEssayList, hskCountryDict
 
 
 class AdvancedSettingCardWidget(GroupHeaderCardWidget):
+    """高级设置组件"""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setTitle("检索高级设置")
@@ -202,11 +261,11 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
         self.nationality.setFixedWidth(200)
 
         # 生成只包含国家名称的列表
-        country_list = list(hskCountryDict.keys())
-        self.nationality.addItems(country_list)
+        countryList = list(hskCountryDict.keys())
+        self.nationality.addItems(countryList)
 
         self.addGroup(
-            QIcon(":app/icons/Essay.svg"),
+            QIcon(":app/icons/EssayTitle.svg"),
             "作文题目",
             "选择作文题目",
             self.essayTitle,
@@ -218,7 +277,7 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
             self.certificateLevel,
         )
         self.addGroup(
-            QIcon(":app/icons/Nation.svg"),
+            QIcon(":app/icons/Public.svg"),
             "国籍",
             "选择国籍",
             self.nationality,
@@ -246,280 +305,3 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
             return dicts
         else:
             return {}
-
-
-# ─── 批量下载组件 ───────────────────────────────────────────────
-
-from loguru import logger
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
-    QScrollArea,
-    QSizePolicy,
-    QVBoxLayout,
-    QWidget,
-)
-from qfluentwidgets import (
-    BodyLabel,
-    CardWidget,
-    FluentIcon,
-    PrimaryPushButton,
-    PrimaryToolButton,
-    ProgressBar,
-    StrongBodyLabel,
-)
-from qfluentwidgetspro import SlideAniStackedWidget
-
-
-class HSKBatchItemCard(CardWidget):
-    """批量下载列表中的单个任务卡片"""
-
-    removed = Signal(int)  # 发送索引，通知父组件移除
-
-    def __init__(self, index: int, info_dict: dict, parent=None):
-        super().__init__(parent)
-        self.index = index
-        self.info_dict = info_dict
-        logger.info(
-            f"[BatchItem.__init__] index={index}, info_dict.keys={list(info_dict.keys())}, payload={info_dict.get('payload')}"
-        )
-        self._build_ui()
-
-    def _build_ui(self):
-        self.setFixedHeight(52)
-        self.hBox = QHBoxLayout(self)
-        self.hBox.setContentsMargins(12, 0, 8, 0)
-        self.hBox.setSpacing(10)
-
-        # 序号标签
-        self.indexLabel = BodyLabel(f"#{self.index + 1}", self)
-        self.indexLabel.setFixedWidth(30)
-        self.hBox.addWidget(
-            self.indexLabel,
-            0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-        )
-
-        # 关键词信息（兼容 HSK 和全球中介语的所有搜索字段）
-        payload = self.info_dict.get("payload", {})
-        logger.info(f"[BatchItem._build_ui] payload={payload}, type={type(payload)}")
-
-        # 依次尝试各字段，优先级从高到低
-        keyword = None
-        for _field in (
-            "keystr",
-            "shou",
-            "kaishi",
-            "jieshu",
-            "wei",
-            "mothertongue",
-            "authornationality",
-            "keyword",
-            "wrong_type",
-            "start_word",
-        ):
-            val = payload.get(_field)
-            if val and str(val).strip():
-                keyword = str(val)
-                logger.info(f"[BatchItem] 匹配字段 {_field}={keyword}")
-                break
-
-        if not keyword:
-            keyword = "未填写关键字"
-            logger.info("[BatchItem] 无关键字，使用 fallback")
-
-        self.keywordLabel = StrongBodyLabel(keyword, self)
-        logger.info(f"[BatchItem] keywordLabel 显示文本: {keyword}")
-        self.keywordLabel.setToolTip(str(payload))
-        self.hBox.addWidget(
-            self.keywordLabel,
-            1,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-        )
-
-        # 高级设置标签
-        advance = self.info_dict.get("advance", {})
-        if advance:
-            self.hBox.addWidget(
-                BodyLabel(f"含高级筛选", self),
-                0,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            )
-
-        # 移除按钮
-        self.removeBtn = PrimaryToolButton(FluentIcon.DELETE, self)
-        self.removeBtn.setFixedSize(28, 28)
-        self.removeBtn.setToolTip("移除")
-        self.removeBtn.clicked.connect(lambda: self.removed.emit(self.index))
-        self.hBox.addWidget(
-            self.removeBtn,
-            0,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-        )
-
-
-class HSKBatchDownloadWidget(QWidget):
-    """
-    批量下载管理组件：
-    - 显示已添加的搜索条件列表
-    - 显示选中数量统计
-    - 提供批量下载按钮
-    """
-
-    batchDownloadRequest = Signal(list)  # 发送批量下载请求
-    countChanged = Signal(int)  # 任务数量变化信号，通知界面更新按钮状态
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.items = []  # 存储 {index, info_dict}
-        self._next_index = 0
-        self._setup_ui()
-
-    def _setup_ui(self):
-        self.vBox = QVBoxLayout(self)
-        self.vBox.setContentsMargins(0, 0, 0, 0)
-        self.vBox.setSpacing(6)
-
-        # 头部：标题 + 数量 + 全部清除
-        header = QHBoxLayout()
-        header.setSpacing(8)
-
-        self.titleLabel = StrongBodyLabel("批量下载列表", self)
-        self.countLabel = BodyLabel("(0 个任务)", self)
-        self.countLabel.setStyleSheet("color: #888; font-size: 12px;")
-
-        from qfluentwidgets import ToolButton
-
-        self.clearAllBtn = ToolButton(FluentIcon.DELETE, self)
-        self.clearAllBtn.setToolTip("清空全部")
-        self.clearAllBtn.clicked.connect(self._clear_all)
-
-        header.addWidget(self.titleLabel)
-        header.addWidget(self.countLabel)
-        header.addStretch(1)
-        header.addWidget(self.clearAllBtn)
-
-        self.vBox.addLayout(header)
-
-        # 列表区域（可滚动）
-        scroll = ScrollArea(self)
-        scroll.setStyleSheet("background:transparent; border:none;")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # 初始至少显示3个任务项（每项52px + 间距6px * 2 ≈ 180px），超出后滚动
-        scroll.setMinimumHeight(200)
-
-        self.listWidget = QWidget()
-        self.listVBox = QVBoxLayout(self.listWidget)
-        self.listVBox.setContentsMargins(0, 0, 0, 0)
-        self.listVBox.setSpacing(6)
-        self.listVBox.addStretch(1)
-
-        scroll.setWidget(self.listWidget)
-        self.vBox.addWidget(scroll, 1)
-
-        # 底部操作栏（下载按钮已移至 HskInterface 按钮行，此处仅留空白占位）
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        footer.setContentsMargins(0, 4, 0, 0)  # 仅留少量上边距
-        self.vBox.addLayout(footer)
-
-    def add_item(self, info_dict: dict, advance_dict: dict = None):
-        """添加一个搜索条件到批量列表（兼容 HSK 扁平结构和 Global 嵌套结构）"""
-        # 如果 info_dict 已包含 "payload" 键（Global 传入），直接使用
-        # 否则（H SK 传入）提取除 url 外的所有字段作为 payload
-        if "payload" in info_dict:
-            item_info = {
-                "url": info_dict.get("url"),
-                "payload": info_dict["payload"],
-            }
-        else:
-            item_info = {
-                "url": info_dict.get("url"),
-                "payload": {k: v for k, v in info_dict.items() if k != "url"},
-            }
-        if advance_dict:
-            item_info["advance"] = advance_dict
-            item_info["payload"].update(advance_dict)
-
-        # 检查是否已存在相同条件
-        for existing in self.items:
-            if existing["info_dict"]["url"] == item_info["url"] and existing[
-                "info_dict"
-            ].get("payload") == item_info.get("payload"):
-                logger.debug("[Batch] 跳过重复条件")
-                return
-
-        card = HSKBatchItemCard(self._next_index, item_info, self.listWidget)
-        logger.info(f"[Batch] 创建卡片, item_info.payload={item_info.get('payload')}")
-        card.removed.connect(self._remove_item)
-        self.listVBox.insertWidget(len(self.items), card)
-
-        self.items.append({"index": self._next_index, "info_dict": item_info})
-        self._next_index += 1
-        self._update_count()
-
-        logger.info(f"[Batch] 添加任务 #{self._next_index}: {item_info.get('payload')}")
-
-    def _update_count(self):
-        count = len(self.items)
-        self.countLabel.setText(f"({count} 个任务)")
-        self.countChanged.emit(count)
-
-    def _remove_item(self, index: int):
-        """移除指定索引的任务卡片"""
-        # 找到并移除卡片
-        for i, item in enumerate(self.items):
-            if item["index"] == index:
-                self.items.pop(i)
-                break
-
-        # 重建列表（重新编号）
-        self._rebuild_list()
-        self._update_count()
-
-    def _rebuild_list(self):
-        """重建卡片列表，更新显示序号，保持 _next_index 全局递增"""
-        # 清除现有卡片
-        while self.listVBox.count() > 1:
-            child = self.listVBox.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        # 重建：保持 _next_index 不变（它代表全局下一个序号）
-        # 只更新 item["index"] 和显示序号标签
-        for i, item in enumerate(self.items):
-            card = HSKBatchItemCard(i, item["info_dict"], self.listWidget)
-            card.removed.connect(self._remove_item)
-            self.listVBox.insertWidget(i, card)
-            item["index"] = i
-
-        # 新增任务时序号从 len(items) 继续递增
-        self._next_index = len(self.items)
-
-    def _clear_all(self):
-        """清空所有任务"""
-        while self.items:
-            self.items.pop()
-        while self.listVBox.count() > 1:
-            child = self.listVBox.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-        self._next_index = 0
-        self._update_count()
-        logger.info("[Batch] 清空批量下载列表")
-
-    def _download_all(self):
-        """触发批量下载"""
-        if not self.items:
-            return
-
-        info_list = [item["info_dict"] for item in self.items]
-        logger.info(f"[Batch] 开始批量下载，共 {len(info_list)} 个任务")
-        self.batchDownloadRequest.emit(info_list)
-
-    def clear(self):
-        """清空列表（外部调用）"""
-        self._clear_all()

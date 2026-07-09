@@ -9,6 +9,7 @@ from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
+    CaptionLabel,
     ComboBox,
     GroupHeaderCardWidget,
     HyperlinkLabel,
@@ -20,6 +21,7 @@ from qfluentwidgets import (
     VerticalSeparator,
 )
 
+from app.core.services import HskTokenRefreshThread, GlobalTokenRefreshThread
 from app.core.utils import cfg, qconfig, logger, signalBus
 
 
@@ -53,19 +55,15 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
         self.maxTriesComboBox.setCurrentText(str(qconfig.get(cfg.MaximumAttempts)))
         self.maxTriesComboBox.currentTextChanged.connect(self._onMaxTriesChanged)
 
-        # HSK Token输入
-        self.hskTokenLineEdit = LineEdit(self)
-        self.hskTokenLineEdit.setText(qconfig.get(cfg.HSKLoginToken))
-        self.hskTokenLineEdit.setMinimumWidth(300)
-        self.hskTokenLineEdit.setPlaceholderText("HSK-Token")
-        self.hskTokenLineEdit.editingFinished.connect(self._onHskTokenChanged)
+        # HSK Token刷新按钮
+        self.hskRefreshButton = PushButton("刷新", self)
+        self.hskRefreshButton.setIcon(":app/icons/Refresh.svg")
+        self.hskRefreshButton.clicked.connect(self._onHskRefresh)
 
-        # Global Token输入
-        self.globalTokenLineEdit = LineEdit(self)
-        self.globalTokenLineEdit.setText(qconfig.get(cfg.GlobalLoginToken))
-        self.globalTokenLineEdit.setMinimumWidth(300)
-        self.globalTokenLineEdit.setPlaceholderText("Global-Token")
-        self.globalTokenLineEdit.editingFinished.connect(self._onGlobalTokenChanged)
+        # Global Token刷新按钮
+        self.globalRefreshButton = PushButton("刷新", self)
+        self.globalRefreshButton.setIcon(":app/icons/Refresh.svg")
+        self.globalRefreshButton.clicked.connect(self._onGlobalRefresh)
 
         # 添加设置组
         self._addSettingGroups()
@@ -102,14 +100,14 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
         self.addGroup(
             ":app/icons/Hsk.svg",
             "设置HSK-Token",
-            "HSK-Token(非指导建议不更改)",
-            self.hskTokenLineEdit,
+            qconfig.get(cfg.HSKLoginToken)[:100],
+            self.hskRefreshButton,
         )
         self.addGroup(
             ":app/icons/Global.svg",
             "设置Global-Token",
-            "Global-Token(非指导建议不更改)",
-            self.globalTokenLineEdit,
+            qconfig.get(cfg.GlobalLoginToken),
+            self.globalRefreshButton,
         )
 
     def _showSuccessMessage(self, title: str, content: str):
@@ -120,6 +118,18 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
             Qt.Orientation.Horizontal,
             True,
             2000,
+            InfoBarPosition.TOP_RIGHT,
+            self.parentWidget(),
+        )
+
+    def _showErrorMessage(self, title: str, content: str):
+        """显示错误提示"""
+        InfoBar.error(
+            title,
+            content,
+            Qt.Orientation.Horizontal,
+            True,
+            3000,
             InfoBarPosition.TOP_RIGHT,
             self.parentWidget(),
         )
@@ -156,19 +166,82 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
         logger.info(f"[Setting] 最大尝试次数已修改: {value}")
         self._showSuccessMessage("O(∩_∩)O 修改成功", "最大尝试次数修改成功")
 
-    def _onHskTokenChanged(self):
-        """HSK Token变更处理"""
-        token = self.hskTokenLineEdit.text()
-        qconfig.set(cfg.HSKLoginToken, token)
-        logger.info("[Setting] HSK-Token 已更新")
-        self._showSuccessMessage("O(∩_∩)O 修改成功", "HSK-Token修改成功")
+    def _onHskRefresh(self):
+        """刷新HSK Token"""
+        logger.info("[Setting] 开始刷新HSK Token...")
+        self.hskRefreshButton.setEnabled(False)
+        self.hskRefreshButton.setText("刷新中...")
 
-    def _onGlobalTokenChanged(self):
-        """Global Token变更处理"""
-        token = self.globalTokenLineEdit.text()
+        # 创建并启动线程
+        self.hskThread = HskTokenRefreshThread(self)
+        self.hskThread.finished.connect(self._onHskRefreshFinished)
+        self.hskThread.error.connect(self._onHskRefreshError)
+        self.hskThread.start()
+
+    def _onHskRefreshFinished(self, token: str):
+        """HSK Token刷新完成"""
+        self.hskRefreshButton.setEnabled(True)
+        self.hskRefreshButton.setText("刷新")
+
+        # 保存Token
+        qconfig.set(cfg.HSKLoginToken, token)
+
+        # 更新显示
+        if len(self.groupWidgets) >= 5:
+            # 更新groupWidget[4]的内容描述
+            self.groupWidgets[4].setContent(token[:100])
+
+        # 发送信号
+        signalBus.hskTokenRefreshSignal.emit(token)
+
+        logger.info("[Setting] HSK Token刷新并保存成功")
+        self._showSuccessMessage("O(∩_∩)O 刷新成功", "HSK-Token已刷新")
+
+    def _onHskRefreshError(self, error: str):
+        """HSK Token刷新错误"""
+        self.hskRefreshButton.setEnabled(True)
+        self.hskRefreshButton.setText("刷新")
+
+        logger.error(f"[Setting] HSK Token刷新失败: {error}")
+        self._showErrorMessage("刷新失败", error)
+
+    def _onGlobalRefresh(self):
+        """刷新Global Token"""
+        logger.info("[Setting] 开始刷新Global Token...")
+        self.globalRefreshButton.setEnabled(False)
+        self.globalRefreshButton.setText("刷新中...")
+
+        # 创建并启动线程
+        self.globalThread = GlobalTokenRefreshThread(self)
+        self.globalThread.finished.connect(self._onGlobalRefreshFinished)
+        self.globalThread.error.connect(self._onGlobalRefreshError)
+        self.globalThread.start()
+
+    def _onGlobalRefreshFinished(self, token: str):
+        """Global Token刷新完成"""
+        self.globalRefreshButton.setEnabled(True)
+        self.globalRefreshButton.setText("刷新")
+
+        # 保存Token
         qconfig.set(cfg.GlobalLoginToken, token)
-        logger.info("[Setting] Global-Token 已更新")
-        self._showSuccessMessage("O(∩_∩)O 修改成功", "Global-Token修改成功")
+
+        # 更新显示
+        if len(self.groupWidgets) >= 6:
+            self.groupWidgets[5].setContent(token)
+
+        # 发送信号
+        signalBus.globalTokenRefreshSignal.emit(token)
+
+        logger.info("[Setting] Global Token刷新并保存成功")
+        self._showSuccessMessage("O(∩_∩)O 刷新成功", "Global-Token已刷新")
+
+    def _onGlobalRefreshError(self, error: str):
+        """Global Token刷新错误"""
+        self.globalRefreshButton.setEnabled(True)
+        self.globalRefreshButton.setText("刷新")
+
+        logger.error(f"[Setting] Global Token刷新失败: {error}")
+        self._showErrorMessage("刷新失败", error)
 
 
 class LicenseSettingWidget(GroupHeaderCardWidget):
@@ -209,6 +282,10 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         # 激活状态标签
         self.statusLabel = BodyLabel("", self)
 
+        # 加载设备码和激活状态
+        self._loadDeviceId()
+        self._updateActivationStatus()
+
     def _addSettingGroups(self):
         """添加设置组"""
         # 设备信息组
@@ -248,10 +325,6 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
             "未激活",
             self.statusLabel,
         )
-
-        # 加载设备码和激活状态
-        self._loadDeviceId()
-        self._updateActivationStatus()
 
     def _loadDeviceId(self):
         """加载设备码"""
@@ -339,8 +412,14 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
             statusText = f"{userType} | 有效期至 {expiryDate} | 剩余 {daysRemaining} 天"
             self.statusLabel.setText(statusText)
 
-            # 更新状态组显示
-            self.groupWidgets[2].setContent("已激活")
+            # 更新状态组描述
+            if len(self.groupWidgets) >= 3:
+                cardWidget = self.groupWidgets[2]
+                for i in range(cardWidget.viewLayout.count()):
+                    widget = cardWidget.viewLayout.itemAt(i).widget()
+                    if isinstance(widget, BodyLabel):
+                        widget.setText(statusText)
+                        break
 
             # 禁用激活输入
             self.activationCodeLineEdit.setEnabled(False)
@@ -351,7 +430,13 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         else:
             # 未激活
             self.statusLabel.setText("未激活")
-            self.groupWidgets[2].setContent("未激活")
+            if len(self.groupWidgets) >= 3:
+                cardWidget = self.groupWidgets[2]
+                for i in range(cardWidget.viewLayout.count()):
+                    widget = cardWidget.viewLayout.itemAt(i).widget()
+                    if isinstance(widget, BodyLabel):
+                        widget.setText("未激活")
+                        break
 
             logger.info("[Setting] 当前状态: 未激活")
 
@@ -546,7 +631,7 @@ class SettingInterface(ScrollArea):
 
         # 版权信息
         self.infoLabel = BodyLabel(
-            " ©2026 六维语宙 \n 贵州六棱光界科技工作室",
+            " ©2026 棱溯 \n 贵州六棱光界科技工作室",
             self.scrollWidget,
         )
 
