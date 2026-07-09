@@ -9,3 +9,14 @@
 2026-07-09 17:57:52.908 | INFO     | app.view.main_window:initNavigation:34 | 导航界面初始化完成
 2026-07-09 17:57:52.908 | INFO     | app.view.main_window:__init__:24 | 主窗口初始化完成
 2026-07-09 17:57:58.358 | INFO     | __main__:<module>:46 | 应用程序退出
+2026-07-09 18:13:35.545 | INFO     | app.view.main_window:__init__:15 | 开始初始化主窗口
+2026-07-09 18:13:35.661 | INFO     | app.view.main_window:initWindow:37 | 开始初始化窗口设置
+2026-07-09 18:13:35.984 | DEBUG    | app.view.main_window:initWindow:44 | 已设置窗口基本属性
+2026-07-09 18:13:35.986 | DEBUG    | app.view.main_window:initWindow:49 | 已创建并设置启动屏幕
+2026-07-09 18:13:35.986 | DEBUG    | app.view.main_window:initWindow:54 | 已移动窗口到屏幕中心
+2026-07-09 18:13:36.022 | INFO     | app.view.main_window:initWindow:58 | 窗口初始化完成并显示
+2026-07-09 18:13:36.023 | DEBUG    | app.view.main_window:connectSignalToSlot:27 | 连接信号和槽
+2026-07-09 18:13:36.023 | INFO     | app.view.main_window:initNavigation:32 | 开始初始化导航界面
+2026-07-09 18:13:36.023 | INFO     | app.view.main_window:initNavigation:34 | 导航界面初始化完成
+2026-07-09 18:13:36.025 | INFO     | app.view.main_window:__init__:24 | 主窗口初始化完成
+2026-07-09 18:13:37.625 | INFO     | __main__:<module>:46 | 应用程序退出
