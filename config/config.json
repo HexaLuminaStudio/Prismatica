@@ -1,8 +1,8 @@
 {
     "CorpusDownload": {
         "DownloadSavePath": "E:/Prismatica/download",
-        "GlobalLoginToken": "e92aa8cdd80826ef8991151690edf688",
-        "HSKLoginToken": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ4MTU0NzEsInN1YiI6IjEzMzYwMCJ9.HGBma8WDDaOpdD2B8FNi2F_ROOWTXpdS1xVx1EKxTT0",
+        "GlobalLoginToken": "4966287785b192c175973732d6047695",
+        "HSKLoginToken": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ4MzMxMTAsInN1YiI6IjEzMzYwMCJ9.xCwaNCGkE6AOXH8T2IxBZykkLT-1IyjuIYoWwRKy-so",
         "MaximumAttempts": 3,
         "NumberPerDownloads": 100,
         "ThreadPerDownloads": 3

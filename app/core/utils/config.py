@@ -45,10 +45,10 @@ class Config(QConfig):
     HSKLoginToken = ConfigItem(
         "CorpusDownload",
         "HSKLoginToken",
-        "",  # 请通过环境变量 HSK_USERNAME 和 HSK_PASSWORD 配置
+        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ4MTU0NzEsInN1YiI6IjEzMzYwMCJ9.HGBma8WDDaOpdD2B8FNi2F_ROOWTXpdS1xVx1EKxTT0",
     )
     GlobalLoginToken = ConfigItem(
-        "CorpusDownload", "GlobalLoginToken", ""  # 请通过环境变量配置
+        "CorpusDownload", "GlobalLoginToken", "e92aa8cdd80826ef8991151690edf688"
     )
 
     MicaEnabled = ConfigItem("MainWindow", "MicaEnabled", isWin11(), BoolValidator())

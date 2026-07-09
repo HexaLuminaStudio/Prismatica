@@ -31,19 +31,7 @@ class HSKDownloadWorker(QThread):
         super().__init__()
         self.isRunning = True
         self.isPaused = False
-
-        # 从配置获取Token，确保格式正确
-        rawToken = qconfig.get(Config.HSKLoginToken)
-        if rawToken:
-            # 如果Token已经有Bearer前缀，直接使用
-            if rawToken.startswith("Bearer "):
-                self.token = rawToken
-            else:
-                # 否则添加Bearer前缀
-                self.token = f"Bearer {rawToken}"
-        else:
-            self.token = ""
-
+        self.token = qconfig.get(Config.HSKLoginToken)
         self.outputDir = qconfig.get(Config.DownloadSavePath)
 
         # 优化延迟策略避免429

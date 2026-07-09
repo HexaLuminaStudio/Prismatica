@@ -5,18 +5,9 @@ Global语料库服务模块
 """
 
 import json
-import os
 import re
 import requests
 from PySide6.QtCore import QThread, Signal
-
-
-def _get_global_credentials() -> dict:
-    """获取Global登录凭证，优先从环境变量读取"""
-    return {
-        "userID": os.getenv("GLOBAL_USER_ID", ""),
-        "password": os.getenv("GLOBAL_PASSWORD", ""),
-    }
 
 
 class GlobalTokenRefreshThread(QThread):
@@ -27,15 +18,6 @@ class GlobalTokenRefreshThread(QThread):
 
     def run(self):
         """执行刷新请求"""
-        # 从环境变量或配置获取凭证
-        credentials = _get_global_credentials()
-        userID = credentials.get("userID")
-        password = credentials.get("password")
-
-        if not userID or not password:
-            self.error.emit("请在环境变量中配置 GLOBAL_USER_ID 和 GLOBAL_PASSWORD")
-            return
-
         try:
             url = "https://qqk.blcu.edu.cn/sys/index/login"
             headers = {
@@ -43,8 +25,8 @@ class GlobalTokenRefreshThread(QThread):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
             payload = {
-                "UserID": userID,
-                "Password": password,
+                "UserID": "15620889564",
+                "Password": "3a2f8ec463bb7171329cac19891cd893",
             }
 
             response = requests.post(url, headers=headers, json=payload, timeout=30)

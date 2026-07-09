@@ -5,17 +5,8 @@ HSK语料库服务模块
 """
 
 import json
-import os
 import requests
 from PySide6.QtCore import QThread, Signal
-
-
-def _get_hsk_credentials() -> dict:
-    """获取HSK登录凭证，优先从环境变量读取"""
-    return {
-        "username": os.getenv("HSK_USERNAME", ""),
-        "password": os.getenv("HSK_PASSWORD", ""),
-    }
 
 
 class HskTokenRefreshThread(QThread):
@@ -26,22 +17,13 @@ class HskTokenRefreshThread(QThread):
 
     def run(self):
         """执行刷新请求"""
-        # 从环境变量或配置获取凭证
-        credentials = _get_hsk_credentials()
-        username = credentials.get("username")
-        password = credentials.get("password")
-
-        if not username or not password:
-            self.error.emit("请在环境变量中配置 HSK_USERNAME 和 HSK_PASSWORD")
-            return
-
         try:
             url = "https://hsk.blcu.edu.cn/api/v1/login/access-token"
             headers = {
                 "Content-Type": "application/json",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
-            payload = {"username": username, "password": password}
+            payload = {"username": "1696645069@qq.com", "password": "Lpw20080215"}
 
             response = requests.post(url, headers=headers, json=payload, timeout=30)
 
@@ -101,16 +83,7 @@ class GetTotalWorker(QThread):
         # 延迟导入避免循环依赖
         from app.core.utils.config import qconfig, Config
 
-        # 从配置获取Token，确保格式正确
-        rawToken = qconfig.get(Config.HSKLoginToken)
-        if rawToken:
-            # 如果Token已经有Bearer前缀，直接使用
-            if rawToken.startswith("Bearer "):
-                self.token = rawToken
-            else:
-                # 否则添加Bearer前缀
-                self.token = f"Bearer {rawToken}"
-
+        self.token = qconfig.get(Config.HSKLoginToken)
         self.maxRetries = qconfig.get(Config.MaximumAttempts)
 
     def stop(self):
