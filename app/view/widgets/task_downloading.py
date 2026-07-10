@@ -63,22 +63,22 @@ class DownloadingScrollArea(SmoothScrollArea):
         """恢复进行中的任务"""
         # 获取pending和in_progress状态的任务
         try:
-            pendingTasks = taskControl.getTasksByStatus('pending')
-            inProgressTasks = taskControl.getTasksByStatus('in_progress')
+            pendingTasks = taskControl.getTasksByStatus("pending")
+            inProgressTasks = taskControl.getTasksByStatus("in_progress")
 
             for task in inProgressTasks + pendingTasks:
-                taskId = task.get('id')
+                taskId = task.get("id")
                 if taskId and taskId not in self.downloadCards:
-                    info = task.get('info', {})
-                    info['taskId'] = taskId
-                    info['type'] = task.get('type')
+                    info = task.get("info", {})
+                    info["taskId"] = taskId
+                    info["type"] = task.get("type")
                     self._create_card(info)
         except Exception as e:
             logger.error(f"[DownloadingArea] 恢复任务失败: {e}")
 
     def _create_card(self, info: dict):
         """创建下载卡片"""
-        taskId = info.get('taskId')
+        taskId = info.get("taskId")
         if not taskId or taskId in self.downloadCards:
             return
 
@@ -98,9 +98,9 @@ class DownloadingScrollArea(SmoothScrollArea):
             logger.warning(f"[DownloadingArea] 任务信息不存在: {taskId}")
             return
 
-        info = taskInfo.get('info', {})
-        info['taskId'] = taskId
-        info['type'] = taskInfo.get('type')
+        info = taskInfo.get("info", {})
+        info["taskId"] = taskId
+        info["type"] = taskInfo.get("type")
 
         self._create_card(info)
 
@@ -117,18 +117,18 @@ class DownloadingScrollArea(SmoothScrollArea):
 
         try:
             card.update_progress(
-                progress=progressInfo.get('progress', 0),
-                file_count=progressInfo.get('page', ''),
-                speed=progressInfo.get('speed', ''),
-                remaining_time=progressInfo.get('time', ''),
+                progress=progressInfo.get("progress", 0),
+                file_count=progressInfo.get("page", ""),
+                speed=progressInfo.get("speed", ""),
+                remaining_time=progressInfo.get("time", ""),
             )
         except RuntimeError:
             # 卡片已被删除，移除引用
             self.downloadCards.pop(taskId, None)
 
-    def _on_task_completed(self, taskId: str):
+    def _on_task_completed(self, taskId: str, filePath: str = ""):
         """任务完成时移除卡片"""
-        logger.info(f"[DownloadingArea] 任务完成: {taskId}")
+        logger.info(f"[DownloadingArea] 任务完成: {taskId}, filePath={filePath}")
 
         if taskId not in self.downloadCards:
             return
@@ -137,7 +137,7 @@ class DownloadingScrollArea(SmoothScrollArea):
         if card:
             try:
                 self.vBoxLayout.removeWidget(card)
-                card.set_completed()
+                card.set_completed(filePath)
                 card.deleteLater()
             except RuntimeError:
                 pass  # 卡片已被删除

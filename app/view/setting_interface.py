@@ -119,7 +119,7 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
             True,
             2000,
             InfoBarPosition.TOP_RIGHT,
-            self.parentWidget(),
+            self.window(),
         )
 
     def _showErrorMessage(self, title: str, content: str):
@@ -131,7 +131,7 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
             True,
             3000,
             InfoBarPosition.TOP_RIGHT,
-            self.parentWidget(),
+            self.window(),
         )
 
     def _selectDownloadPath(self):
@@ -169,14 +169,43 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
     def _onHskRefresh(self):
         """刷新HSK Token"""
         logger.info("[Setting] 开始刷新HSK Token...")
-        self.hskRefreshButton.setEnabled(False)
-        self.hskRefreshButton.setText("刷新中...")
 
-        # 创建并启动线程
-        self.hskThread = HskTokenRefreshThread(self)
-        self.hskThread.finished.connect(self._onHskRefreshFinished)
-        self.hskThread.error.connect(self._onHskRefreshError)
-        self.hskThread.start()
+        # 获取已保存的凭证
+        savedUsername = qconfig.get(cfg.HSKLoginUsername)
+        savedPassword = qconfig.get(cfg.HSKLoginPassword)
+
+        # 显示登录对话框，自动填充已保存的凭证
+        from app.view.widgets.token_refresh_dialog import TokenRefreshDialog
+
+        dialog = TokenRefreshDialog(
+            "HSK登录", savedUsername or "", savedPassword or "", self.window()
+        )
+        dialog.usernameEdit.setPlaceholderText("请输入HSK账号邮箱")
+        dialog.passwordEdit.setPlaceholderText("请输入HSK密码")
+
+        if dialog.exec():
+            credentials = dialog.getCredentials()
+            username = credentials["username"]
+            password = credentials["password"]
+
+            if not username or not password:
+                self._showErrorMessage("输入错误", "用户名和密码不能为空")
+                return
+
+            # 保存用户名密码到配置
+            qconfig.set(cfg.HSKLoginUsername, username)
+            qconfig.set(cfg.HSKLoginPassword, password)
+
+            self.hskRefreshButton.setEnabled(False)
+            self.hskRefreshButton.setText("刷新中...")
+
+            # 创建并启动线程，传入凭证
+            self.hskThread = HskTokenRefreshThread(username, password)
+            self.hskThread.finished.connect(self._onHskRefreshFinished)
+            self.hskThread.error.connect(self._onHskRefreshError)
+            self.hskThread.start()
+        else:
+            logger.info("[Setting] 用户取消HSK Token刷新")
 
     def _onHskRefreshFinished(self, token: str):
         """HSK Token刷新完成"""
@@ -208,14 +237,43 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
     def _onGlobalRefresh(self):
         """刷新Global Token"""
         logger.info("[Setting] 开始刷新Global Token...")
-        self.globalRefreshButton.setEnabled(False)
-        self.globalRefreshButton.setText("刷新中...")
 
-        # 创建并启动线程
-        self.globalThread = GlobalTokenRefreshThread(self)
-        self.globalThread.finished.connect(self._onGlobalRefreshFinished)
-        self.globalThread.error.connect(self._onGlobalRefreshError)
-        self.globalThread.start()
+        # 获取已保存的凭证
+        savedUserId = qconfig.get(cfg.GlobalLoginUsername)
+        savedPassword = qconfig.get(cfg.GlobalLoginPassword)
+
+        # 显示登录对话框，自动填充已保存的凭证
+        from app.view.widgets.token_refresh_dialog import TokenRefreshDialog
+
+        dialog = TokenRefreshDialog(
+            "Global登录", savedUserId or "", savedPassword or "", self.window()
+        )
+        dialog.usernameEdit.setPlaceholderText("请输入Global UserID")
+        dialog.passwordEdit.setPlaceholderText("请输入Global Password")
+
+        if dialog.exec():
+            credentials = dialog.getCredentials()
+            userId = credentials["username"]
+            password = credentials["password"]
+
+            if not userId or not password:
+                self._showErrorMessage("输入错误", "UserID和密码不能为空")
+                return
+
+            # 保存凭证到配置
+            qconfig.set(cfg.GlobalLoginUsername, userId)
+            qconfig.set(cfg.GlobalLoginPassword, password)
+
+            self.globalRefreshButton.setEnabled(False)
+            self.globalRefreshButton.setText("刷新中...")
+
+            # 创建并启动线程
+            self.globalThread = GlobalTokenRefreshThread(userId, password)
+            self.globalThread.finished.connect(self._onGlobalRefreshFinished)
+            self.globalThread.error.connect(self._onGlobalRefreshError)
+            self.globalThread.start()
+        else:
+            logger.info("[Setting] 用户取消Global Token刷新")
 
     def _onGlobalRefreshFinished(self, token: str):
         """Global Token刷新完成"""
@@ -449,7 +507,7 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
             True,
             2000,
             InfoBarPosition.TOP_RIGHT,
-            self.parentWidget(),
+            self.window(),
         )
 
     def _showErrorMessage(self, title: str, content: str):
@@ -461,7 +519,7 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
             True,
             3000,
             InfoBarPosition.TOP_RIGHT,
-            self.parentWidget(),
+            self.window(),
         )
 
 

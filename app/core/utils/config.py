@@ -1,4 +1,5 @@
 # coding:utf-8
+import os
 import sys
 
 from qfluentwidgets import (
@@ -45,10 +46,24 @@ class Config(QConfig):
     HSKLoginToken = ConfigItem(
         "CorpusDownload",
         "HSKLoginToken",
-        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ4MTU0NzEsInN1YiI6IjEzMzYwMCJ9.HGBma8WDDaOpdD2B8FNi2F_ROOWTXpdS1xVx1EKxTT0",
+        os.getenv("HSK_LOGIN_TOKEN", ""),
     )
     GlobalLoginToken = ConfigItem(
-        "CorpusDownload", "GlobalLoginToken", "e92aa8cdd80826ef8991151690edf688"
+        "CorpusDownload", "GlobalLoginToken", os.getenv("GLOBAL_LOGIN_TOKEN", "")
+    )
+    # HSK登录账号密码（通过环境变量注入）
+    HSKLoginUsername = ConfigItem(
+        "CorpusDownload", "HSKLoginUsername", os.getenv("HSK_LOGIN_USERNAME", "")
+    )
+    HSKLoginPassword = ConfigItem(
+        "CorpusDownload", "HSKLoginPassword", os.getenv("HSK_LOGIN_PASSWORD", "")
+    )
+    # Global登录账号密码（通过环境变量注入）
+    GlobalLoginUsername = ConfigItem(
+        "CorpusDownload", "GlobalLoginUsername", os.getenv("GLOBAL_LOGIN_USERNAME", "")
+    )
+    GlobalLoginPassword = ConfigItem(
+        "CorpusDownload", "GlobalLoginPassword", os.getenv("GLOBAL_LOGIN_PASSWORD", "")
     )
 
     MicaEnabled = ConfigItem("MainWindow", "MicaEnabled", isWin11(), BoolValidator())

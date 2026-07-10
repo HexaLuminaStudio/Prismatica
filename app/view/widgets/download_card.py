@@ -15,6 +15,7 @@ from qfluentwidgets import (
     IconWidget,
     PrimaryPushButton,
     ToolButton,
+    MessageBox,
 )
 
 from qfluentwidgets import FluentIcon
@@ -142,7 +143,7 @@ class DownloadCard(CardWidget):
         self.pauseButton.setFixedSize(32, 32)
         self.pauseButton.clicked.connect(self._on_pause_clicked)
 
-        # 取消按钮
+        # 取消/删除按钮
         self.cancelButton = ToolButton(FluentIcon.CLOSE, self)
         self.cancelButton.setFixedSize(32, 32)
         self.cancelButton.clicked.connect(self._on_cancel_clicked)
@@ -155,6 +156,23 @@ class DownloadCard(CardWidget):
             0,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
+
+    def _add_delete_button(self):
+        """添加删除按钮到卡片"""
+        from qfluentwidgets import ToolButton
+        from qfluentwidgets import FluentIcon
+
+        self.deleteButton = ToolButton(FluentIcon.DELETE, self)
+        self.deleteButton.setFixedSize(32, 32)
+        self.deleteButton.setToolTip("删除记录")
+        self.deleteButton.clicked.connect(self._on_delete_clicked)
+
+        # 获取按钮布局并添加删除按钮
+        button_widget = self.cancelButton.parent()
+        if button_widget:
+            layout = button_widget.layout()
+            if layout:
+                layout.addWidget(self.deleteButton)
 
     def _setup_style(self):
         """设置样式"""
@@ -182,6 +200,10 @@ class DownloadCard(CardWidget):
         remaining_time: str = None,
     ):
         """更新进度信息"""
+        # 如果任务已暂停，不更新进度
+        if self.isPaused:
+            return
+
         self.progressBar.setValue(progress)
 
         if file_count is not None:
@@ -191,14 +213,23 @@ class DownloadCard(CardWidget):
         if remaining_time is not None:
             self.timeLabel.setText(remaining_time)
 
-    def set_completed(self):
+    def set_completed(self, filePath: str = None):
         """设置为完成状态"""
         self.progressBar.setValue(100)
         self.fileLabel.setText("已完成")
         self.speedLabel.setText("")
         self.timeLabel.setText("")
         self.pauseButton.setEnabled(False)
-        self.cancelButton.setEnabled(False)
+        # 取消按钮改为打开文件夹按钮
+        self.cancelButton.setIcon(FluentIcon.FOLDER)
+        self.cancelButton.setToolTip("打开文件夹")
+        self.cancelButton.clicked.disconnect()
+        self.cancelButton.clicked.connect(self._on_open_folder_clicked)
+        # 添加删除按钮
+        self._add_delete_button()
+        # 保存文件路径
+        if filePath:
+            self.filePath = filePath
         self._set_completed_style()
 
     def set_failed(self, error: str = None):
@@ -237,16 +268,94 @@ class DownloadCard(CardWidget):
 
     def _on_cancel_clicked(self):
         """取消按钮点击"""
-        from app.core.services import taskManager
+        # 显示确认对话框
+        confirm_dialog = MessageBox(
+            "确认取消", "确定要取消这个下载任务吗？", self.window()
+        )
+        confirm_dialog.yesButton.setText("确定")
+        confirm_dialog.cancelButton.setText("取消")
 
-        # 停止任务
-        taskManager.stopTask(self.taskId)
+        if confirm_dialog.exec():
+            from app.core.services import taskManager
 
-        # 断开所有信号连接
-        try:
-            self.pauseButton.clicked.disconnect()
-            self.cancelButton.clicked.disconnect()
-        except Exception:
-            pass
+            # 停止任务
+            taskManager.stopTask(self.taskId)
 
-        self.deleteLater()
+            # 断开所有信号连接
+            try:
+                self.pauseButton.clicked.disconnect()
+                self.cancelButton.clicked.disconnect()
+            except Exception:
+                pass
+
+            self.deleteLater()
+
+    def _on_delete_clicked(self):
+        """删除按钮点击"""
+        from qfluentwidgets import MessageBox
+
+        # 显示确认对话框
+        confirm_dialog = MessageBox(
+            "确认删除", "确定要删除这条下载记录吗？", self.window()
+        )
+        confirm_dialog.yesButton.setText("确定")
+        confirm_dialog.cancelButton.setText("取消")
+
+        if confirm_dialog.exec():
+            from app.core.api import taskControl
+
+            # 从数据库删除任务记录
+            try:
+                taskControl.deleteTask(self.taskId)
+            except Exception:
+                pass
+
+            # 断开所有信号连接
+            try:
+                if hasattr(self, "deleteButton"):
+                    self.deleteButton.clicked.disconnect()
+                self.cancelButton.clicked.disconnect()
+            except Exception:
+                pass
+
+            self.deleteLater()
+
+    def _on_open_folder_clicked(self):
+        """打开文件夹并选中文件"""
+        import os
+        import platform
+        import subprocess
+        from loguru import logger
+
+        file_path = getattr(self, "filePath", None)
+        if not file_path or not os.path.exists(file_path):
+            # 如果没有文件路径或文件不存在，尝试打开默认下载目录
+            from app.core.utils.config import qconfig, cfg
+
+            default_path = qconfig.get(cfg.DownloadSavePath)
+            if default_path and os.path.exists(default_path):
+                file_path = default_path
+            else:
+                return
+
+        # 规范化路径：统一使用反斜杠（Windows）
+        file_path = os.path.normpath(file_path)
+        # 再次规范化以处理混合路径分隔符
+        if platform.system() == "Windows":
+            # 替换所有正斜杠为反斜杠
+            file_path = file_path.replace("/", "\\")
+        logger.info(f"[DownloadCard] 打开文件夹: {file_path}")
+
+        # 根据系统选择打开方式
+        system = platform.system()
+        if system == "Windows":
+            # Windows: 使用 explorer /select, 来选中文件
+            # 需要使用 shell=True 确保正确处理路径
+            subprocess.Popen(f'explorer /select,"{file_path}"', shell=True)
+        elif system == "Darwin":
+            # macOS: 使用 open 命令选中文件
+            subprocess.Popen(["open", "-R", file_path])
+        else:
+            # Linux: 打开文件夹
+            folder_path = os.path.dirname(file_path)
+            subprocess.Popen(["xdg-open", folder_path])

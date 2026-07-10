@@ -19,7 +19,7 @@ class TaskManager(QObject):
     # 信号定义
     taskStarted = Signal(str)  # 任务启动信号
     taskProgress = Signal(str, dict)  # 任务进度信号
-    taskCompleted = Signal(str)  # 任务完成信号
+    taskCompleted = Signal(str, str)  # 任务完成信号 (taskId, filePath)
     taskFailed = Signal(str, str)  # 任务失败信号
     taskCancelled = Signal(str)  # 任务取消信号
     taskPaused = Signal(str)  # 任务暂停信号
@@ -322,6 +322,8 @@ class TaskManager(QObject):
         """处理任务完成"""
         with self.lock:
             worker = self.workers.get(taskId)
+            filePath = getattr(worker, 'filePath', None) if worker else None
+
             if worker:
                 if not worker.wait(10000):
                     logger.warning(f"[TaskManager] 任务线程停止超时: {taskId}")
@@ -329,8 +331,8 @@ class TaskManager(QObject):
 
             if success:
                 taskControl.finishTask(taskId, {"message": message})
-                self.taskCompleted.emit(taskId)
-                logger.info(f"[TaskManager] 任务完成: {taskId}")
+                self.taskCompleted.emit(taskId, filePath or "")
+                logger.info(f"[TaskManager] 任务完成: {taskId}, filePath={filePath}")
             else:
                 taskControl.failTask(taskId, message)
                 self.taskFailed.emit(taskId, message)

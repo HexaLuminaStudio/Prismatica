@@ -106,6 +106,7 @@ class HSKDownloadWorker(QThread):
                 "time": "剩余00:00:00",
                 "page": "等待中...",
                 "taskId": self.taskId,
+                "filePath": None,
             }
 
         elapsedTime = time.time() - self.startTime
@@ -137,6 +138,7 @@ class HSKDownloadWorker(QThread):
             "time": timeStr,
             "page": pageStr,
             "taskId": self.taskId,
+            "filePath": None,
         }
 
     def _emitProgress(self, status: str = ""):
@@ -375,6 +377,8 @@ class HSKDownloadWorker(QThread):
             if success:
                 self.completedPages = self.totalPages
                 self._emitProgress("下载完成")
+                # 保存文件路径供打开文件夹使用
+                self.filePath = outputPath
 
                 elapsed = time.time() - self.startTime
                 avgSpeed = self.totalPages / elapsed if elapsed > 0 else 0

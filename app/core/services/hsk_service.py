@@ -12,44 +12,48 @@ from PySide6.QtCore import QThread, Signal
 class HskTokenRefreshThread(QThread):
     """HSK Token刷新线程"""
 
-    finished = Signal(str)  # 完成信号，传递获取到的token
-    error = Signal(str)  # 错误信号，传递错误信息
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, username=None, password=None):
+        super().__init__()
+        from app.core.utils.config import qconfig, Config
+
+        if username is None:
+            username = qconfig.get(Config.HSKLoginUsername)
+        if password is None:
+            password = qconfig.get(Config.HSKLoginPassword)
+
+        self.username = username
+        self.password = password
 
     def run(self):
-        """执行刷新请求"""
+        if not self.username or not self.password:
+            self.error.emit("请先在设置中配置HSK登录账号密码")
+            return
+
         try:
             url = "https://hsk.blcu.edu.cn/api/v1/login/access-token"
             headers = {
                 "Content-Type": "application/json",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
-            payload = {"username": "1696645069@qq.com", "password": "Lpw20080215"}
+            # HSK密码不需要加密
+            payload = {"username": self.username, "password": self.password}
 
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-
-            # 获取响应内容
             responseText = response.text.strip()
 
-            # 检查响应是否为空
             if not responseText:
                 self.error.emit("服务器响应为空")
                 return
 
-            # 尝试解析JSON
-            try:
-                result = json.loads(responseText)
-            except json.JSONDecodeError:
-                errorMsg = "响应格式错误: " + responseText[:500]
-                self.error.emit(errorMsg)
-                return
+            result = json.loads(responseText)
 
-            # 检查业务状态码
             if result.get("code") == 0 and "data" in result:
-                token = result["data"]
-                self.finished.emit(token)
+                self.finished.emit(result["data"])
             else:
-                errorMsg = result.get("msg", "未知错误")
-                self.error.emit(errorMsg)
+                self.error.emit(result.get("msg", "未知错误"))
 
         except requests.Timeout:
             self.error.emit("请求超时，请检查网络连接")
@@ -62,36 +66,37 @@ class HskTokenRefreshThread(QThread):
 
 
 class GetTotalWorker(QThread):
-    """获取语料总数的线程，避免阻塞主界面"""
+    """获取语料总数的线程"""
 
-    finished = Signal(int)  # 成功信号
-    failed = Signal(str)  # 失败信号
+    finished = Signal(int)
+    failed = Signal(str)
 
-    def __init__(self, payload: dict):
+    def __init__(self, payload):
         super().__init__()
         self.isRunning = True
         self.token = None
         self.maxRetries = 3
 
-        # 请求参数
         self.url = payload.get(
             "url", "https://hsk.blcu.edu.cn/api/v1/sentence/search/keyword"
         )
         self.searchPayload = payload.get("payload", {})
         self.searchPayload["per_page"] = 20
 
-        # 延迟导入避免循环依赖
         from app.core.utils.config import qconfig, Config
 
         self.token = qconfig.get(Config.HSKLoginToken)
         self.maxRetries = qconfig.get(Config.MaximumAttempts)
 
     def stop(self):
-        """停止线程"""
         self.isRunning = False
 
     def run(self):
-        self.msleep(500)  # 延迟启动，避免429错误
+        if not self.token:
+            self.failed.emit("请先在设置中配置HSK登录Token")
+            return
+
+        self.msleep(500)
 
         for attempt in range(self.maxRetries):
             if not self.isRunning:
@@ -99,7 +104,7 @@ class GetTotalWorker(QThread):
 
             headers = {
                 "Accept": "application/json",
-                "Authorization": self.token,
+                "Authorization": "Bearer " + self.token,
                 "Content-Type": "application/json",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
@@ -118,18 +123,17 @@ class GetTotalWorker(QThread):
                 if not self.isRunning:
                     return
 
-                # 解析响应
                 data = response.json()
                 if data.get("code") == 0:
                     total = data.get("total", 0)
                     self.finished.emit(total)
                     return
                 else:
-                    errorMsg = f"API错误: {data.get('msg', '未知错误')}"
                     if attempt == self.maxRetries - 1:
-                        self.failed.emit(errorMsg)
+                        msg = data.get("msg", "未知错误")
+                        self.failed.emit("API错误: " + msg)
                         return
-                    self.msleep(1000 * (attempt + 1))  # 递增延迟
+                    self.msleep(1000 * (attempt + 1))
                     continue
 
             except requests.exceptions.Timeout:
@@ -146,7 +150,7 @@ class GetTotalWorker(QThread):
                 continue
             except Exception as e:
                 if attempt == self.maxRetries - 1:
-                    self.failed.emit(f"请求失败: {str(e)}")
+                    self.failed.emit("请求失败: " + str(e))
                     return
                 self.msleep(1000 * (attempt + 1))
                 continue

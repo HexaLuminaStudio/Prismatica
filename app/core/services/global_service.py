@@ -4,8 +4,8 @@ Global语料库服务模块
 提供Global相关的网络请求服务
 """
 
+import hashlib
 import json
-import re
 import requests
 from PySide6.QtCore import QThread, Signal
 
@@ -13,55 +13,66 @@ from PySide6.QtCore import QThread, Signal
 class GlobalTokenRefreshThread(QThread):
     """Global Token刷新线程"""
 
-    finished = Signal(str)  # 完成信号，传递获取到的token
-    error = Signal(str)  # 错误信号，传递错误信息
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, userId=None, password=None):
+        super().__init__()
+        from app.core.utils.config import qconfig, Config
+
+        if userId is None:
+            userId = qconfig.get(Config.GlobalLoginUsername)
+        if password is None:
+            password = qconfig.get(Config.GlobalLoginPassword)
+
+        self.userId = userId
+        self.password = password
+
+    @staticmethod
+    def md5(text):
+        """MD5加密"""
+        if not isinstance(text, str):
+            text = str(text)
+        return hashlib.md5(text.encode("utf-8")).hexdigest()
 
     def run(self):
-        """执行刷新请求"""
+        if not self.userId or not self.password:
+            self.error.emit("请先在设置中配置Global登录账号密码")
+            return
+
         try:
             url = "https://qqk.blcu.edu.cn/sys/index/login"
             headers = {
                 "Content-Type": "application/json",
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
+            # Global密码需要MD5加密
+            encrypted_password = self.md5(self.password)
             payload = {
-                "UserID": "15620889564",
-                "Password": "3a2f8ec463bb7171329cac19891cd893",
+                "UserID": self.userId,
+                "Password": encrypted_password,
             }
 
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-
-            # 获取响应内容
             responseText = response.text.strip()
 
-            # 检查响应是否为空
             if not responseText:
                 self.error.emit("服务器响应为空")
                 return
 
-            # 尝试解析JSON
-            try:
-                result = json.loads(responseText)
-            except json.JSONDecodeError:
-                # JSON解析失败，但响应看起来是成功的
-                # 尝试直接从响应文本中提取token
-                tokenMatch = re.search(r'"token"\s*:\s*"([^"]+)"', responseText)
-                if tokenMatch:
-                    token = tokenMatch.group(1)
-                    self.finished.emit(token)
-                    return
-                else:
-                    errorMsg = "响应格式错误: " + responseText[:200]
-                    self.error.emit(errorMsg)
-                    return
+            # 去除UTF-8 BOM
+            responseText = responseText.lstrip("\ufeff")
 
-            # 检查业务状态码
-            if result.get("stats") == "1" and "token" in result:
-                token = result["token"]
-                self.finished.emit(token)
+            result = json.loads(responseText)
+
+            if result.get("stats") == "1":
+                token = result.get("token")
+                if token:
+                    self.finished.emit(token)
+                else:
+                    self.error.emit("登录失败")
             else:
-                errorMsg = result.get("msg", "登录失败")
-                self.error.emit(errorMsg)
+                self.error.emit(result.get("msg", "登录失败"))
 
         except requests.Timeout:
             self.error.emit("请求超时，请检查网络连接")
