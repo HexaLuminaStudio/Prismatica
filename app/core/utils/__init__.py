@@ -9,4 +9,5 @@ from .license import (
     getUserType,
     getDeviceCode,
 )
+from .setting import *
 from .constant import *

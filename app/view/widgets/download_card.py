@@ -174,6 +174,72 @@ class DownloadCard(CardWidget):
             if layout:
                 layout.addWidget(self.deleteButton)
 
+    def _addRedownloadButton(self):
+        """添加重新下载按钮到卡片"""
+        from qfluentwidgets import ToolButton
+        from qfluentwidgets import FluentIcon
+
+        self.redownloadButton = ToolButton(FluentIcon.SYNC, self)
+        self.redownloadButton.setFixedSize(32, 32)
+        self.redownloadButton.setToolTip("重新下载")
+        self.redownloadButton.clicked.connect(self._onRedownloadClicked)
+
+        # 获取按钮布局并添加重新下载按钮
+        buttonWidget = self.cancelButton.parent()
+        if buttonWidget:
+            layout = buttonWidget.layout()
+            if layout:
+                # 如果删除按钮已存在，在其之前插入；否则添加到末尾
+                if hasattr(self, 'deleteButton'):
+                    deleteIndex = layout.indexOf(self.deleteButton)
+                    if deleteIndex >= 0:
+                        layout.insertWidget(deleteIndex, self.redownloadButton)
+                    else:
+                        layout.addWidget(self.redownloadButton)
+                else:
+                    layout.addWidget(self.redownloadButton)
+
+    def _onRedownloadClicked(self):
+        """重新下载按钮点击"""
+        from app.core.services import taskManager
+        from loguru import logger
+        from qfluentwidgets import InfoBar, InfoBarIcon, InfoBarPosition
+
+        # 从 infoDict 获取下载参数
+        infoDict = self.infoDict.copy()
+        taskType = infoDict.get("type", "hskDownload")
+
+        # 移除 taskId（新建任务会生成新的）
+        if "taskId" in infoDict:
+            del infoDict["taskId"]
+
+        try:
+            # 创建新任务
+            newTaskId = taskManager.createTask(taskType, infoDict)
+            logger.info(f"[DownloadCard] 重新创建任务: {newTaskId}")
+
+            # 显示成功提示
+            InfoBar.success(
+                "任务已创建",
+                f"重新下载任务已加入队列",
+                Qt.Orientation.Horizontal,
+                True,
+                3000,
+                InfoBarPosition.TOP_RIGHT,
+                self.window(),
+            )
+        except Exception as e:
+            logger.error(f"[DownloadCard] 重新创建任务失败: {e}")
+            InfoBar.error(
+                "创建失败",
+                f"重新下载任务失败: {str(e)}",
+                Qt.Orientation.Horizontal,
+                True,
+                3000,
+                InfoBarPosition.TOP_RIGHT,
+                self.window(),
+            )
+
     def _setupStyle(self):
         """设置样式"""
         self.setStyleSheet(
@@ -225,6 +291,8 @@ class DownloadCard(CardWidget):
         self.cancelButton.setToolTip("打开文件夹")
         self.cancelButton.clicked.disconnect()
         self.cancelButton.clicked.connect(self._onOpenFolderClicked)
+        # 添加重新下载按钮
+        self._addRedownloadButton()
         # 添加删除按钮
         self._addDeleteButton()
         self._setCompletedStyle()

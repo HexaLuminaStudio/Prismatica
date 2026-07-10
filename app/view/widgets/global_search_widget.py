@@ -129,7 +129,7 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
         self.tailString.setFixedWidth(200)
 
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "语料类型",
             "选择语料类型",
             self.typeCombobox,
@@ -141,19 +141,19 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
             self.initialString,
         )
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "前词",
             "输入前词",
             self.previousWords,
         )
         self.addGroup(
-            QIcon(":app/icons/Link.svg"),
+            QIcon(":app/icons/Write.svg"),
             "距离",
             "输入距离",
             self.compactSpinBox,
         )
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "后词",
             "输入后词",
             self.postWord,
@@ -205,13 +205,13 @@ class WordCombinationSearchWidget(GroupHeaderCardWidget):
             self.keyWord,
         )
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "排序方向",
             "选择排序方向",
             self.sortTypeCombobox,
         )
         self.addGroup(
-            QIcon(":app/icons/Link.svg"),
+            QIcon(":app/icons/Write.svg"),
             "检索后字符数",
             "输入检索后字符数",
             self.compactSpinBox,
@@ -241,7 +241,7 @@ class SpeechPartSearchWidget(GroupHeaderCardWidget):
         self.speechPartLineEdit.setFixedWidth(200)
 
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "词性代码",
             "输入词性代码",
             self.speechPartLineEdit,
@@ -299,19 +299,19 @@ class GlobalAdvancedSettingCardWidget(GroupHeaderCardWidget):
         self.chineseLevel.addItems(["不限", "初级", "中级", "高级"])
 
         self.addGroup(
-            QIcon(":app/icons/Mod.svg"),
+            QIcon(":app/icons/Thread.svg"),
             "中介语熟语料类型",
             "选择类型",
             self.corpTypeCombobox,
         )
         self.addGroup(
-            QIcon(":app/icons/Essay.svg"),
+            QIcon(":app/icons/EssayTitle.svg"),
             "母语",
             "填写母语",
             self.nativeLanguage,
         )
         self.addGroup(
-            QIcon(":app/icons/Nation.svg"),
+            QIcon(":app/icons/Public.svg"),
             "国籍",
             "填写国籍",
             self.nationality,

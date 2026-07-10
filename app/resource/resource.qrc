@@ -21,5 +21,6 @@
         <file>icons/Level.svg</file>
         <file>icons/Refresh.svg</file>
         <file>icons/Task.svg</file>
+        <file>icons/Plugin.svg</file>
     </qresource>
 </RCC>
