@@ -160,6 +160,14 @@ class TaskControl:
                     return self.rowToDict(row)
                 return None
 
+    def getDownloadPath(self, taskId: str) -> Optional[str]:
+        """获取任务的下载文件路径"""
+        with self.lock:
+            with self.getCursor() as cursor:
+                cursor.execute("SELECT downloadPath FROM tasks WHERE id = ?", (taskId,))
+                row = cursor.fetchone()
+                return row["downloadPath"] if row else None
+
     def startTask(self, taskId: str) -> Optional[Dict[str, Any]]:
         """开始任务"""
         with self.lock:

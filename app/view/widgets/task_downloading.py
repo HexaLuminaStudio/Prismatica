@@ -38,15 +38,15 @@ class DownloadingScrollArea(SmoothScrollArea):
         self.downloadCards = {}
 
         # 连接信号
-        taskManager.taskStarted.connect(self._on_task_started)
-        taskManager.taskProgress.connect(self._on_task_progress)
-        taskManager.taskCompleted.connect(self._on_task_completed)
-        taskManager.taskFailed.connect(self._on_task_failed)
-        taskManager.taskCancelled.connect(self._on_task_cancelled)
+        taskManager.taskStarted.connect(self._onTaskStarted)
+        taskManager.taskProgress.connect(self._onTaskProgress)
+        taskManager.taskCompleted.connect(self._onTaskCompleted)
+        taskManager.taskFailed.connect(self._onTaskFailed)
+        taskManager.taskCancelled.connect(self._onTaskCancelled)
 
-        self._init_widget()
+        self._initWidget()
 
-    def _init_widget(self):
+    def _initWidget(self):
         """初始化组件"""
         self.setObjectName("DownloadingScrollArea")
         self.setViewportMargins(0, 15, 0, 20)
@@ -57,9 +57,9 @@ class DownloadingScrollArea(SmoothScrollArea):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         # 恢复进行中的任务
-        self._restore_running_tasks()
+        self._restoreRunningTasks()
 
-    def _restore_running_tasks(self):
+    def _restoreRunningTasks(self):
         """恢复进行中的任务"""
         # 获取pending和in_progress状态的任务
         try:
@@ -72,11 +72,11 @@ class DownloadingScrollArea(SmoothScrollArea):
                     info = task.get("info", {})
                     info["taskId"] = taskId
                     info["type"] = task.get("type")
-                    self._create_card(info)
+                    self._createCard(info)
         except Exception as e:
             logger.error(f"[DownloadingArea] 恢复任务失败: {e}")
 
-    def _create_card(self, info: dict):
+    def _createCard(self, info: dict):
         """创建下载卡片"""
         taskId = info.get("taskId")
         if not taskId or taskId in self.downloadCards:
@@ -85,11 +85,11 @@ class DownloadingScrollArea(SmoothScrollArea):
         card = DownloadCard(info, self.scrollWidget)
         self.downloadCards[taskId] = card
         self.vBoxLayout.insertWidget(0, card, 0, Qt.AlignmentFlag.AlignTop)
-        self._update_empty_state()
+        self._updateEmptyState()
 
         logger.info(f"[DownloadingArea] 创建下载卡片: {taskId}")
 
-    def _on_task_started(self, taskId: str):
+    def _onTaskStarted(self, taskId: str):
         """任务启动时创建卡片"""
         logger.info(f"[DownloadingArea] 任务启动: {taskId}")
 
@@ -102,9 +102,9 @@ class DownloadingScrollArea(SmoothScrollArea):
         info["taskId"] = taskId
         info["type"] = taskInfo.get("type")
 
-        self._create_card(info)
+        self._createCard(info)
 
-    def _on_task_progress(self, taskId: str, progressInfo: dict):
+    def _onTaskProgress(self, taskId: str, progressInfo: dict):
         """任务进度更新"""
         if taskId not in self.downloadCards:
             return
@@ -116,17 +116,17 @@ class DownloadingScrollArea(SmoothScrollArea):
             return
 
         try:
-            card.update_progress(
+            card.updateProgress(
                 progress=progressInfo.get("progress", 0),
-                file_count=progressInfo.get("page", ""),
+                fileCount=progressInfo.get("page", ""),
                 speed=progressInfo.get("speed", ""),
-                remaining_time=progressInfo.get("time", ""),
+                remainingTime=progressInfo.get("time", ""),
             )
         except RuntimeError:
             # 卡片已被删除，移除引用
             self.downloadCards.pop(taskId, None)
 
-    def _on_task_completed(self, taskId: str, filePath: str = ""):
+    def _onTaskCompleted(self, taskId: str, filePath: str = ""):
         """任务完成时移除卡片"""
         logger.info(f"[DownloadingArea] 任务完成: {taskId}, filePath={filePath}")
 
@@ -137,14 +137,14 @@ class DownloadingScrollArea(SmoothScrollArea):
         if card:
             try:
                 self.vBoxLayout.removeWidget(card)
-                card.set_completed(filePath)
+                card.setCompleted()
                 card.deleteLater()
             except RuntimeError:
                 pass  # 卡片已被删除
 
-        self._update_empty_state()
+        self._updateEmptyState()
 
-    def _on_task_failed(self, taskId: str, error: str):
+    def _onTaskFailed(self, taskId: str, error: str):
         """任务失败时移除卡片"""
         logger.error(f"[DownloadingArea] 任务失败: {taskId}, error={error}")
 
@@ -155,14 +155,14 @@ class DownloadingScrollArea(SmoothScrollArea):
         if card:
             try:
                 self.vBoxLayout.removeWidget(card)
-                card.set_failed(error[:20] if error else None)
+                card.setFailed(error[:20] if error else None)
                 card.deleteLater()
             except RuntimeError:
                 pass  # 卡片已被删除
 
-        self._update_empty_state()
+        self._updateEmptyState()
 
-    def _on_task_cancelled(self, taskId: str):
+    def _onTaskCancelled(self, taskId: str):
         """任务取消时移除卡片"""
         logger.info(f"[DownloadingArea] 任务取消: {taskId}")
 
@@ -177,15 +177,15 @@ class DownloadingScrollArea(SmoothScrollArea):
             except RuntimeError:
                 pass  # 卡片已被删除
 
-        self._update_empty_state()
+        self._updateEmptyState()
 
-    def _update_empty_state(self):
+    def _updateEmptyState(self):
         """更新空状态显示"""
         if self.downloadCards:
             self.emptyLabel.hide()
         else:
             self.emptyLabel.show()
 
-    def get_card(self, taskId: str) -> DownloadCard:
+    def getCard(self, taskId: str) -> DownloadCard:
         """获取指定卡片"""
         return self.downloadCards.get(taskId)

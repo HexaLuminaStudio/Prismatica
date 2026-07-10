@@ -13,11 +13,12 @@ from qfluentwidgets import (
     ImageLabel,
 )
 
-from app.core.services import GetTotalWorker, taskManager
+from app.core.services import GetTotalWorker, GlobalGetTotalWorker
 
 
 # 参数标签映射（中文化）
 PARAM_LABELS = {
+    # HSK参数
     "keyword": "关键词",
     "nationality": "国籍",
     "hsk_level": "HSK等级",
@@ -30,6 +31,28 @@ PARAM_LABELS = {
     "第二语言": "第二语言",
     "page": "页码",
     "per_page": "每页数量",
+    "title": "作文题目",
+    "level": "作文等级",
+    "nation": "国籍",
+    # Global参数
+    "keystr": "关键字",
+    "tablename": "语料类型",
+    "shou": "首字符串",
+    "kaishi": "前词",
+    "num": "距离",
+    "jieshu": "后词",
+    "wei": "尾字符串",
+    "orderstr": "排序方向",
+    "showlenght": "检索后字符数",
+    "tag": "标签",
+    "txt": "文本",
+    "mothertongue": "母语",
+    "shkgrade": "HSK等级",
+    "ext1": "汉语水平",
+    "authornationality": "作者国籍",
+    "ft": "语料类型",
+    "corp_org_id": "机构ID",
+    "isDeptCheck": "部门检查",
 }
 
 
@@ -216,7 +239,11 @@ class DownloadApplyWidget(MessageBoxBase):
     def startQuery(self):
         """启动查询线程"""
         if self.worker is None:
-            self.worker = GetTotalWorker(self.infoDict)
+            # 根据下载类型选择不同的Worker
+            if self.downloadType == "Hsk":
+                self.worker = GetTotalWorker(self.infoDict)
+            else:
+                self.worker = GlobalGetTotalWorker(self.infoDict)
             self.worker.finished.connect(self.onQueryFinished)
             self.worker.failed.connect(self.onQueryFailed)
             self.worker.start()

@@ -13,6 +13,7 @@ from qfluentwidgets import (
 from app.core.utils import signalBus, logger
 from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
+from .global_interface import GlobalInterface
 from .task_interface import TaskInterface
 from .setting_interface import SettingInterface
 
@@ -27,6 +28,7 @@ class MainWindow(MSFluentWindow):
         self.initWindow()
 
         self.hskInterface = HskInterface(self)
+        self.globalInterface = GlobalInterface(self)
         self.taskInterface = TaskInterface(self)
         self.settingInterface = SettingInterface(self)
         self.connectSignalToSlot()
@@ -43,6 +45,12 @@ class MainWindow(MSFluentWindow):
             self.hskInterface,
             QIcon(":app/icons/Hsk.svg"),
             "HSK下载",
+            position=NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
+            self.globalInterface,
+            QIcon(":app/icons/Global.svg"),
+            "Global下载",
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(

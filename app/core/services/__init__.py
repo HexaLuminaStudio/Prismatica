@@ -6,6 +6,7 @@
 
 from .hsk_service import HskTokenRefreshThread, GetTotalWorker
 from .global_service import GlobalTokenRefreshThread
+from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
 from .task_manager import TaskManager, taskManager
 from .hsk_download import HSKDownloadWorker
 
@@ -13,7 +14,9 @@ __all__ = [
     "HskTokenRefreshThread",
     "GlobalTokenRefreshThread",
     "GetTotalWorker",
+    "GlobalGetTotalWorker",
     "TaskManager",
     "taskManager",
     "HSKDownloadWorker",
+    "GlobalDownloadWorker",
 ]
