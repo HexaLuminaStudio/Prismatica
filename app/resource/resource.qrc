@@ -22,5 +22,8 @@
         <file>icons/Refresh.svg</file>
         <file>icons/Task.svg</file>
         <file>icons/Plugin.svg</file>
+        <file>icons/Chart.svg</file>
+        <file>icons/Save.svg</file>
+        <file>icons/Bias.svg</file>
     </qresource>
 </RCC>

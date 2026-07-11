@@ -2,12 +2,16 @@
     "id": "com.prismatica.example.info",
     "name": "语料统计",
     "version": "1.0.0",
-    "api_version": "1.0",
-    "description": "显示语料库的基本统计数据，包括总词数、句子数等",
+    "apiVersion": "1.0",
+    "description": "对文本进行分词和词频统计分析",
     "author": "Prismatica",
     "category": "tool",
-    "permissions": ["corpus:write","network","system"],
-    "dependencies": {},
+    "permissions": [],
+    "dependencies": {
+        "python": [
+            "jieba"
+        ]
+    },
     "entry": "plugin.py",
-    "min_app_version": "1.0.0"
+    "minAppVersion": "1.0.0"
 }

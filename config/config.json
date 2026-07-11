@@ -2,10 +2,10 @@
     "CorpusDownload": {
         "DownloadSavePath": "E:/Prismatica/download",
         "GlobalLoginPassword": "Liuyan@123",
-        "GlobalLoginToken": "8db3a0e798ec146072986392e401c852",
+        "GlobalLoginToken": "30effd4ed57685f43b155e63188bcd2f",
         "GlobalLoginUsername": "15620889564",
         "HSKLoginPassword": "Lpw20080215",
-        "HSKLoginToken": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ4NzA0MTYsInN1YiI6IjEzMzYwMCJ9.9Kq6aYbxe9fUnpmEDKEmnJesIw_86MEC2TDxNHY39Og",
+        "HSKLoginToken": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODQ5NTA3MDUsInN1YiI6IjEzMzYwMCJ9.Jb23QKN7wmuWmGPmZNDDh6XaaWWq2FV0p7xD2GDKPCs",
         "HSKLoginUsername": "1696645069@qq.com",
         "MaximumAttempts": 3,
         "NumberPerDownloads": 100,

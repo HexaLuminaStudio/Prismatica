@@ -101,11 +101,28 @@ class PluginCard(CardWidget):
     def _onEnableChanged(self, checked: bool):
         """启用状态改变"""
         if checked:
-            # 启用前先显示权限设置
+            # 1. 先检查依赖
+            depsOk, missingDeps = self._manager.checkDependencies(self.metadata)
+            if not depsOk:
+                self.enableSwitch.setChecked(False)
+                depList = ", ".join(missingDeps)
+                InfoBar.error(
+                    "依赖缺失",
+                    f"{self.metadata.name} 缺少依赖: {depList}",
+                    Qt.Orientation.Horizontal,
+                    True,
+                    5000,
+                    InfoBarPosition.TOP_RIGHT,
+                    self.window(),
+                )
+                return
+
+            # 2. 依赖满足，显示权限设置
             from .widgets.plugin_settings_dialog import PluginSettingsDialog
 
             dialog = PluginSettingsDialog(self.metadata, self.window())
             if dialog.exec():
+                # 3. 用户确认后启用插件
                 success = self._manager.enablePlugin(self.metadata.pluginId)
                 if success:
                     InfoBar.success(

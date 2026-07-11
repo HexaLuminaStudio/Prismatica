@@ -9,7 +9,7 @@ import json
 import importlib
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Tuple
 from loguru import logger
 
 from .base import PluginBase, PluginManifest, PluginMetadata
@@ -224,8 +224,12 @@ class PluginManager:
             return True
 
         # 依赖检查
-        if not self.checkDependencies(metadata):
-            logger.error(f"[PluginManager] 依赖检查失败: {pluginId}")
+        depsOk, missingDeps = self.checkDependencies(metadata)
+        if not depsOk:
+            depList = ", ".join(missingDeps)
+            logger.error(f"[PluginManager] 依赖检查失败: {pluginId}, 缺失: {depList}")
+            # 保存缺失依赖信息供UI显示
+            metadata.missingDeps = missingDeps
             return False
 
         try:
@@ -324,23 +328,61 @@ class PluginManager:
             logger.error(f"[PluginManager] 卸载插件失败: {e}")
             return False
 
-    def checkDependencies(self, metadata: PluginMetadata) -> bool:
-        """检查依赖是否满足"""
+    def checkDependencies(self, metadata: PluginMetadata) -> Tuple[bool, List[str]]:
+        """
+        检查依赖是否满足
+
+        Returns:
+            (是否满足, 缺失的依赖列表)
+        """
         dependencies = metadata.manifest.dependencies
+        missingDeps = []
+        pluginPath = Path(metadata.path)
 
         for pkgType, packages in dependencies.items():
             if pkgType == "python":
                 for package in packages:
+                    # 解析包名和版本要求
                     pkgName = (
                         package.split(">")[0].split("=")[0].split("<")[0].split("<")[0]
                     )
+
+                    # 1. 先检查系统 Python 环境
                     try:
                         importlib.import_module(pkgName)
+                        logger.debug(f"[PluginManager] 找到系统依赖: {pkgName}")
+                        continue
                     except ImportError:
-                        logger.error(f"[PluginManager] Python 依赖缺失: {pkgName}")
-                        return False
+                        pass
 
-        return True
+                    # 2. 检查插件本地目录下的依赖 lib/pkgName/
+                    localDepPath = pluginPath / "lib" / pkgName
+                    if localDepPath.exists():
+                        logger.debug(f"[PluginManager] 找到本地依赖: {pkgName}")
+                        if str(localDepPath) not in sys.path:
+                            sys.path.insert(0, str(localDepPath))
+                        continue
+
+                    # 3. 检查 lib/pkgName/pkgName/ 目录（如 jieba 的情况）
+                    localDepPath2 = pluginPath / "lib" / pkgName / pkgName
+                    if localDepPath2.exists():
+                        logger.debug(f"[PluginManager] 找到本地依赖: {pkgName}")
+                        if str(localDepPath2) not in sys.path:
+                            sys.path.insert(0, str(localDepPath2))
+                        continue
+
+                    # 4. 检查插件根目录下的依赖
+                    if (pluginPath / pkgName).exists():
+                        logger.debug(f"[PluginManager] 找到本地依赖: {pkgName}")
+                        if str(pluginPath) not in sys.path:
+                            sys.path.insert(0, str(pluginPath))
+                        continue
+
+                    # 依赖缺失
+                    logger.error(f"[PluginManager] Python 依赖缺失: {pkgName}")
+                    missingDeps.append(pkgName)
+
+        return len(missingDeps) == 0, missingDeps
 
     def getPlugin(self, pluginId: str) -> Optional[PluginMetadata]:
         """获取插件元数据"""

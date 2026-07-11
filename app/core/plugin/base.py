@@ -64,7 +64,7 @@ class PluginBase(ABC):
     def getIconPath(self) -> str:
         """
         获取插件图标路径
-        
+
         Returns:
             图标文件路径，支持 .png, .svg 等格式
             如果返回空字符串，则使用默认图标
@@ -165,6 +165,7 @@ class PluginMetadata:
         self.enabled = False
         self.loaded = False
         self.iconPath = ""  # 插件图标路径
+        self.missingDeps = []  # 缺失的依赖列表
 
     @property
     def pluginId(self) -> str:

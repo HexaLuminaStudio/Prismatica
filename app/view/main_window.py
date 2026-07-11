@@ -18,6 +18,7 @@ from app.core.plugin import getPluginManager, PluginMetadata
 from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
 from .global_interface import GlobalInterface
+from .bias_interface import BiasInterface
 from .plugin_interface import PluginInterface
 from .task_interface import TaskInterface
 from .setting_interface import SettingInterface
@@ -34,6 +35,7 @@ class MainWindow(MSFluentWindow):
 
         self.hskInterface = HskInterface(self)
         self.globalInterface = GlobalInterface(self)
+        self.biasInterface = BiasInterface(self)
         self.pluginInterface = PluginInterface(self)
         self.taskInterface = TaskInterface(self)
         self.settingInterface = SettingInterface(self)
@@ -63,6 +65,12 @@ class MainWindow(MSFluentWindow):
             self.globalInterface,
             QIcon(":app/icons/Global.svg"),
             "全球中介下载",
+            position=NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
+            self.biasInterface,
+            QIcon(":app/icons/Bias.svg"),
+            "偏误统计",
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
