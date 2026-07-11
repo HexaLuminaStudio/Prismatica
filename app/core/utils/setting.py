@@ -15,7 +15,7 @@ INNER_VERSION = "100"
 APP_NAME = "Prismatica"
 
 
-def get_install_dir() -> Path:
+def getInstallDir() -> Path:
     """
     获取应用程序安装目录。
 
@@ -29,7 +29,8 @@ def get_install_dir() -> Path:
         # 开发环境：项目根目录 = app/ 的父目录
         return Path(__file__).resolve().parent.parent.parent.parent
 
-INSTALL_DIR = get_install_dir()
+
+INSTALL_DIR = getInstallDir()
 CONFIG_FOLDER = INSTALL_DIR / "config"
 CONFIG_FILE = CONFIG_FOLDER / "config.json"
 DOWNLOAD_FOLDER = INSTALL_DIR / "download"

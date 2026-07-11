@@ -18,6 +18,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.core.api.task_control import taskControl
 from app.core.utils.config import qconfig, Config
+from .hsk_author_info import splitAuthorInfoColumn
 
 
 class HSKDownloadWorker(QThread):
@@ -251,6 +252,9 @@ class HSKDownloadWorker(QThread):
             df = pd.DataFrame(data)
             if df.empty:
                 return False
+
+            # 拆分 auther_info 为多列（保留原列以便向后兼容）
+            df = splitAuthorInfoColumn(df)
 
             # 确保所有列都是字符串类型
             objectColumns = df.select_dtypes(include=["object"]).columns

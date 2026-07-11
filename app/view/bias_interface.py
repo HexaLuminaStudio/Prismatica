@@ -6,12 +6,14 @@ HSK 偏误分析界面
 import os
 import io
 
+import numpy as np
 import pandas as pd
 from loguru import logger
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 from qfluentwidgets import (
+    DoubleSpinBox,
     BodyLabel,
     CaptionLabel,
     ComboBox,
@@ -259,6 +262,97 @@ class FileLoaderThread(QThread):
                 self.error.emit(f"读取失败：{os.path.basename(filePath)}\n{str(e)}")
 
         self.finished.emit()
+
+
+class AprioriWorkerThread(QThread):
+    """Apriori 关联规则挖掘后台线程（FR-ERR-003）"""
+
+    progress = Signal(int, str)  # (percent 0-100, status)
+    finished = Signal(object)  # (rulesDf) DataFrame
+    failed = Signal(str)  # error msg
+
+    def __init__(
+        self,
+        transactions: list,
+        minSupport: float = 0.1,
+        minConfidence: float = 0.5,
+    ):
+        super().__init__()
+        self.transactions = transactions
+        self.minSupport = minSupport
+        self.minConfidence = minConfidence
+        self._isCanceled = False
+
+    def cancel(self):
+        self._isCanceled = True
+
+    def run(self):
+        try:
+            from mlxtend.preprocessing import TransactionEncoder
+            from mlxtend.frequent_patterns import apriori, association_rules
+            import pandas as pd
+
+            if not self.transactions:
+                self.failed.emit("无有效事务数据")
+                return
+
+            # 进度提示
+            self.progress.emit(10, "正在编码事务...")
+
+            # 编码
+            te = TransactionEncoder()
+            teArray = te.fit(self.transactions).transform(self.transactions)
+            df = pd.DataFrame(teArray, columns=te.columns_)
+
+            # 进度提示
+            self.progress.emit(30, "正在挖掘频繁项集...")
+
+            if self._isCanceled:
+                return
+
+            # 挖掘频繁项集
+            frequentItemsets = apriori(
+                df,
+                min_support=self.minSupport,
+                use_colnames=True,
+                max_len=3,
+            )
+
+            if self._isCanceled:
+                return
+
+            if frequentItemsets.empty:
+                self.progress.emit(100, "未找到满足最小支持度的频繁项集")
+                self.finished.emit(pd.DataFrame())
+                return
+
+            # 进度提示
+            self.progress.emit(70, "正在生成关联规则...")
+
+            # 生成规则
+            rules = association_rules(
+                frequentItemsets,
+                metric="confidence",
+                min_threshold=self.minConfidence,
+                num_itemsets=len(frequentItemsets),
+            )
+
+            if rules.empty:
+                self.progress.emit(100, "未找到满足置信度的关联规则")
+                self.finished.emit(pd.DataFrame())
+                return
+
+            # 排序（按置信度降序）
+            rules = rules.sort_values(
+                ["confidence", "lift"], ascending=[False, False]
+            ).reset_index(drop=True)
+
+            self.progress.emit(100, f"挖掘完成，共 {len(rules)} 条规则")
+            self.finished.emit(rules)
+
+        except Exception as e:
+            logger.error(f"[Bias] Apriori 计算失败: {e}")
+            self.failed.emit(str(e))
 
 
 class CountResultDialog(MessageBoxBase):
@@ -597,6 +691,1095 @@ class ChartDialog(MessageBoxBase):
         self.accept()
 
 
+class ColumnConfigDialog(MessageBoxBase):
+    """等级 / 国籍列配置弹窗（用于偏误分析中的热力图分组）"""
+
+    def __init__(
+        self,
+        allColumns: list,
+        currentLevel: str = None,
+        currentCountry: str = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.allColumns = list(allColumns)
+        self.resultLevel = currentLevel
+        self.resultCountry = currentCountry
+
+        # 标题栏
+        iconLabel = QSvgWidget(":app/icons/Setting.svg", self)
+        iconLabel.setFixedSize(20, 20)
+
+        titleLabel = SubtitleLabel("列配置", self)
+        titleLabel.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        closeBtn = TransparentToggleToolButton(FluentIcon.CLOSE, self)
+        closeBtn.clicked.connect(self.reject)
+
+        # 说明
+        hintLabel = CaptionLabel(
+            "为「等级」「国籍」分别指定 Excel 表头列。\n"
+            "未设置时将根据列名自动识别（包含 level/hsk/等级 等关键词）。",
+            self,
+        )
+        hintLabel.setStyleSheet("color: #666; font-size: 12px; padding: 4px 0;")
+        hintLabel.setWordWrap(True)
+
+        # 等级下拉
+        levelLayout = QHBoxLayout()
+        levelLabel = BodyLabel("等级列：", self)
+        levelLabel.setStyleSheet("font-size: 13px; min-width: 70px;")
+        self.levelCombo = ComboBox(self)
+        self.levelCombo.addItem("（不设置）", userData=None)
+        for col in self.allColumns:
+            self.levelCombo.addItem(str(col), userData=str(col))
+        if currentLevel and currentLevel in self.allColumns:
+            self.levelCombo.setCurrentText(str(currentLevel))
+        else:
+            self.levelCombo.setCurrentIndex(0)
+        levelLayout.addWidget(levelLabel)
+        levelLayout.addWidget(self.levelCombo, 1)
+
+        # 国籍下拉
+        countryLayout = QHBoxLayout()
+        countryLabel = BodyLabel("国籍列：", self)
+        countryLabel.setStyleSheet("font-size: 13px; min-width: 70px;")
+        self.countryCombo = ComboBox(self)
+        self.countryCombo.addItem("（不设置）", userData=None)
+        for col in self.allColumns:
+            self.countryCombo.addItem(str(col), userData=str(col))
+        if currentCountry and currentCountry in self.allColumns:
+            self.countryCombo.setCurrentText(str(currentCountry))
+        else:
+            self.countryCombo.setCurrentIndex(0)
+        countryLayout.addWidget(countryLabel)
+        countryLayout.addWidget(self.countryCombo, 1)
+
+        # 自动识别按钮
+        self.autoDetectBtn = PushButton("根据列名自动识别", self)
+        self.autoDetectBtn.setIcon(":app/icons/Refresh.svg")
+        self.autoDetectBtn.clicked.connect(self._onAutoDetect)
+
+        btnRow = QHBoxLayout()
+        btnRow.addStretch(1)
+        btnRow.addWidget(self.autoDetectBtn)
+
+        # 布局
+        self.viewLayout.setContentsMargins(20, 18, 20, 12)
+        self.viewLayout.setSpacing(8)
+
+        headerLayout = QHBoxLayout()
+        headerLayout.addWidget(iconLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        headerLayout.addWidget(titleLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        headerLayout.addStretch(1)
+        headerLayout.addWidget(closeBtn, 0, Qt.AlignmentFlag.AlignRight)
+        self.viewLayout.addLayout(headerLayout)
+
+        self.viewLayout.addSpacing(4)
+        self.viewLayout.addWidget(hintLabel)
+        self.viewLayout.addSpacing(6)
+        self.viewLayout.addLayout(levelLayout)
+        self.viewLayout.addLayout(countryLayout)
+        self.viewLayout.addSpacing(4)
+        self.viewLayout.addLayout(btnRow)
+
+        # 底部按钮
+        self.yesButton.setText("确定")
+        self.cancelButton.setText("取消")
+
+        self.yesButton.clicked.connect(self._onAccept)
+        self.cancelButton.clicked.connect(self.reject)
+
+        self.widget.setFixedWidth(460)
+
+    def _onAutoDetect(self):
+        """根据列名自动识别等级与国籍列"""
+        levelKeywords = ["level", "hsk", "等级", "级别", "水准"]
+        countryKeywords = ["country", "nationality", "国籍", "国家", "nation"]
+
+        detectedLevel = None
+        detectedCountry = None
+        for col in self.allColumns:
+            colLower = str(col).lower()
+            if detectedLevel is None and any(kw in colLower for kw in levelKeywords):
+                detectedLevel = col
+            if detectedCountry is None and any(
+                kw in colLower for kw in countryKeywords
+            ):
+                detectedCountry = col
+
+        if detectedLevel:
+            self.levelCombo.setCurrentText(str(detectedLevel))
+        else:
+            self.levelCombo.setCurrentIndex(0)
+        if detectedCountry:
+            self.countryCombo.setCurrentText(str(detectedCountry))
+        else:
+            self.countryCombo.setCurrentIndex(0)
+
+    def _onAccept(self):
+        self.resultLevel = self.levelCombo.currentData()
+        self.resultCountry = self.countryCombo.currentData()
+        self.accept()
+
+    def getResult(self) -> tuple:
+        """获取配置结果：(levelCol, countryCol)"""
+        return self.resultLevel, self.resultCountry
+
+
+class HeatmapDialog(MessageBoxBase):
+    """偏误分布热力图弹窗（FR-ERR-002）"""
+
+    COLORMAPS = ["YlOrRd", "viridis", "coolwarm", "Blues", "Greens"]
+
+    def __init__(
+        self,
+        heatmapData: dict,
+        selectedTypes: list,
+        allGroups: list,
+        levelGroups: list,
+        countryGroups: list,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.heatmapData = heatmapData
+        self.selectedTypes = selectedTypes
+        self.allGroups = allGroups
+        self.levelGroups = levelGroups
+        self.countryGroups = countryGroups
+        self._currentFigure = None
+        self._currentMode = "level"
+        self._currentColormap = "YlOrRd"
+        self._drillDownCallback = None
+
+        plt.rcParams["font.sans-serif"] = [
+            "Microsoft YaHei",
+            "SimHei",
+            "Arial Unicode MS",
+        ]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        # 标题栏
+        iconLabel = QSvgWidget(":app/icons/Chart.svg", self)
+        iconLabel.setFixedSize(20, 20)
+
+        titleLabel = SubtitleLabel("偏误分布热力图", self)
+        titleLabel.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        closeBtn = TransparentToggleToolButton(FluentIcon.CLOSE, self)
+        closeBtn.clicked.connect(self.accept)
+
+        # 分组切换
+        modeSegment = SegmentedWidget(self)
+        if levelGroups:
+            modeSegment.addItem("level", "按等级")
+        if countryGroups:
+            modeSegment.addItem("country", "按国籍")
+        if levelGroups:
+            modeSegment.setCurrentItem("level")
+            self._currentMode = "level"
+        elif countryGroups:
+            modeSegment.setCurrentItem("country")
+            self._currentMode = "country"
+        else:
+            modeSegment.addItem("level", "按等级")
+            modeSegment.setCurrentItem("level")
+
+        modeSegment.currentItemChanged.connect(self._onModeChanged)
+
+        # 配色下拉
+        colormapLayout = QHBoxLayout()
+        colormapLabel = BodyLabel("配色:", self)
+        colormapLabel.setStyleSheet("font-size: 12px; color: #666;")
+        self.colormapCombo = ComboBox(self)
+        for cm in self.COLORMAPS:
+            self.colormapCombo.addItem(cm)
+        self.colormapCombo.setCurrentText(self._currentColormap)
+        self.colormapCombo.setFixedWidth(120)
+        self.colormapCombo.currentTextChanged.connect(self._onColormapChanged)
+        colormapLayout.addWidget(colormapLabel)
+        colormapLayout.addWidget(self.colormapCombo)
+        colormapLayout.addStretch()
+
+        # 画布
+        self.canvas = FigureCanvas(Figure(figsize=(7, 6), dpi=100))
+        self.canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+
+        # 点击事件用于下钻
+        self.canvas.mpl_connect("button_press_event", self._onCanvasClick)
+
+        scrollArea = ScrollArea(self)
+        scrollArea.setWidget(self.canvas)
+        scrollArea.setWidgetResizable(True)
+        scrollArea.setStyleSheet("border: none; background: transparent;")
+
+        # 操作按钮
+        btnLayout = QHBoxLayout()
+        btnLayout.addStretch(1)
+
+        pngBtn = PushButton("导出 PNG", self)
+        pngBtn.clicked.connect(lambda: self._export("png"))
+        svgBtn = PushButton("导出 SVG", self)
+        svgBtn.clicked.connect(lambda: self._export("svg"))
+        btnLayout.addWidget(pngBtn)
+        btnLayout.addWidget(svgBtn)
+
+        # 提示标签
+        self.hintLabel = CaptionLabel(
+            "提示：点击热力图单元格可在主表格中下钻查看", self
+        )
+        self.hintLabel.setStyleSheet("color: #888; font-size: 11px; padding: 2px 4px;")
+
+        # 布局
+        self.viewLayout.setContentsMargins(15, 15, 15, 10)
+
+        headerLayout = QHBoxLayout()
+        headerLayout.addWidget(iconLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        headerLayout.addWidget(titleLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        headerLayout.addStretch()
+        headerLayout.addWidget(closeBtn, 0, Qt.AlignmentFlag.AlignRight)
+        self.viewLayout.addLayout(headerLayout)
+
+        self.viewLayout.addSpacing(6)
+        self.viewLayout.addWidget(modeSegment)
+        self.viewLayout.addLayout(colormapLayout)
+        self.viewLayout.addSpacing(8)
+        self.viewLayout.addWidget(scrollArea, 1)
+        self.viewLayout.addWidget(self.hintLabel)
+        self.viewLayout.addSpacing(4)
+        self.viewLayout.addLayout(btnLayout)
+
+        # 底部按钮
+        copyBtn = PrimaryPushButton("复制图片", self)
+        copyBtn.setFixedWidth(100)
+        copyBtn.clicked.connect(self._copyImage)
+
+        cancelBtn = PushButton("关闭", self)
+        cancelBtn.setFixedWidth(80)
+        cancelBtn.clicked.connect(self.reject)
+
+        self.buttonLayout.addWidget(cancelBtn)
+        self.buttonLayout.addWidget(copyBtn)
+        self.buttonGroup.hide()
+
+        self.widget.setFixedWidth(640)
+        self._drawHeatmap()
+
+    def setDrillDownCallback(self, callback):
+        """设置下钻回调：callback(errorName, groupValue)"""
+        self._drillDownCallback = callback
+
+    def _getCurrentGroups(self) -> list:
+        if self._currentMode == "level":
+            return self.levelGroups
+        return self.countryGroups
+
+    def _onModeChanged(self, key: str):
+        if key and key != self._currentMode:
+            self._currentMode = key
+            self._drawHeatmap()
+
+    def _onColormapChanged(self, name: str):
+        if name and name != self._currentColormap:
+            self._currentColormap = name
+            self._drawHeatmap()
+
+    def _buildMatrix(self) -> tuple:
+        """构建 (matrix, xLabels, yLabels) 矩阵
+        行：selectedTypes（偏误类型）
+        列：当前模式下的分组值
+        """
+        groups = self._getCurrentGroups()
+        if not groups or not self.selectedTypes:
+            return None, [], []
+
+        # 按出现频次排序：列与行按计数总和降序
+        colSums = {g: 0 for g in groups}
+        rowSums = {t: 0 for t in self.selectedTypes}
+
+        for (errName, groupVal), records in self.heatmapData.items():
+            if groupVal in colSums and errName in rowSums:
+                colSums[groupVal] += len(records)
+                rowSums[errName] += len(records)
+
+        sortedCols = sorted(colSums.keys(), key=lambda g: colSums[g], reverse=True)
+        sortedRows = sorted(rowSums.keys(), key=lambda t: rowSums[t], reverse=True)
+
+        # 只保留有数据的行
+        sortedRows = [t for t in sortedRows if rowSums[t] > 0]
+        if not sortedRows:
+            return None, sortedCols, []
+
+        matrix = np.zeros((len(sortedRows), len(sortedCols)), dtype=int)
+
+        for i, errName in enumerate(sortedRows):
+            for j, groupVal in enumerate(sortedCols):
+                key = (errName, groupVal)
+                if key in self.heatmapData:
+                    matrix[i, j] = len(self.heatmapData[key])
+
+        return matrix, sortedCols, sortedRows
+
+    def _drawHeatmap(self):
+        if self._currentFigure:
+            plt.close(self._currentFigure)
+
+        fig = Figure(figsize=(7, 6), dpi=100)
+        ax = fig.add_subplot(111)
+        self._currentFigure = fig
+
+        matrix, xLabels, yLabels = self._buildMatrix()
+        if matrix is None or matrix.size == 0:
+            ax.text(
+                0.5,
+                0.5,
+                "无有效数据\n（请先分析且选择偏误类型）",
+                ha="center",
+                va="center",
+                fontsize=13,
+            )
+            ax.axis("off")
+        else:
+            im = ax.imshow(
+                matrix,
+                aspect="auto",
+                cmap=self._currentColormap,
+                interpolation="nearest",
+            )
+
+            # 坐标轴
+            ax.set_xticks(np.arange(len(xLabels)))
+            ax.set_yticks(np.arange(len(yLabels)))
+            ax.set_xticklabels(xLabels, rotation=45, ha="right", fontsize=10)
+            ax.set_yticklabels(yLabels, fontsize=10)
+
+            # 在每个格子中标注数值
+            maxVal = matrix.max() if matrix.max() > 0 else 1
+            for i in range(len(yLabels)):
+                for j in range(len(xLabels)):
+                    val = matrix[i, j]
+                    color = "white" if val > maxVal * 0.5 else "black"
+                    ax.text(
+                        j,
+                        i,
+                        str(val),
+                        ha="center",
+                        va="center",
+                        color=color,
+                        fontsize=9,
+                        fontweight="bold",
+                    )
+
+            # 颜色条
+            cbar = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03)
+            cbar.set_label("偏误计数", fontsize=10)
+
+            modeLabel = "HSK 等级" if self._currentMode == "level" else "国籍"
+            ax.set_xlabel(modeLabel, fontsize=11)
+            ax.set_ylabel("偏误类型", fontsize=11)
+
+            title = f"偏误类型 × {modeLabel} 分布热力图"
+            ax.set_title(title, fontsize=12, pad=12)
+
+            fig.tight_layout()
+
+        self.canvas.figure = fig
+        self.canvas.draw()
+
+    def _onCanvasClick(self, event):
+        """点击热力图单元格触发下钻"""
+        if not self._drillDownCallback or event.inaxes is None:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+
+        matrix, xLabels, yLabels = self._buildMatrix()
+        if matrix is None:
+            return
+
+        j = int(round(event.xdata))
+        i = int(round(event.ydata))
+        if i < 0 or i >= len(yLabels) or j < 0 or j >= len(xLabels):
+            return
+
+        errorName = yLabels[i]
+        groupVal = xLabels[j]
+
+        logger.info(f"[Bias] 热力图下钻: 偏误={errorName}, 分组={groupVal}")
+        self._drillDownCallback(errorName, groupVal)
+        self.accept()
+
+    def _export(self, fmt: str):
+        if not self._currentFigure:
+            return
+        defaultName = f"偏误热力图.{fmt}"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出热力图",
+            defaultName,
+            f"{fmt.upper()} Files (*.{fmt})" if fmt == "svg" else f"PNG Files (*.png)",
+        )
+        if not path:
+            return
+        if not path.endswith(f".{fmt}"):
+            path += f".{fmt}"
+        self._currentFigure.savefig(
+            path, dpi=300, bbox_inches="tight", facecolor="white"
+        )
+        logger.info(f"[Bias] 热力图已导出: {path}")
+        InfoBar.success(
+            "导出成功",
+            f"热力图已保存至：{path}",
+            Qt.Orientation.Horizontal,
+            True,
+            2500,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
+
+    def _copyImage(self):
+        if not self._currentFigure:
+            return
+        buf = io.BytesIO()
+        self._currentFigure.savefig(
+            buf, format="png", dpi=150, bbox_inches="tight", facecolor="white"
+        )
+        buf.seek(0)
+
+        from PySide6.QtGui import QPixmap
+
+        pixmap = QPixmap()
+        pixmap.loadFromData(buf.getvalue())
+        self.window().clipboard().setPixmap(pixmap)
+        buf.close()
+
+        logger.info("[Bias] 热力图已复制到剪贴板")
+        InfoBar.success(
+            "复制成功",
+            "热力图已复制到剪贴板",
+            Qt.Orientation.Horizontal,
+            True,
+            2000,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
+        self.accept()
+
+
+class AssociationRulesDialog(MessageBoxBase):
+    """偏误关联规则挖掘结果弹窗（FR-ERR-003）
+
+    使用 Apriori 算法挖掘偏误类型间的关联规则,
+    支持表格展示、散点图、网络图三种可视化。
+    """
+
+    def __init__(
+        self,
+        transactions: list,
+        minSupport: float = 0.1,
+        minConfidence: float = 0.5,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.transactions = transactions
+        self.minSupport = minSupport
+        self.minConfidence = minConfidence
+        self.rulesDf = None  # 当前规则 DataFrame
+        self._scatterFigure = None
+        self._networkFigure = None
+        self._workerThread = None
+
+        plt.rcParams["font.sans-serif"] = [
+            "Microsoft YaHei",
+            "SimHei",
+            "Arial Unicode MS",
+        ]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        # 标题栏
+        iconLabel = QSvgWidget(":app/icons/Chart.svg", self)
+        iconLabel.setFixedSize(20, 20)
+
+        titleLabel = SubtitleLabel("偏误关联规则挖掘", self)
+        titleLabel.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        closeBtn = TransparentToggleToolButton(FluentIcon.CLOSE, self)
+        closeBtn.clicked.connect(self._onClose)
+
+        # 阈值参数面板
+        paramWidget = QWidget()
+        paramLayout = QHBoxLayout(paramWidget)
+        paramLayout.setContentsMargins(0, 0, 0, 0)
+        paramLayout.setSpacing(12)
+
+        supportLabel = BodyLabel("最小支持度:", self)
+        supportLabel.setStyleSheet("font-size: 12px;")
+        self.supportSpin = DoubleSpinBox(self)
+        self.supportSpin.setRange(0.01, 1.0)
+        self.supportSpin.setSingleStep(0.05)
+        self.supportSpin.setDecimals(2)
+        self.supportSpin.setValue(minSupport)
+        self.supportSpin.setFixedWidth(180)
+
+        confidenceLabel = BodyLabel("最小置信度:", self)
+        confidenceLabel.setStyleSheet("font-size: 12px;")
+        self.confidenceSpin = DoubleSpinBox(self)
+        self.confidenceSpin.setRange(0.05, 1.0)
+        self.confidenceSpin.setSingleStep(0.05)
+        self.confidenceSpin.setDecimals(2)
+        self.confidenceSpin.setValue(minConfidence)
+        self.confidenceSpin.setFixedWidth(180)
+
+        self.recomputeBtn = PushButton("重新计算", self)
+        self.recomputeBtn.setIcon(":app/icons/Refresh.svg")
+        self.recomputeBtn.clicked.connect(self._recompute)
+
+        paramLayout.addWidget(supportLabel)
+        paramLayout.addWidget(self.supportSpin)
+        paramLayout.addWidget(confidenceLabel)
+        paramLayout.addWidget(self.confidenceSpin)
+        paramLayout.addStretch(1)
+        paramLayout.addWidget(self.recomputeBtn)
+
+        # Tab 切换：表格 / 散点图 / 网络图
+        self.viewSegment = SegmentedWidget(self)
+        self.viewSegment.addItem("table", "表格")
+        self.viewSegment.addItem("scatter", "散点图")
+        self.viewSegment.addItem("network", "网络图")
+        self.viewSegment.setCurrentItem("table")
+        self.viewSegment.currentItemChanged.connect(self._onViewChanged)
+
+        # --- 表格视图 ---
+        self.table = RoundTableWidget(self)
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(
+            ["前项", "后项", "支持度", "置信度", "提升度", "杠杆值"]
+        )
+        self.table.setSortingEnabled(True)
+        self.table.setSelectionBehavior(RoundTableWidget.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(RoundTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(True)
+        # 数值列需要更宽以显示小数与百分号
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        # 列宽：支持度/置信度需容纳 "100.0%"，提升度需 "1.250" 等小数
+        self.table.setColumnWidth(2, 100)
+        self.table.setColumnWidth(3, 100)
+        self.table.setColumnWidth(4, 90)
+        self.table.setColumnWidth(5, 110)
+        for col in (2, 3, 4, 5):
+            self.table.horizontalHeader().setSectionResizeMode(
+                col, QHeaderView.ResizeMode.Fixed
+            )
+
+        self.tableWrap = ScrollArea(self)
+        self.tableWrap.setWidget(self.table)
+        self.tableWrap.setWidgetResizable(True)
+        self.tableWrap.setStyleSheet("border: none; background: transparent;")
+
+        # --- 散点图视图 ---
+        self.scatterCanvas = FigureCanvas(Figure(figsize=(7, 5), dpi=100))
+        self.scatterCanvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.scatterScroll = ScrollArea(self)
+        self.scatterScroll.setWidget(self.scatterCanvas)
+        self.scatterScroll.setWidgetResizable(True)
+        self.scatterScroll.setStyleSheet("border: none; background: transparent;")
+        self.scatterScroll.hide()
+
+        # --- 网络图视图 ---
+        self.networkCanvas = FigureCanvas(Figure(figsize=(7, 6), dpi=100))
+        self.networkCanvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.networkScroll = ScrollArea(self)
+        self.networkScroll.setWidget(self.networkCanvas)
+        self.networkScroll.setWidgetResizable(True)
+        self.networkScroll.setStyleSheet("border: none; background: transparent;")
+        self.networkScroll.hide()
+
+        # 状态/进度
+        self.statusLabel = CaptionLabel("点击「重新计算」开始挖掘...", self)
+        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+
+        # 导出
+        exportLayout = QHBoxLayout()
+        exportLayout.addStretch(1)
+
+        self.exportCsvBtn = PushButton("导出 CSV", self)
+        self.exportCsvBtn.clicked.connect(self._exportCsv)
+        self.exportCsvBtn.setEnabled(False)
+        exportLayout.addWidget(self.exportCsvBtn)
+
+        self.exportPngBtn = PushButton("导出图 PNG", self)
+        self.exportPngBtn.clicked.connect(self._exportPng)
+        self.exportPngBtn.setEnabled(False)
+        exportLayout.addWidget(self.exportPngBtn)
+
+        # 布局
+        self.viewLayout.setContentsMargins(15, 15, 15, 10)
+
+        headerLayout = QHBoxLayout()
+        headerLayout.addWidget(iconLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        headerLayout.addWidget(titleLabel, 0, Qt.AlignmentFlag.AlignLeft)
+        headerLayout.addStretch()
+        headerLayout.addWidget(closeBtn, 0, Qt.AlignmentFlag.AlignRight)
+        self.viewLayout.addLayout(headerLayout)
+
+        self.viewLayout.addSpacing(6)
+        self.viewLayout.addWidget(paramWidget)
+        self.viewLayout.addSpacing(4)
+        self.viewLayout.addWidget(self.viewSegment)
+        self.viewLayout.addSpacing(6)
+        self.viewLayout.addWidget(self.tableWrap, 1)
+        self.viewLayout.addWidget(self.scatterScroll, 1)
+        self.viewLayout.addWidget(self.networkScroll, 1)
+        self.viewLayout.addSpacing(2)
+        self.viewLayout.addWidget(self.statusLabel)
+        self.viewLayout.addSpacing(4)
+        self.viewLayout.addLayout(exportLayout)
+
+        # 底部按钮
+        cancelBtn = PushButton("关闭", self)
+        cancelBtn.setFixedWidth(80)
+        cancelBtn.clicked.connect(self._onClose)
+        self.buttonLayout.addWidget(cancelBtn)
+        self.buttonGroup.hide()
+
+        self.widget.setFixedWidth(760)
+        self.widget.setFixedHeight(560)
+
+        # 初始计算
+        self._recompute()
+
+    def _onClose(self):
+        if self._workerThread and self._workerThread.isRunning():
+            self._workerThread.cancel()
+            self._workerThread.wait(2000)
+        self.accept()
+
+    def _onViewChanged(self, key: str):
+        self.tableWrap.setVisible(key == "table")
+        self.scatterScroll.setVisible(key == "scatter")
+        self.networkScroll.setVisible(key == "network")
+        if key == "scatter":
+            self._renderScatter()
+        elif key == "network":
+            self._renderNetwork()
+
+    def _recompute(self):
+        """启动后台 Apriori 线程"""
+        if self._workerThread and self._workerThread.isRunning():
+            return
+
+        self.minSupport = float(self.supportSpin.value())
+        self.minConfidence = float(self.confidenceSpin.value())
+        self.recomputeBtn.setEnabled(False)
+        self.exportCsvBtn.setEnabled(False)
+        self.exportPngBtn.setEnabled(False)
+        self.statusLabel.setText("正在挖掘...")
+
+        self._workerThread = AprioriWorkerThread(
+            self.transactions, self.minSupport, self.minConfidence
+        )
+        self._workerThread.progress.connect(self._onProgress)
+        self._workerThread.finished.connect(self._onFinished)
+        self._workerThread.failed.connect(self._onFailed)
+        self._workerThread.start()
+
+    def _onProgress(self, percent: int, status: str):
+        self.statusLabel.setText(f"[{percent}%] {status}")
+
+    def _onFailed(self, err: str):
+        self.recomputeBtn.setEnabled(True)
+        self.statusLabel.setText(f"计算失败: {err}")
+        InfoBar.error(
+            "挖掘失败",
+            err,
+            Qt.Orientation.Horizontal,
+            True,
+            3000,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
+
+    def _onFinished(self, rulesDf):
+        self.recomputeBtn.setEnabled(True)
+        self.rulesDf = rulesDf
+
+        if rulesDf is None or rulesDf.empty:
+            self.statusLabel.setText("未找到满足条件的关联规则，请降低阈值重试")
+            self.table.setRowCount(0)
+            return
+
+        self._populateTable(rulesDf)
+        self._renderScatter()
+        self._renderNetwork()
+        self.exportCsvBtn.setEnabled(True)
+        self.exportPngBtn.setEnabled(True)
+
+        # 计算项目数与统计摘要
+        numTransactions = len(self.transactions)
+        allItems = set()
+        for t in self.transactions:
+            allItems.update(t)
+        numItems = len(allItems)
+
+        # 统计指标范围
+        confMin = rulesDf["confidence"].min()
+        confMax = rulesDf["confidence"].max()
+        liftMin = rulesDf["lift"].min()
+        liftMax = rulesDf["lift"].max()
+
+        # 样本量警告
+        warning = ""
+        if numTransactions < 10:
+            warning = (
+                f" ⚠ 样本量较少（事务={numTransactions}），统计结论仅供参考，"
+                f"建议加载更多文件后再挖掘。"
+            )
+        elif numItems > numTransactions * 3:
+            warning = (
+                f" ⚠ 项目数({numItems})远多于事务数({numTransactions})，"
+                f"统计可能不稳定。"
+            )
+
+        self.statusLabel.setText(
+            f"完成：{len(rulesDf)} 条规则 | "
+            f"事务数={numTransactions}  项目数={numItems}  "
+            f"置信度范围=[{confMin * 100:.1f}%, {confMax * 100:.1f}%]  "
+            f"提升度=[{liftMin:.2f}, {liftMax:.2f}]{warning}"
+        )
+        logger.info(
+            f"[Bias] 关联规则挖掘完成: {len(rulesDf)} 条, "
+            f"事务={numTransactions}, 项目={numItems}, "
+            f"置信度范围=[{confMin:.3f}, {confMax:.3f}], "
+            f"提升度范围=[{liftMin:.3f}, {liftMax:.3f}]"
+        )
+        InfoBar.success(
+            "挖掘完成",
+            f"共 {len(rulesDf)} 条关联规则（事务={numTransactions}，项目={numItems}）",
+            Qt.Orientation.Horizontal,
+            True,
+            2000,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
+
+    def _populateTable(self, rulesDf):
+        """填充表格"""
+        self.table.setRowCount(len(rulesDf))
+
+        def _formatSet(s):
+            return ", ".join(sorted(list(s))) if s is not None else ""
+
+        def _fmtPct(v):
+            # 百分比格式：保留 1 位小数 + 百分号，直观且不易误读为整数
+            try:
+                return f"{float(v) * 100:.1f}%"
+            except (TypeError, ValueError):
+                return "—"
+
+        def _fmtLift(v):
+            # 提升度保留 3 位小数，避免显示为 1.00 时被误认为整数
+            try:
+                f = float(v)
+                import math as _math
+
+                if _math.isnan(f) or _math.isinf(f):
+                    return "—"
+                return f"{f:.3f}"
+            except (TypeError, ValueError):
+                return "—"
+
+        def _fmtLev(v):
+            # 杠杆值通常很小，保留 5 位小数 + 科学计数法
+            try:
+                f = float(v)
+                import math as _math
+
+                if _math.isnan(f) or _math.isinf(f):
+                    return "—"
+                if abs(f) < 0.0001 and f != 0:
+                    return f"{f:.2e}"
+                return f"{f:.5f}"
+            except (TypeError, ValueError):
+                return "—"
+
+        for i in range(len(rulesDf)):
+            row = rulesDf.iloc[i]
+            self.table.setItem(
+                i, 0, QTableWidgetItem(_formatSet(row.get("antecedents")))
+            )
+            self.table.setItem(
+                i, 1, QTableWidgetItem(_formatSet(row.get("consequents")))
+            )
+            # 数值列：右侧对齐 + 显示真实小数
+            supportItem = QTableWidgetItem(_fmtPct(row.get("support")))
+            supportItem.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.table.setItem(i, 2, supportItem)
+
+            confItem = QTableWidgetItem(_fmtPct(row.get("confidence")))
+            confItem.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.table.setItem(i, 3, confItem)
+
+            liftItem = QTableWidgetItem(_fmtLift(row.get("lift")))
+            liftItem.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.table.setItem(i, 4, liftItem)
+
+            levItem = QTableWidgetItem(_fmtLev(row.get("leverage")))
+            levItem.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.table.setItem(i, 5, levItem)
+
+    def _renderScatter(self):
+        """支持度 vs 置信度 散点图（点大小=提升度）"""
+        if self._scatterFigure:
+            plt.close(self._scatterFigure)
+        fig = Figure(figsize=(7, 5), dpi=100)
+        ax = fig.add_subplot(111)
+        self._scatterFigure = fig
+
+        if self.rulesDf is None or self.rulesDf.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "暂无规则",
+                ha="center",
+                va="center",
+                fontsize=14,
+            )
+            ax.axis("off")
+        else:
+            support = self.rulesDf["support"].values
+            confidence = self.rulesDf["confidence"].values
+            lift = self.rulesDf["lift"].values
+
+            # 点大小按提升度映射
+            sizes = np.clip((lift - 0.5) * 80, 20, 300)
+
+            scatter = ax.scatter(
+                support,
+                confidence,
+                s=sizes,
+                c=lift,
+                cmap="viridis",
+                alpha=0.7,
+                edgecolors="white",
+                linewidth=0.5,
+            )
+            ax.set_xlabel("支持度 (Support)", fontsize=11)
+            ax.set_ylabel("置信度 (Confidence)", fontsize=11)
+            ax.set_title(
+                f"关联规则散点图（共 {len(self.rulesDf)} 条，点大小/颜色=提升度）",
+                fontsize=12,
+                pad=12,
+            )
+            ax.grid(linestyle="--", alpha=0.4)
+            ax.set_xlim(0, max(0.05, float(support.max()) * 1.1))
+            ax.set_ylim(0, 1.02)
+            cbar = fig.colorbar(scatter, ax=ax, fraction=0.04, pad=0.03)
+            cbar.set_label("提升度 (Lift)", fontsize=10)
+
+        fig.tight_layout()
+        self.scatterCanvas.figure = fig
+        self.scatterCanvas.draw()
+
+    def _renderNetwork(self):
+        """网络图：节点=偏误类型，边=关联（权重=置信度）"""
+        if self._networkFigure:
+            plt.close(self._networkFigure)
+        fig = Figure(figsize=(7, 6), dpi=100)
+        ax = fig.add_subplot(111)
+        self._networkFigure = fig
+
+        if self.rulesDf is None or self.rulesDf.empty:
+            ax.text(
+                0.5,
+                0.5,
+                "暂无规则",
+                ha="center",
+                va="center",
+                fontsize=14,
+            )
+            ax.axis("off")
+        else:
+            try:
+                import networkx as nx
+                from itertools import chain
+
+                G = nx.DiGraph()
+                for _, row in self.rulesDf.iterrows():
+                    for ant in row["antecedents"]:
+                        for con in row["consequents"]:
+                            if G.has_edge(ant, con):
+                                # 取最大置信度
+                                G[ant][con]["weight"] = max(
+                                    G[ant][con]["weight"], float(row["confidence"])
+                                )
+                            else:
+                                G.add_edge(
+                                    ant,
+                                    con,
+                                    weight=float(row["confidence"]),
+                                    lift=float(row["lift"]),
+                                )
+
+                if G.number_of_edges() == 0:
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "无网络关系",
+                        ha="center",
+                        va="center",
+                        fontsize=14,
+                    )
+                    ax.axis("off")
+                else:
+                    pos = nx.spring_layout(G, k=1.2, seed=42)
+                    edges = G.edges(data=True)
+                    weights = [d["weight"] * 3 for _, _, d in edges]
+                    lifts = [d["lift"] for _, _, d in edges]
+
+                    nx.draw_networkx_nodes(
+                        G,
+                        pos,
+                        node_size=900,
+                        node_color="#88CCEE",
+                        edgecolors="white",
+                        linewidths=1.5,
+                        ax=ax,
+                    )
+                    nx.draw_networkx_edges(
+                        G,
+                        pos,
+                        width=weights,
+                        edge_color=lifts,
+                        edge_cmap=plt.cm.viridis,
+                        edge_vmin=min(lifts) if lifts else 0.5,
+                        edge_vmax=max(lifts) if lifts else 2.0,
+                        alpha=0.7,
+                        arrows=True,
+                        arrowsize=14,
+                        ax=ax,
+                    )
+                    # 截断过长的标签
+                    shortLabels = {
+                        n: (n[:8] + "…") if len(n) > 10 else n for n in G.nodes()
+                    }
+                    nx.draw_networkx_labels(
+                        G,
+                        pos,
+                        labels=shortLabels,
+                        font_size=8,
+                        font_family="Microsoft YaHei",
+                        ax=ax,
+                    )
+                    ax.set_title(
+                        f"偏误共现网络图（共 {G.number_of_edges()} 条边）",
+                        fontsize=12,
+                        pad=12,
+                    )
+                    ax.axis("off")
+            except ImportError:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "缺少 networkx 库\n请 pip install networkx",
+                    ha="center",
+                    va="center",
+                    fontsize=13,
+                )
+                ax.axis("off")
+
+        fig.tight_layout()
+        self.networkCanvas.figure = fig
+        self.networkCanvas.draw()
+
+    def _exportCsv(self):
+        if self.rulesDf is None or self.rulesDf.empty:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出规则 CSV", "偏误关联规则.csv", "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+        if not path.endswith(".csv"):
+            path += ".csv"
+
+        try:
+            exportDf = self.rulesDf.copy()
+            exportDf["antecedents"] = exportDf["antecedents"].apply(
+                lambda s: ", ".join(sorted(list(s))) if s is not None else ""
+            )
+            exportDf["consequents"] = exportDf["consequents"].apply(
+                lambda s: ", ".join(sorted(list(s))) if s is not None else ""
+            )
+            exportDf.to_csv(path, index=False, encoding="utf-8-sig")
+            InfoBar.success(
+                "导出成功",
+                f"规则已保存至：{path}",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+        except Exception as e:
+            InfoBar.error(
+                "导出失败",
+                str(e),
+                Qt.Orientation.Horizontal,
+                True,
+                3000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+
+    def _exportPng(self):
+        currentFig = None
+        if self.viewSegment.currentItem() == "scatter":
+            currentFig = self._scatterFigure
+        elif self.viewSegment.currentItem() == "network":
+            currentFig = self._networkFigure
+        if currentFig is None:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出图 PNG", "偏误关联规则.png", "PNG Files (*.png)"
+        )
+        if not path:
+            return
+        if not path.endswith(".png"):
+            path += ".png"
+        currentFig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+        InfoBar.success(
+            "导出成功",
+            f"图片已保存至：{path}",
+            Qt.Orientation.Horizontal,
+            True,
+            2500,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
+
+
 class BiasInterface(QWidget):
     """HSK 偏误分析主界面"""
 
@@ -609,6 +1792,12 @@ class BiasInterface(QWidget):
         self.dfs = {}
         self.loadThread = None
         self.selectedColumn = None
+        self.levelColumn = None
+        self.countryColumn = None
+
+        # 用户手动配置的列（优先级高于自动识别）
+        self.manualLevelColumn = None
+        self.manualCountryColumn = None
 
         # 偏误统计
         self.currentRecords = []
@@ -618,6 +1807,10 @@ class BiasInterface(QWidget):
             **{name: 0 for name in WORDS_TYPES},
         }
         self.totalCounts = None
+
+        # 热力图数据：{(errorName, groupValue): [records]}
+        self.heatmapData: dict = {}
+        self.heatmapGroups: list = []
 
         self._initUi()
 
@@ -657,8 +1850,9 @@ class BiasInterface(QWidget):
         topLayout.addWidget(self.switchBtn)
         topLayout.addStretch()
 
-        # 统计列选择
+        # 统计列选择和操作栏
         columnLayout = QHBoxLayout()
+        columnLayout.setSpacing(12)
 
         columnLabel = BodyLabel("统计列:", self)
         columnLabel.setStyleSheet("font-size: 13px;")
@@ -667,8 +1861,45 @@ class BiasInterface(QWidget):
         self.columnCombobox.setEnabled(False)
         self.columnCombobox.currentIndexChanged.connect(self._onColumnChanged)
 
+        self.analyzeBtn = TransparentPushButton("分析", self)
+        self.analyzeBtn.setIcon(":app/icons/Check.svg")
+        self.analyzeBtn.clicked.connect(self._runMatching)
+
+        self.chartBtn = TransparentPushButton("图表", self)
+        self.chartBtn.setIcon(":app/icons/Chart.svg")
+        self.chartBtn.clicked.connect(self._runChart)
+
+        self.countBtn = TransparentPushButton("计数", self)
+        self.countBtn.setIcon(":app/icons/Number.svg")
+        self.countBtn.clicked.connect(self._runCount)
+
+        self.exportBtn = TransparentPushButton("导出", self)
+        self.exportBtn.setIcon(":app/icons/Save.svg")
+        self.exportBtn.clicked.connect(self._exportResults)
+
+        self.heatmapBtn = TransparentPushButton("热力图", self)
+        self.heatmapBtn.setIcon(":app/icons/Chart.svg")
+        self.heatmapBtn.clicked.connect(self._runHeatmap)
+
+        self.rulesBtn = TransparentPushButton("关联规则", self)
+        self.rulesBtn.setIcon(":app/icons/Chart.svg")
+        self.rulesBtn.clicked.connect(self._runAssociationRules)
+
+        self.columnConfigBtn = TransparentPushButton("列配置", self)
+        self.columnConfigBtn.setIcon(":app/icons/Setting.svg")
+        self.columnConfigBtn.clicked.connect(self._openColumnConfig)
+
         columnLayout.addWidget(columnLabel)
         columnLayout.addWidget(self.columnCombobox)
+        columnLayout.addWidget(self.columnConfigBtn)
+        columnLayout.addWidget(VerticalSeparator(self))
+        columnLayout.addWidget(self.analyzeBtn)
+        columnLayout.addWidget(self.chartBtn)
+        columnLayout.addWidget(self.countBtn)
+        columnLayout.addWidget(self.heatmapBtn)
+        columnLayout.addWidget(self.rulesBtn)
+        columnLayout.addWidget(VerticalSeparator(self))
+        columnLayout.addWidget(self.exportBtn)
         columnLayout.addStretch()
 
         scrollLayout.addLayout(topLayout)
@@ -738,41 +1969,12 @@ class BiasInterface(QWidget):
 
         scrollLayout.addWidget(filterCard)
 
-        # 操作栏（横向布局）
-        actionLayout = QHBoxLayout()
-        actionLayout.setSpacing(12)
-
-        self.analyzeBtn = TransparentPushButton("分析", self)
-        self.analyzeBtn.setIcon(":app/icons/Check.svg")
-        self.analyzeBtn.clicked.connect(self._runMatching)
-        actionLayout.addWidget(self.analyzeBtn)
-
-        self.chartBtn = TransparentPushButton("图表", self)
-        self.chartBtn.setIcon(":app/icons/Chart.svg")
-        self.chartBtn.clicked.connect(self._runChart)
-        actionLayout.addWidget(self.chartBtn)
-
-        self.countBtn = TransparentPushButton("计数", self)
-        self.countBtn.setIcon(":app/icons/Number.svg")
-        self.countBtn.clicked.connect(self._runCount)
-        actionLayout.addWidget(self.countBtn)
-
-        actionLayout.addWidget(VerticalSeparator(self))
-
-        self.exportBtn = TransparentPushButton("导出", self)
-        self.exportBtn.setIcon(":app/icons/Save.svg")
-        self.exportBtn.clicked.connect(self._exportResults)
-        actionLayout.addWidget(self.exportBtn)
-        actionLayout.addStretch()
-
-        scrollLayout.addLayout(actionLayout)
-
         # 结果表格
         self.tableWidget = RoundTableWidget(self)
         self.tableWidget.setMinimumHeight(400)
-        self.tableWidget.setColumnCount(5)
+        self.tableWidget.setColumnCount(7)
         self.tableWidget.setHorizontalHeaderLabels(
-            ["文件", "行号", "句子", "偏误类型", "标记内容"]
+            ["文件", "行号", "句子", "偏误类型", "标记内容", "等级", "国籍"]
         )
         self.tableWidget.setSortingEnabled(True)
         self.tableWidget.setSelectionBehavior(
@@ -786,6 +1988,8 @@ class BiasInterface(QWidget):
         self.tableWidget.setColumnWidth(1, 60)
         self.tableWidget.setColumnWidth(3, 120)
         self.tableWidget.setColumnWidth(4, 150)
+        self.tableWidget.setColumnWidth(5, 80)
+        self.tableWidget.setColumnWidth(6, 100)
         self.tableWidget.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
@@ -914,6 +2118,104 @@ class BiasInterface(QWidget):
                     self.columnCombobox.addItems(columns)
                     self.columnCombobox.setEnabled(True)
 
+        # 自动识别等级/国籍列（用于热力图）
+        self._detectGroupColumns()
+
+    def _detectGroupColumns(self):
+        """自动识别等级列与国籍列"""
+        self.levelColumn = None
+        self.countryColumn = None
+
+        if not self.dfs:
+            return
+
+        # 取首个 DataFrame 的列做匹配
+        firstDf = next(iter(self.dfs.values()))
+        cols = list(firstDf.columns)
+
+        levelKeywords = ["level", "hsk", "等级", "级别", "水准"]
+        countryKeywords = ["country", "nationality", "国籍", "国家", "nation"]
+
+        for col in cols:
+            colLower = str(col).lower()
+            if self.levelColumn is None and any(kw in colLower for kw in levelKeywords):
+                self.levelColumn = col
+            if self.countryColumn is None and any(
+                kw in colLower for kw in countryKeywords
+            ):
+                self.countryColumn = col
+
+        # 手动配置优先：若用户已指定，则覆盖自动识别结果
+        if self.manualLevelColumn and self.manualLevelColumn in cols:
+            self.levelColumn = self.manualLevelColumn
+        if self.manualCountryColumn and self.manualCountryColumn in cols:
+            self.countryColumn = self.manualCountryColumn
+
+        logger.info(
+            f"[Bias] 分组列: 等级={self.levelColumn}, 国籍={self.countryColumn}"
+        )
+
+    def _openColumnConfig(self):
+        """打开列配置弹窗"""
+        if not self.dfs:
+            InfoBar.warning(
+                "提示",
+                "请先加载 Excel 文件",
+                Qt.Orientation.Horizontal,
+                True,
+                2000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        # 收集所有列（多文件模式取交集，单文件取当前文件列）
+        if self.switchBtn.isChecked() and len(self.dfs) > 1:
+            columnSets = [set(df.columns) for df in self.dfs.values()]
+            allColumns = sorted(set.intersection(*columnSets))
+        else:
+            lastFile = self.filesList[-1] if self.filesList else None
+            if lastFile and lastFile in self.dfs:
+                allColumns = list(self.dfs[lastFile].columns)
+            else:
+                firstDf = next(iter(self.dfs.values()))
+                allColumns = list(firstDf.columns)
+
+        if not allColumns:
+            InfoBar.warning(
+                "提示",
+                "未找到可用列",
+                Qt.Orientation.Horizontal,
+                True,
+                2000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        dialog = ColumnConfigDialog(
+            allColumns,
+            self.manualLevelColumn or self.levelColumn,
+            self.manualCountryColumn or self.countryColumn,
+            self.window(),
+        )
+        if dialog.exec():
+            newLevel, newCountry = dialog.getResult()
+            self.manualLevelColumn = newLevel
+            self.manualCountryColumn = newCountry
+            # 重新解析列
+            self._detectGroupColumns()
+            InfoBar.success(
+                "配置已保存",
+                f"等级列：{newLevel or '未设置'}  |  国籍列：{newCountry or '未设置'}",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            logger.info(f"[Bias] 列配置更新: 等级={newLevel}, 国籍={newCountry}")
+
     def _onModeChanged(self, isChecked: bool):
         """切换模式"""
         text = "多文件模式" if isChecked else "单文件模式"
@@ -950,7 +2252,11 @@ class BiasInterface(QWidget):
         self.filesList = []
         self.dfs = {}
         self.selectedColumn = None
+        self.levelColumn = None
+        self.countryColumn = None
         self.currentRecords = []
+        self.heatmapData = {}
+        self.heatmapGroups = []
         self.typeCounts = {
             **{name: 0 for name in CHARACTERS_TYPES},
             **{name: 0 for name in SENTENCES_TYPES},
@@ -1012,6 +2318,8 @@ class BiasInterface(QWidget):
         for name in self.typeCounts:
             self.typeCounts[name] = 0
         self.currentRecords = []
+        self.heatmapData = {}
+        self.heatmapGroups = []
         self.tableWidget.setRowCount(0)
 
         for filePath, df in self.dfs.items():
@@ -1021,9 +2329,31 @@ class BiasInterface(QWidget):
             textSeries = df[self.selectedColumn].astype(str).fillna("")
             fileName = os.path.basename(filePath)
 
+            # 预提取等级与国籍列（按 idx 索引）
+            levelSeries = (
+                df[self.levelColumn].astype(str).fillna("")
+                if self.levelColumn
+                else None
+            )
+            countrySeries = (
+                df[self.countryColumn].astype(str).fillna("")
+                if self.countryColumn
+                else None
+            )
+
             for idx, text in enumerate(textSeries):
                 if not text or text == "nan":
                     continue
+
+                # 当前行对应的等级/国籍（优先用于热力图分组）
+                rowLevel = levelSeries.iloc[idx] if levelSeries is not None else ""
+                rowCountry = (
+                    countrySeries.iloc[idx] if countrySeries is not None else ""
+                )
+                rowLevel = rowLevel if rowLevel and rowLevel != "nan" else "未知"
+                rowCountry = (
+                    rowCountry if rowCountry and rowCountry != "nan" else "未知"
+                )
 
                 for errorName in selectTypes:
                     patternStr, hasContent = ERROR_TYPES[errorName]
@@ -1047,12 +2377,40 @@ class BiasInterface(QWidget):
                         if matchFilter:
                             self.typeCounts[errorName] += 1
                             self.currentRecords.append(
-                                (fileName, idx + 2, text, errorName, content)
+                                (
+                                    fileName,
+                                    idx + 2,
+                                    text,
+                                    errorName,
+                                    content,
+                                    rowLevel,
+                                    rowCountry,
+                                )
                             )
+
+                            # 收集热力图分组数据（等级与国籍各自分组）
+                            for groupVal in (rowLevel, rowCountry):
+                                if groupVal == "未知":
+                                    continue
+                                key = (errorName, groupVal)
+                                if key not in self.heatmapData:
+                                    self.heatmapData[key] = []
+                                self.heatmapData[key].append(
+                                    (
+                                        fileName,
+                                        idx + 2,
+                                        text,
+                                        content,
+                                        rowLevel,
+                                        rowCountry,
+                                    )
+                                )
+                                if groupVal not in self.heatmapGroups:
+                                    self.heatmapGroups.append(groupVal)
 
         # 填充表格
         self.tableWidget.setRowCount(len(self.currentRecords))
-        for i, (fname, rowNum, sentence, errName, mark) in enumerate(
+        for i, (fname, rowNum, sentence, errName, mark, level, country) in enumerate(
             self.currentRecords
         ):
             self.tableWidget.setItem(i, 0, QTableWidgetItem(fname))
@@ -1060,6 +2418,8 @@ class BiasInterface(QWidget):
             self.tableWidget.setItem(i, 2, QTableWidgetItem(sentence))
             self.tableWidget.setItem(i, 3, QTableWidgetItem(errName))
             self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
+            self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
+            self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
 
         self.totalCounts = {name: self.typeCounts[name] for name in selectTypes}
 
@@ -1108,6 +2468,188 @@ class BiasInterface(QWidget):
         dialog = ChartDialog(self.totalCounts, self.window())
         dialog.exec()
 
+    def _runHeatmap(self):
+        """显示偏误热力图（FR-ERR-002）"""
+        if not self.heatmapData:
+            InfoBar.warning(
+                "提示",
+                "请先进行分析\n（热力图需要等级或国籍列数据）",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        selectedTypes = list(self.totalCounts.keys()) if self.totalCounts else []
+
+        # 拆分等级与国籍两组
+        levelGroups = []
+        countryGroups = []
+        for g in self.heatmapGroups:
+            # 根据值特征（HSK/数字级别 vs 其他）粗略区分
+            if self._looksLikeLevel(g):
+                levelGroups.append(g)
+            else:
+                countryGroups.append(g)
+
+        # 若两列均未识别且都没数据，按等级优先
+        if not levelGroups and not countryGroups:
+            levelGroups = list(self.heatmapGroups)
+
+        dialog = HeatmapDialog(
+            self.heatmapData,
+            selectedTypes,
+            list(self.heatmapGroups),
+            levelGroups,
+            countryGroups,
+            self.window(),
+        )
+        dialog.setDrillDownCallback(self._drillDownFromHeatmap)
+        dialog.exec()
+
+    def _runAssociationRules(self):
+        """偏误关联规则挖掘（FR-ERR-003）
+
+        按文件级别构建事务：每个文件中的偏误类型集合 = 一个事务。
+        """
+        if not self.currentRecords:
+            InfoBar.warning(
+                "提示",
+                "请先进行分析",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        # 按文件聚合偏误类型
+        fileToTypes: dict = {}
+        for record in self.currentRecords:
+            if len(record) < 7:
+                continue
+            fileName = record[0]
+            errName = record[3]
+            fileToTypes.setdefault(fileName, set()).add(errName)
+
+        transactions = [sorted(list(types)) for types in fileToTypes.values() if types]
+
+        if len(transactions) < 2:
+            InfoBar.warning(
+                "提示",
+                "事务数量不足（至少需要 2 个文件包含偏误）",
+                Qt.Orientation.Horizontal,
+                True,
+                3000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        # 根据事务数自适应阈值：事务少时降低支持度门槛
+        if len(transactions) <= 5:
+            minSupport = 0.2
+        elif len(transactions) <= 20:
+            minSupport = 0.1
+        else:
+            minSupport = 0.05
+
+        logger.info(
+            f"[Bias] 启动关联规则挖掘: 事务数={len(transactions)}, "
+            f"支持度阈值={minSupport}"
+        )
+
+        dialog = AssociationRulesDialog(
+            transactions,
+            minSupport,
+            0.5,
+            self.window(),
+        )
+        dialog.exec()
+
+    def _looksLikeLevel(self, value: str) -> bool:
+        """简易判断：HSK 等级 / 数字级别"""
+        if not value:
+            return False
+        v = str(value).strip().lower()
+        if v.startswith("hsk"):
+            return True
+        if v in {"1", "2", "3", "4", "5", "6", "7", "8", "9"}:
+            return True
+        if v in {
+            "a",
+            "b",
+            "c",
+            "初级",
+            "中级",
+            "高级",
+            "beginner",
+            "intermediate",
+            "advanced",
+        }:
+            return True
+        return False
+
+    def _drillDownFromHeatmap(self, errorName: str, groupVal: str):
+        """热力图单元格点击下钻：在主表格过滤对应 (偏误类型, 分组) 的记录"""
+        if not self.currentRecords:
+            return
+
+        # 根据分组值确定该行的 level/country
+        # 重新从完整记录中过滤：(errorName 匹配) AND (等级或国籍 == groupVal)
+        mode = "level" if self._looksLikeLevel(groupVal) else "country"
+
+        filtered = []
+        for record in self.currentRecords:
+            if len(record) < 7:
+                continue
+            fileName, rowNum, text, errName, content, rowLevel, rowCountry = record
+            if errName != errorName:
+                continue
+
+            # 直接从记录中的 level/country 字段判断（无需再查 df）
+            if mode == "level":
+                match = rowLevel == groupVal
+            else:
+                match = rowCountry == groupVal
+
+            if match:
+                filtered.append(record)
+
+        if not filtered:
+            # 退化：仅按 errorName 过滤
+            filtered = [r for r in self.currentRecords if r[3] == errorName]
+
+        # 重绘主表格
+        self.tableWidget.setRowCount(len(filtered))
+        for i, record in enumerate(filtered):
+            if len(record) < 7:
+                fname, rowNum, sentence, errName, mark = record[:5]
+                level, country = "", ""
+            else:
+                fname, rowNum, sentence, errName, mark, level, country = record
+            self.tableWidget.setItem(i, 0, QTableWidgetItem(fname))
+            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(rowNum)))
+            self.tableWidget.setItem(i, 2, QTableWidgetItem(sentence))
+            self.tableWidget.setItem(i, 3, QTableWidgetItem(errName))
+            self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
+            self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
+            self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
+
+        modeZh = "等级" if mode == "level" else "国籍"
+        InfoBar.success(
+            "下钻成功",
+            f"已过滤：{errorName} × {groupVal}（{modeZh}）\n共 {len(filtered)} 条记录",
+            Qt.Orientation.Horizontal,
+            True,
+            2500,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
+
     def _exportResults(self):
         """导出结果"""
         if not self.currentRecords:
@@ -1133,7 +2675,7 @@ class BiasInterface(QWidget):
 
         dfExport = pd.DataFrame(
             self.currentRecords,
-            columns=["文件", "行号", "句子", "偏误类型", "标记内容"],
+            columns=["文件", "行号", "句子", "偏误类型", "标记内容", "等级", "国籍"],
         )
 
         try:

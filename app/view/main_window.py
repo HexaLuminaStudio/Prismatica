@@ -97,7 +97,7 @@ class MainWindow(MSFluentWindow):
 
     def initWindow(self):
         logger.info("开始初始化窗口设置")
-        self.resize(1000, 750)
+        self.resize(1100, 750)
         self.setMinimumWidth(700)
         self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))
@@ -208,13 +208,13 @@ class MainWindow(MSFluentWindow):
         navInterface = self.navigationInterface
 
         # 通过 objectName 查找并移除导航项
-        items_to_remove = []
-        for item_key, item_info in navInterface.items.items():
-            if item_key == objectName:
-                items_to_remove.append(item_key)
+        itemsToRemove = []
+        for itemKey, itemInfo in navInterface.items.items():
+            if itemKey == objectName:
+                itemsToRemove.append(itemKey)
 
-        for item_key in items_to_remove:
-            navInterface.removeWidget(item_key)
+        for itemKey in itemsToRemove:
+            navInterface.removeWidget(itemKey)
 
         logger.info(f"[MainWindow] 移除插件界面: {pluginId}")
 

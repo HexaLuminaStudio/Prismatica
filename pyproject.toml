@@ -6,8 +6,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
     "bcrypt>=5.0.0",
+    "cryptography>=49.0.0",
+    "jieba>=0.42.1",
     "loguru>=0.7.3",
     "matplotlib>=3.11.0",
+    "mlxtend>=0.25.0",
+    "networkx>=3.6.1",
     "openpyxl",
     "pandas",
     "psutil>=7.2.2",

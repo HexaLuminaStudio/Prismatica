@@ -1,7 +1,7 @@
 from __future__ import absolute_import, unicode_literals
 
-__version__ = '0.42.1'
-__license__ = 'MIT'
+__version__ = "0.42.1"
+__license__ = "MIT"
 
 import marshal
 import re
@@ -14,7 +14,7 @@ from math import log
 from . import finalseg
 from ._compat import *
 
-if os.name == 'nt':
+if os.name == "nt":
     from shutil import move as _replace_file
 else:
     _replace_file = os.rename
@@ -33,15 +33,15 @@ DICT_WRITING = {}
 
 pool = None
 
-re_userdict = re.compile('^(.+?)( [0-9]+)?( [a-z]+)?$', re.U)
+re_userdict = re.compile("^(.+?)( [0-9]+)?( [a-z]+)?$", re.U)
 
-re_eng = re.compile('[a-zA-Z0-9]', re.U)
+re_eng = re.compile("[a-zA-Z0-9]", re.U)
 
 # \u4E00-\u9FD5a-zA-Z0-9+#&\._ : All non-space characters. Will be handled with re_han
 # \r\n|\s : whitespace characters. Will not be handled.
 # re_han_default = re.compile("([\u4E00-\u9FD5a-zA-Z0-9+#&\._%]+)", re.U)
 # Adding "-" symbol in re_han_default
-re_han_default = re.compile("([\u4E00-\u9FD5a-zA-Z0-9+#&\._%\-]+)", re.U)
+re_han_default = re.compile("([\u4e00-\u9fd5a-zA-Z0-9+#&\._%\-]+)", re.U)
 
 re_skip_default = re.compile("(\r\n|\s)", re.U)
 
@@ -66,7 +66,7 @@ class Tokenizer(object):
         self.cache_file = None
 
     def __repr__(self):
-        return '<Tokenizer dictionary=%r>' % self.dictionary
+        return "<Tokenizer dictionary=%r>" % self.dictionary
 
     @staticmethod
     def gen_pfdict(f):
@@ -75,18 +75,20 @@ class Tokenizer(object):
         f_name = resolve_filename(f)
         for lineno, line in enumerate(f, 1):
             try:
-                line = line.strip().decode('utf-8')
-                word, freq = line.split(' ')[:2]
+                line = line.strip().decode("utf-8")
+                word, freq = line.split(" ")[:2]
                 freq = int(freq)
                 lfreq[word] = freq
                 ltotal += freq
                 for ch in xrange(len(word)):
-                    wfrag = word[:ch + 1]
+                    wfrag = word[: ch + 1]
                     if wfrag not in lfreq:
                         lfreq[wfrag] = 0
             except ValueError:
                 raise ValueError(
-                    'invalid dictionary entry in %s at Line %s: %s' % (f_name, lineno, line))
+                    "invalid dictionary entry in %s at Line %s: %s"
+                    % (f_name, lineno, line)
+                )
         f.close()
         return lfreq, ltotal
 
@@ -110,7 +112,10 @@ class Tokenizer(object):
             if self.initialized:
                 return
 
-            default_logger.debug("Building prefix dict from %s ..." % (abs_path or 'the default dictionary'))
+            default_logger.debug(
+                "Building prefix dict from %s ..."
+                % (abs_path or "the default dictionary")
+            )
             t1 = time.time()
             if self.cache_file:
                 cache_file = self.cache_file
@@ -119,20 +124,22 @@ class Tokenizer(object):
                 cache_file = "jieba.cache"
             # custom dictionary
             else:
-                cache_file = "jieba.u%s.cache" % md5(
-                    abs_path.encode('utf-8', 'replace')).hexdigest()
-            cache_file = os.path.join(
-                self.tmp_dir or tempfile.gettempdir(), cache_file)
+                cache_file = (
+                    "jieba.u%s.cache"
+                    % md5(abs_path.encode("utf-8", "replace")).hexdigest()
+                )
+            cache_file = os.path.join(self.tmp_dir or tempfile.gettempdir(), cache_file)
             # prevent absolute path in self.cache_file
             tmpdir = os.path.dirname(cache_file)
 
             load_from_cache_fail = True
-            if os.path.isfile(cache_file) and (abs_path == DEFAULT_DICT or
-                                               os.path.getmtime(cache_file) > os.path.getmtime(abs_path)):
-                default_logger.debug(
-                    "Loading model from cache %s" % cache_file)
+            if os.path.isfile(cache_file) and (
+                abs_path == DEFAULT_DICT
+                or os.path.getmtime(cache_file) > os.path.getmtime(abs_path)
+            ):
+                default_logger.debug("Loading model from cache %s" % cache_file)
                 try:
-                    with open(cache_file, 'rb') as cf:
+                    with open(cache_file, "rb") as cf:
                         self.FREQ, self.total = marshal.load(cf)
                     load_from_cache_fail = False
                 except Exception:
@@ -143,14 +150,12 @@ class Tokenizer(object):
                 DICT_WRITING[abs_path] = wlock
                 with wlock:
                     self.FREQ, self.total = self.gen_pfdict(self.get_dict_file())
-                    default_logger.debug(
-                        "Dumping model to file cache %s" % cache_file)
+                    default_logger.debug("Dumping model to file cache %s" % cache_file)
                     try:
                         # prevent moving across different filesystems
                         fd, fpath = tempfile.mkstemp(dir=tmpdir)
-                        with os.fdopen(fd, 'wb') as temp_cache_file:
-                            marshal.dump(
-                                (self.FREQ, self.total), temp_cache_file)
+                        with os.fdopen(fd, "wb") as temp_cache_file:
+                            marshal.dump((self.FREQ, self.total), temp_cache_file)
                         _replace_file(fpath, cache_file)
                     except Exception:
                         default_logger.exception("Dump cache file failed.")
@@ -162,7 +167,8 @@ class Tokenizer(object):
 
             self.initialized = True
             default_logger.debug(
-                "Loading model cost %.3f seconds." % (time.time() - t1))
+                "Loading model cost %.3f seconds." % (time.time() - t1)
+            )
             default_logger.debug("Prefix dict has been built successfully.")
 
     def check_initialized(self):
@@ -174,8 +180,15 @@ class Tokenizer(object):
         route[N] = (0, 0)
         logtotal = log(self.total)
         for idx in xrange(N - 1, -1, -1):
-            route[idx] = max((log(self.FREQ.get(sentence[idx:x + 1]) or 1) -
-                              logtotal + route[x + 1][0], x) for x in DAG[idx])
+            route[idx] = max(
+                (
+                    log(self.FREQ.get(sentence[idx : x + 1]) or 1)
+                    - logtotal
+                    + route[x + 1][0],
+                    x,
+                )
+                for x in DAG[idx]
+            )
 
     def get_DAG(self, sentence):
         self.check_initialized()
@@ -189,7 +202,7 @@ class Tokenizer(object):
                 if self.FREQ[frag]:
                     tmplist.append(i)
                 i += 1
-                frag = sentence[k:i + 1]
+                frag = sentence[k : i + 1]
             if not tmplist:
                 tmplist.append(k)
             DAG[k] = tmplist
@@ -199,13 +212,13 @@ class Tokenizer(object):
         dag = self.get_DAG(sentence)
         old_j = -1
         eng_scan = 0
-        eng_buf = u''
+        eng_buf = ""
         for k, L in iteritems(dag):
             if eng_scan == 1 and not re_eng.match(sentence[k]):
                 eng_scan = 0
                 yield eng_buf
             if len(L) == 1 and k > old_j:
-                word = sentence[k:L[0] + 1]
+                word = sentence[k : L[0] + 1]
                 if re_eng.match(word):
                     if eng_scan == 0:
                         eng_scan = 1
@@ -218,7 +231,7 @@ class Tokenizer(object):
             else:
                 for j in L:
                     if j > k:
-                        yield sentence[k:j + 1]
+                        yield sentence[k : j + 1]
                         old_j = j
         if eng_scan == 1:
             yield eng_buf
@@ -229,7 +242,7 @@ class Tokenizer(object):
         self.calc(sentence, DAG, route)
         x = 0
         N = len(sentence)
-        buf = ''
+        buf = ""
         while x < N:
             y = route[x][1] + 1
             l_word = sentence[x:y]
@@ -239,19 +252,19 @@ class Tokenizer(object):
             else:
                 if buf:
                     yield buf
-                    buf = ''
+                    buf = ""
                 yield l_word
                 x = y
         if buf:
             yield buf
-            buf = ''
+            buf = ""
 
     def __cut_DAG(self, sentence):
         DAG = self.get_DAG(sentence)
         route = {}
         self.calc(sentence, DAG, route)
         x = 0
-        buf = ''
+        buf = ""
         N = len(sentence)
         while x < N:
             y = route[x][1] + 1
@@ -262,7 +275,7 @@ class Tokenizer(object):
                 if buf:
                     if len(buf) == 1:
                         yield buf
-                        buf = ''
+                        buf = ""
                     else:
                         if not self.FREQ.get(buf):
                             recognized = finalseg.cut(buf)
@@ -271,7 +284,7 @@ class Tokenizer(object):
                         else:
                             for elem in buf:
                                 yield elem
-                        buf = ''
+                        buf = ""
                 yield l_word
             x = y
 
@@ -296,13 +309,14 @@ class Tokenizer(object):
             - cut_all: Model type. True for full pattern, False for accurate pattern.
             - HMM: Whether to use the Hidden Markov Model.
         """
-        is_paddle_installed = check_paddle_install['is_paddle_installed']
+        is_paddle_installed = check_paddle_install["is_paddle_installed"]
         sentence = strdecode(sentence)
         if use_paddle and is_paddle_installed:
             # if sentence is null, it will raise core exception in paddle.
             if sentence is None or len(sentence) == 0:
                 return
             import jieba.lac_small.predict as predict
+
             results = predict.get_sent(sentence)
             for sent in results:
                 if sent is None:
@@ -343,12 +357,12 @@ class Tokenizer(object):
         for w in words:
             if len(w) > 2:
                 for i in xrange(len(w) - 1):
-                    gram2 = w[i:i + 2]
+                    gram2 = w[i : i + 2]
                     if self.FREQ.get(gram2):
                         yield gram2
             if len(w) > 3:
                 for i in xrange(len(w) - 2):
-                    gram3 = w[i:i + 3]
+                    gram3 = w[i : i + 3]
                     if self.FREQ.get(gram3):
                         yield gram3
             yield w
@@ -375,10 +389,10 @@ class Tokenizer(object):
         if self.dictionary == DEFAULT_DICT:
             return get_module_res(DEFAULT_DICT_NAME)
         else:
-            return open(self.dictionary, 'rb')
+            return open(self.dictionary, "rb")
 
     def load_userdict(self, f):
-        '''
+        """
         Load personalized dict to improve detect rate.
 
         Parameter:
@@ -391,20 +405,20 @@ class Tokenizer(object):
         word2 freq2 word_type2
         ...
         Word type may be ignored
-        '''
+        """
         self.check_initialized()
         if isinstance(f, string_types):
             f_name = f
-            f = open(f, 'rb')
+            f = open(f, "rb")
         else:
             f_name = resolve_filename(f)
         for lineno, ln in enumerate(f, 1):
             line = ln.strip()
             if not isinstance(line, text_type):
                 try:
-                    line = line.decode('utf-8').lstrip('\ufeff')
+                    line = line.decode("utf-8").lstrip("\ufeff")
                 except UnicodeDecodeError:
-                    raise ValueError('dictionary file %s must be utf-8' % f_name)
+                    raise ValueError("dictionary file %s must be utf-8" % f_name)
             if not line:
                 continue
             # match won't be None because there's at least one character
@@ -430,7 +444,7 @@ class Tokenizer(object):
         if tag:
             self.user_word_tag_tab[word] = tag
         for ch in xrange(len(word)):
-            wfrag = word[:ch + 1]
+            wfrag = word[: ch + 1]
             if wfrag not in self.FREQ:
                 self.FREQ[wfrag] = 0
         if freq == 0:
@@ -465,7 +479,7 @@ class Tokenizer(object):
             freq = max(int(freq * self.total) + 1, self.FREQ.get(word, 1))
         else:
             segment = tuple(map(strdecode, segment))
-            word = ''.join(segment)
+            word = "".join(segment)
             for seg in segment:
                 freq *= self.FREQ.get(seg, 1) / ftotal
             freq = min(int(freq * self.total), self.FREQ.get(word, 0))
@@ -485,7 +499,7 @@ class Tokenizer(object):
         if not isinstance(unicode_sentence, text_type):
             raise ValueError("jieba: the input parameter should be unicode.")
         start = 0
-        if mode == 'default':
+        if mode == "default":
             for w in self.cut(unicode_sentence, HMM=HMM):
                 width = len(w)
                 yield (w, start, start + width)
@@ -495,12 +509,12 @@ class Tokenizer(object):
                 width = len(w)
                 if len(w) > 2:
                     for i in xrange(len(w) - 1):
-                        gram2 = w[i:i + 2]
+                        gram2 = w[i : i + 2]
                         if self.FREQ.get(gram2):
                             yield (gram2, start + i, start + i + 2)
                 if len(w) > 3:
                     for i in xrange(len(w) - 2):
-                        gram3 = w[i:i + 3]
+                        gram3 = w[i : i + 3]
                         if self.FREQ.get(gram3):
                             yield (gram3, start + i, start + i + 3)
                 yield (w, start, start + width)
@@ -597,9 +611,9 @@ def enable_parallel(processnum=None):
     """
     global pool, dt, cut, cut_for_search
     from multiprocessing import cpu_count
-    if os.name == 'nt':
-        raise NotImplementedError(
-            "jieba: parallel mode only supports posix system")
+
+    if os.name == "nt":
+        raise NotImplementedError("jieba: parallel mode only supports posix system")
     else:
         from multiprocessing import Pool
     dt.check_initialized()

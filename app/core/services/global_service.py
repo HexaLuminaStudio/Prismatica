@@ -47,10 +47,10 @@ class GlobalTokenRefreshThread(QThread):
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             }
             # Global密码需要MD5加密
-            encrypted_password = self.md5(self.password)
+            encryptedPassword = self.md5(self.password)
             payload = {
                 "UserID": self.userId,
-                "Password": encrypted_password,
+                "Password": encryptedPassword,
             }
 
             response = requests.post(url, headers=headers, json=payload, timeout=30)

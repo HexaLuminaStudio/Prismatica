@@ -65,12 +65,12 @@ def formatParams(params: Dict[str, Any]) -> str:
     for key, value in params.items():
         label = PARAM_LABELS.get(key, key)
         if isinstance(value, list):
-            value_str = ", ".join(str(v) for v in value)
+            valueStr = ", ".join(str(v) for v in value)
         elif isinstance(value, bool):
-            value_str = "是" if value else "否"
+            valueStr = "是" if value else "否"
         else:
-            value_str = str(value)
-        lines.append(f"{label}: {value_str}")
+            valueStr = str(value)
+        lines.append(f"{label}: {valueStr}")
 
     return "\n".join(lines)
 
@@ -106,13 +106,13 @@ class ParamDisplay(QFrame):
 
             # 值
             if isinstance(value, list):
-                value_str = ", ".join(str(v) for v in value)
+                valueStr = ", ".join(str(v) for v in value)
             elif isinstance(value, bool):
-                value_str = "是" if value else "否"
+                valueStr = "是" if value else "否"
             else:
-                value_str = str(value)
+                valueStr = str(value)
 
-            valueWidget = BodyLabel(value_str, self)
+            valueWidget = BodyLabel(valueStr, self)
             valueWidget.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
             )

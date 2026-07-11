@@ -132,13 +132,17 @@ class PluginManager:
         # 尝试加载插件主类
         try:
             # 添加插件目录到 sys.path
-            if str(pluginPath) not in sys.path:
-                sys.path.insert(0, str(pluginPath))
+            pluginPathStr = str(pluginPath)
+            if pluginPathStr not in sys.path:
+                sys.path.insert(0, pluginPathStr)
 
             # 动态导入
             entryFile = manifest.entry
             moduleName = entryFile.replace(".py", "").replace("/", ".")
 
+            # 清理可能残留的模块缓存，避免上次加载失败留下半成品
+            sys.modules.pop(moduleName, None)
+            # 同时清理同包相关的相对导入缓存（按 entry 所在目录推测包名）
             module = importlib.import_module(moduleName)
 
             # 获取插件类
@@ -156,16 +160,39 @@ class PluginManager:
                         break
 
             if pluginClass is None:
-                raise ValueError("未找到插件主类")
+                raise ValueError(f"未找到插件主类: {moduleName}")
 
-            # 创建实例
-            metadata.instance = pluginClass()
+            logger.debug(f"[PluginManager] 实例化插件: {pluginClass}")
+            # 创建实例（包裹防御性检查，便于定位 __dict__ 等异常来源）
+            try:
+                metadata.instance = pluginClass()
+            except Exception as instErr:
+                logger.error(
+                    f"[PluginManager] 插件主类实例化失败: {pluginClass} "
+                    f"(module={moduleName}): {instErr!r}"
+                )
+                raise
+
+            if metadata.instance is None:
+                raise RuntimeError(
+                    f"插件主类实例化返回 None: {pluginClass} ({moduleName})"
+                )
+
+            logger.debug(
+                f"[PluginManager] 插件实例创建成功: "
+                f"{type(metadata.instance).__name__}"
+            )
 
             # 获取插件图标路径
-            if hasattr(metadata.instance, "getIconPath"):
-                iconPath = metadata.instance.getIconPath()
-                if iconPath:
-                    metadata.iconPath = str(Path(pluginPath) / iconPath)
+            try:
+                if hasattr(metadata.instance, "getIconPath"):
+                    iconPath = metadata.instance.getIconPath()
+                    if iconPath:
+                        metadata.iconPath = str(Path(pluginPath) / iconPath)
+            except Exception as iconErr:
+                logger.warning(
+                    f"[PluginManager] 获取插件图标失败，使用默认图标: {iconErr}"
+                )
 
             # 调用 onLoad
             if not metadata.instance.onLoad():
@@ -178,7 +205,11 @@ class PluginManager:
             return metadata
 
         except Exception as e:
-            logger.error(f"[PluginManager] 插件加载异常: {e}")
+            import traceback
+
+            logger.error(
+                f"[PluginManager] 插件加载异常: {pluginPath}\n{traceback.format_exc()}"
+            )
             raise
 
     def checkApiVersion(self, requiredVersion: str) -> bool:
@@ -343,9 +374,7 @@ class PluginManager:
             if pkgType == "python":
                 for package in packages:
                     # 解析包名和版本要求
-                    pkgName = (
-                        package.split(">")[0].split("=")[0].split("<")[0].split("<")[0]
-                    )
+                    pkgName = package.split(">")[0].split("=")[0].split("<")[0]
 
                     # 1. 先检查系统 Python 环境
                     try:
