@@ -25,5 +25,6 @@
         <file>icons/Chart.svg</file>
         <file>icons/Save.svg</file>
         <file>icons/Bias.svg</file>
+        <file>icons/Analysis.svg</file>
     </qresource>
 </RCC>

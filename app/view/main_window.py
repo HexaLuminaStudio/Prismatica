@@ -19,6 +19,7 @@ from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
 from .global_interface import GlobalInterface
 from .bias_interface import BiasInterface
+from .freq_analyzer_interface import FreqAnalyzerInterface
 from .plugin_interface import PluginInterface
 from .task_interface import TaskInterface
 from .setting_interface import SettingInterface
@@ -36,6 +37,7 @@ class MainWindow(MSFluentWindow):
         self.hskInterface = HskInterface(self)
         self.globalInterface = GlobalInterface(self)
         self.biasInterface = BiasInterface(self)
+        self.freqAnalyzerInterface = FreqAnalyzerInterface(self)
         self.pluginInterface = PluginInterface(self)
         self.taskInterface = TaskInterface(self)
         self.settingInterface = SettingInterface(self)
@@ -74,6 +76,12 @@ class MainWindow(MSFluentWindow):
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
+            self.freqAnalyzerInterface,
+            QIcon(":app/icons/Analysis.svg"),
+            "语料分析",
+            position=NavigationItemPosition.TOP,
+        )
+        self.addSubInterface(
             self.pluginInterface,
             QIcon(":app/icons/Plugin.svg"),
             "插件管理",
@@ -97,8 +105,8 @@ class MainWindow(MSFluentWindow):
 
     def initWindow(self):
         logger.info("开始初始化窗口设置")
-        self.resize(1100, 750)
-        self.setMinimumWidth(700)
+        self.resize(1200, 750)
+        self.setMinimumWidth(900)
         self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))
         self.setWindowTitle("棱溯客户端")
