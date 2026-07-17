@@ -54,6 +54,7 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarPosition,
     MessageBox,
+    PrimaryPushButton,
     PushButton,
     SpinBox,
     StrongBodyLabel,
@@ -403,16 +404,10 @@ class WordAnalysisWidget(QWidget):
 
         row3.addStretch(1)
 
-        self.runBtn = PushButton("开始分析", paramCard)
+        self.runBtn = PrimaryPushButton("开始分析", paramCard)
         self.runBtn.setIcon(FIF.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         row3.addWidget(self.runBtn)
-
-        self.cancelBtn = PushButton("取消", paramCard)
-        self.cancelBtn.setIcon(FIF.CLOSE)
-        self.cancelBtn.clicked.connect(self._onCancelClicked)
-        self.cancelBtn.setEnabled(False)
-        row3.addWidget(self.cancelBtn)
 
         paramLayout.addLayout(row3)
 
@@ -629,7 +624,6 @@ class WordAnalysisWidget(QWidget):
 
         # 启动线程
         self.runBtn.setEnabled(False)
-        self.cancelBtn.setEnabled(True)
         self.statusLabel.setText("正在分析...")
         self._summary.setPlaceholder("分析中...")
 
@@ -646,12 +640,6 @@ class WordAnalysisWidget(QWidget):
         self._worker.finished.connect(self._onFinished)
         self._worker.failed.connect(self._onFailed)
         self._worker.start()
-
-    def _onCancelClicked(self):
-        if self._worker is not None:
-            self._worker.cancel()
-            self._worker.wait(2000)
-        self._resetUi()
 
     def _onProgress(self, pct: int, msg: str):
         self.statusLabel.setText(f"[{pct}%] {msg}")
@@ -675,7 +663,6 @@ class WordAnalysisWidget(QWidget):
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)
-        self.cancelBtn.setEnabled(False)
 
     # ------------------------------------------------------------------
     # 结果渲染

@@ -6,6 +6,7 @@
     - CorpusImportWidget       语料导入与清洗面板
     - FreqAnalyzerWidget       词频分析主面板
     - NetworkWidget            词语共现网络图主面板(§2.5.2)
+    - DependencyWidget         句法依存图主面板(§2.5.3)
     - ZipfDialog               Zipf 曲线图弹窗
     - NgramDialog              N-gram 频率统计弹窗
     - SelectColumnDialog       Excel 列名选择对话框
@@ -14,6 +15,7 @@
 引擎:
     - FrequencyAnalyzer        频率分析器
     - CooccurrenceEngine       共现网络引擎
+    - DependencyParser         句法依存分析抽象接口(HanLP/LTP/spaCy/规则)
     - TextCleaner              文本清洗器
     - CleanRule                清洗规则
 """
@@ -21,6 +23,16 @@
 from .clean_coordinator import CleanCoordinator, CleanWorker
 from .concordance_engine import ConcordanceEngine, KwicHit
 from .concordance_widget import ConcordanceWidget, CorpusStatusCard
+from .dependency_engine import (
+    DependencyParse,
+    DependencyParser,
+    DepToken,
+    getAvailableParsers,
+    getDefaultParser,
+    splitSentences,
+    toConllU,
+)
+from .dependency_widget import DependencyAnalysisWorker, DependencyWidget
 from .corpus_import_widget import CorpusImportWidget
 from .corpus_manager import (
     CORPORA_DIR,
@@ -125,6 +137,11 @@ __all__ = [
     "DEGREE_WORDS",
     "DEFAULT_STOPWORDS_EN",
     "DEFAULT_STOPWORDS_ZH",
+    "DependencyAnalysisWorker",
+    "DependencyParse",
+    "DependencyParser",
+    "DependencyWidget",
+    "DepToken",
     "DeviceInfo",
     "DocumentSentiment",
     "FreqAnalyzerWidget",
@@ -165,6 +182,8 @@ __all__ = [
     "backendModelVersion",
     "colorForCommunity",
     "defaultStopwords",
+    "getAvailableParsers",
+    "getDefaultParser",
     "hashText",
     "loadDocxFile",
     "loadExcelColumn",
@@ -172,6 +191,8 @@ __all__ = [
     "loadTextFile",
     "parseStopwordsFromText",
     "posTag",
+    "splitSentences",
+    "toConllU",
     "posTagCategories",
     "posTagsFilter",
     "saveStopwordsToFile",

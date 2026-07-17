@@ -447,12 +447,6 @@ class WordCloudWidget(QWidget):
         self.runBtn.clicked.connect(self._onRunClicked)
         rowBtn.addWidget(self.runBtn)
 
-        self.cancelBtn = PushButton("取消", card)
-        self.cancelBtn.setIcon(FIF.CLOSE)
-        self.cancelBtn.clicked.connect(self._onCancelClicked)
-        self.cancelBtn.setEnabled(False)
-        rowBtn.addWidget(self.cancelBtn)
-
         self.exportPngBtn = PushButton("导出 PNG", card)
         self.exportPngBtn.setIcon(FIF.SAVE)
         self.exportPngBtn.clicked.connect(lambda: self._export("png"))
@@ -556,7 +550,6 @@ class WordCloudWidget(QWidget):
         config = self._gatherConfig()
 
         self.runBtn.setEnabled(False)
-        self.cancelBtn.setEnabled(True)
         self.exportPngBtn.setEnabled(False)
         self.exportSvgBtn.setEnabled(False)
         self.statusLabel.setText("生成中...")
@@ -571,12 +564,6 @@ class WordCloudWidget(QWidget):
         self._worker.finished.connect(self._onFinished)
         self._worker.failed.connect(self._onFailed)
         self._worker.start()
-
-    def _onCancelClicked(self):
-        if self._worker is not None:
-            self._worker.cancel()
-            self._worker.wait(2000)
-        self._resetUi()
 
     def _onProgress(self, pct: int, msg: str):
         self.statusLabel.setText(f"[{pct}%] {msg}")
@@ -620,7 +607,6 @@ class WordCloudWidget(QWidget):
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)
-        self.cancelBtn.setEnabled(False)
 
     def _renderCloud(self, result: WordCloudResult):
         """渲染词云到 Figure(基于 wordcloud 库输出)"""

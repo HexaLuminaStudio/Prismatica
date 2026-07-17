@@ -15,6 +15,7 @@ dependencies = [
     { name = "bcrypt" },
     { name = "cryptography" },
     { name = "git-filter-repo" },
+    { name = "hanlp-restful" },
     { name = "jieba" },
     { name = "loguru" },
     { name = "matplotlib" },
@@ -36,6 +37,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=5.0.0" },
     { name = "cryptography", specifier = ">=49.0.0" },
     { name = "git-filter-repo", specifier = ">=2.47.0" },
+    { name = "hanlp-restful", specifier = ">=0.0.24" },
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.11.0" },
@@ -280,6 +282,24 @@ sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/b9/bb/7a283f568af6b0
 wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/60/60/d3943f0880ebcb7e0bdf79254d10dddd39c7b656eeecae32b8806ff66dec/git_filter_repo-2.47.0-py3-none-any.whl", hash = "sha256:2cd04929b9024e83e65db571cbe36aec65ead0cb5f9ec5abe42158654af5ad83", size = 76282, upload-time = "2024-12-04T03:10:46.064Z" },
 ]
+
+[[package]]
+name = "hanlp-common"
+version = "0.0.23"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "phrasetree" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/5c/c7/ae20a89dce88f1534f91d8045092dcd8fa6d9f51d859e5a5e5c818d003cf/hanlp_common-0.0.23.tar.gz", hash = "sha256:d7d7ab23a00c65cb38585b523812782e7dd46b3d7a881f5071f7ec407ee74594", size = 28930, upload-time = "2025-01-13T00:54:21.08Z" }
+
+[[package]]
+name = "hanlp-restful"
+version = "0.0.24"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "hanlp-common" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e4/89/1f310745046d34382507ca1bfdd8bf068273353c8c0b4bdf6d3f20de3d5e/hanlp_restful-0.0.24.tar.gz", hash = "sha256:e4b12d42b913c359bf4511bac45c3a8569b86ced315bdf4516351118d0060808", size = 13745, upload-time = "2024-12-23T08:41:02.108Z" }
 
 [[package]]
 name = "idna"
@@ -547,6 +567,12 @@ wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/eb/62/c321f13b5ba1819fc8dca456c7fce578da2dcfecff1abbf0eaddf8406c0f/pandas-3.0.3-cp311-cp311-win_amd64.whl", hash = "sha256:6674ab18ad8c57802867264b00e15e7bb904700cdd9046e3b2fa1fce237439ea", size = 9907609, upload-time = "2026-05-11T18:52:30.982Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/53/85/1b7f563ebc6357c27233a02a96b589bcce1fa9c6eb89fb4f0e56421d277e/pandas-3.0.3-cp311-cp311-win_arm64.whl", hash = "sha256:5cc09a68b3120e0f54870dede8287a7bb1fa463907e4fcec1ea77cab6179bf7a", size = 9165596, upload-time = "2026-05-11T18:52:33.334Z" },
 ]
+
+[[package]]
+name = "phrasetree"
+version = "0.0.9"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/44/31/b9d9df3cddabd2f9da83f38f5521cc0cd74d204487ef1bd020f48d7ea737/phrasetree-0.0.9.tar.gz", hash = "sha256:cd0fc8f64be43b4742953f4a8172e369c805b5bdd70a6325f532465032b506e7", size = 42176, upload-time = "2024-03-23T02:44:25.348Z" }
 
 [[package]]
 name = "pillow"

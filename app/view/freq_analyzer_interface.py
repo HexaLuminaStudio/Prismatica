@@ -16,10 +16,12 @@
                            (MI / MI3 / T / LogDice / Z / Delta-P, FR-CLB-001~011)
     - 词语云图面板       : app.view.widgets.freq_analyzer.word_cloud_widget
                            (纯 matplotlib, FR-WDC-001~005)
+    - 句法依存图面板     : app.view.widgets.freq_analyzer.dependency_widget
+                           (依存分析, FR-DEP-001~005)
 
 本文件保留:
     - 业务核心: CorpusStore、ExcelLoadWorker、FreqWorkerThread
-    - 顶层路由: FreqAnalyzerInterface (在 8 个面板之间切换)
+    - 顶层路由: FreqAnalyzerInterface (在 9 个面板之间切换)
 """
 
 import json
@@ -270,6 +272,7 @@ from app.view.widgets.freq_analyzer.sentiment_widget import SentimentWidget
 from app.view.widgets.freq_analyzer.word_analysis_widget import WordAnalysisWidget
 from app.view.widgets.freq_analyzer.collocation_widget import CollocationWidget
 from app.view.widgets.freq_analyzer.word_cloud_widget import WordCloudWidget
+from app.view.widgets.freq_analyzer.dependency_widget import DependencyWidget
 
 
 class FreqAnalyzerInterface(QWidget):
@@ -305,13 +308,28 @@ class FreqAnalyzerInterface(QWidget):
         # 2) 当前活动语料库的 CorpusStore(根据 manager 初始化)
         active = self.corpusManager.activeCorpus()
         if active is None:
-            # 极端兜底:理论上 CorpusManager 已 ensureDefaultCorpus
-            raise RuntimeError("[FreqAnalyzerInterface] 没有任何可用语料库")
-        self.corpusStore = CorpusStore(dbPath=active.dbPath, parent=self)
-        # 通知 manager 同步统计
-        self.corpusManager.updateStats(
-            active.id, self.corpusStore.fileCount(), self.corpusStore.totalChars()
-        )
+            # 没有任何已注册语料库(0 语料库启动场景)
+            # → 创建一个指向 default 占位路径的占位 store。
+            #   CorpusStore 会在该路径自动创建空 db 文件,
+            #   用户后续创建第一个语料库后,manager 触发 activeCorpusChanged,
+            #   本类的 _onActiveCorpusChanged 会接管并切换到真实 store。
+            from app.core.utils.data_paths import DEFAULT_CORPUS_FILE
+
+            placeholderPath = str(DEFAULT_CORPUS_FILE)
+            logger.warning(
+                "[FreqAnalyzerInterface] 当前没有可用语料库,"
+                "创建占位 store 等待用户后续创建: %s",
+                placeholderPath,
+            )
+            self.corpusStore = CorpusStore(dbPath=placeholderPath, parent=self)
+        else:
+            self.corpusStore = CorpusStore(dbPath=active.dbPath, parent=self)
+            # 通知 manager 同步统计
+            self.corpusManager.updateStats(
+                active.id,
+                self.corpusStore.fileCount(),
+                self.corpusStore.totalChars(),
+            )
 
         # 1.4) TokenCache 已经在 CorpusStore 内部创建,这里转发给 panel
 
@@ -364,6 +382,9 @@ class FreqAnalyzerInterface(QWidget):
                 panelContainer, corpusStore=self.corpusStore
             ),
             "wordCloud": WordCloudWidget(panelContainer, corpusStore=self.corpusStore),
+            "dependency": DependencyWidget(
+                panelContainer, corpusStore=self.corpusStore
+            ),
         }
         for key, widget in self._panels.items():
             widget.setObjectName(key)
@@ -378,6 +399,7 @@ class FreqAnalyzerInterface(QWidget):
         self.segmented.addItem("collocation", "搭配分析")
         self.segmented.addItem("wordCloud", "词语云图")
         self.segmented.addItem("network", "共现网络图")
+        self.segmented.addItem("dependency", "句法依存图")
         self.segmented.setCurrentItem("corpusImport")
         self._panels["corpusImport"].show()
 
@@ -400,13 +422,51 @@ class FreqAnalyzerInterface(QWidget):
     # 多语料库:活动语料库切换处理
     # ------------------------------------------------------------------
     def _onActiveCorpusChanged(self, newId: int):
-        """活动语料库变更时,重建 CorpusStore 并重新分发到所有面板"""
+        """活动语料库变更时,重建 CorpusStore 并重新分发到所有面板
+
+        处理两种情况:
+        1) 切到有效语料库:重建 store 并通知所有子面板
+        2) 切到 0(全部被删除):回退到占位 store,等待用户后续创建
+        """
         logger.info(
             f"[FreqAnalyzerInterface] 切换语料库: id={newId}, "
             f"旧 store = {self.corpusStore.dbPath}"
         )
         newActive = self.corpusManager.activeCorpus()
         if newActive is None:
+            # 全部语料库被删除 → 回退到占位 store,避免子面板持有已删除的 db
+            logger.warning(
+                "[FreqAnalyzerInterface] 当前无可用语料库," "回退到占位 store"
+            )
+            try:
+                if hasattr(self, "cleanCoordinator"):
+                    self.cleanCoordinator.cancelPending()
+            except Exception:
+                pass
+            try:
+                self.corpusStore.close()
+            except Exception:
+                pass
+            from app.core.utils.data_paths import DEFAULT_CORPUS_FILE
+
+            self.corpusStore = CorpusStore(dbPath=str(DEFAULT_CORPUS_FILE), parent=self)
+            if hasattr(self, "cleanCoordinator"):
+                try:
+                    self.cleanCoordinator._store = self.corpusStore
+                    self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
+                        self.corpusStore._cleanRule
+                    )
+                except Exception:
+                    pass
+            for panel in self._panels.values():
+                if hasattr(panel, "setCorpusStore"):
+                    try:
+                        panel.setCorpusStore(self.corpusStore)
+                    except Exception as e:
+                        logger.error(
+                            f"[_onActiveCorpusChanged=0] "
+                            f"重绑 {type(panel).__name__} 失败: {e}"
+                        )
             return
 
         # 0) 取消在途的清洗任务(防止脏数据跨语料库)
