@@ -623,6 +623,66 @@ class CorpusStore(QObject):
             )
             return int(cur.fetchone()["s"])
 
+    def effectiveChars(self) -> Optional[int]:
+        """返回按当前清洗规则计算后的总字符数
+
+        - 当 clean_enabled=False:返回 None(此时有效文本 = 原文)
+        - 当 clean_enabled=True 且 clean_cache 中已有当前规则的 cache:
+          直接 SUM(cleaned_text 长度) — 极快
+        - 否则:现场清洗所有 raw — 可能较慢,通常只在首次/规则变更时调用
+
+        Returns:
+            - None 表示「清洗未启用」
+            - int 表示「清洗后将生效的字符数」
+        """
+        if not self._cleanEnabled:
+            return None
+        ruleHash = self._ruleHash(self._cleanRule)
+        cleaner = self._cleanerInstance()
+        if cleaner.rule is not self._cleanRule:
+            cleaner.setRule(self._cleanRule)
+
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT d.file_name, d.raw_text, c.cleaned_text
+                FROM documents d
+                LEFT JOIN clean_cache c
+                  ON c.file_name = d.file_name AND c.rule_hash = ?
+                """,
+                (ruleHash,),
+            ).fetchall()
+
+        total = 0
+        for row in rows:
+            raw = row["raw_text"]
+            cached = row["cleaned_text"]
+            if cached is not None:
+                total += len(cached)
+            else:
+                total += len(cleaner.clean(raw))
+        return total
+
+    def cleaningStatus(self) -> dict:
+        """返回当前清洗状态的描述字典(供 UI 展示)
+
+        Keys:
+            enabled:        bool - 清洗是否启用
+            hasRule:        bool - 是否配置了任何清洗规则
+            ruleHash:       str  - 当前规则 hash(前缀 8 位)
+            rawChars:       int  - 原文总字符数
+            effectiveChars: Optional[int] - 清洗后总字符数(None = 未启用)
+        """
+        raw = self.totalChars()
+        eff = self.effectiveChars()
+        return {
+            "enabled": bool(self._cleanEnabled),
+            "hasRule": bool(self._cleanRule.isEnabled()),
+            "ruleHash": self._ruleHash(self._cleanRule)[:8],
+            "rawChars": raw,
+            "effectiveChars": eff,
+        }
+
     # ---------------- Token 缓存接口 ----------------
     def tokenCache(self):
         """获取分词缓存管理器(可能为 None,如初始化失败)

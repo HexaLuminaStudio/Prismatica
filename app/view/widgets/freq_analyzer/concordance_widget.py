@@ -248,6 +248,7 @@ class CorpusStatusCard(CardWidget):
         - 仅展示当前 CorpusStore 中的文件数 / 总字符数 / 提示语
         - 不提供任何"加载 / 清空"按钮；所有写入操作由顶层 CorpusImportWidget 负责
         - 通过 setStore() 绑定 store；store 变化时自动刷新
+        - 显示清洗状态徽章（已启用 / 未启用但有规则 / 未配置）
     """
 
     def __init__(self, parent=None, corpusStore: Optional["QObject"] = None):
@@ -264,6 +265,14 @@ class CorpusStatusCard(CardWidget):
         self._countLabel = CaptionLabel("未加载文件", self)
         self._countLabel.setStyleSheet("color: #666; font-size: 11px;")
         layout.addWidget(self._countLabel)
+
+        # 清洗状态徽章(新建)
+        self._cleanBadge = CaptionLabel("", self)
+        self._cleanBadge.setWordWrap(True)
+        self._cleanBadge.setStyleSheet(
+            "color: #888; font-size: 11px; padding: 2px 0;"
+        )
+        layout.addWidget(self._cleanBadge)
 
         self._hintLabel = CaptionLabel(
             "请到第一个标签「语料导入与清洗」加载文件；此处只读取已清洗后的语料进行分析。",
@@ -303,17 +312,98 @@ class CorpusStatusCard(CardWidget):
     def _refresh(self) -> None:
         if self._corpusStore is None:
             self._countLabel.setText("未加载文件")
+            self._cleanBadge.setText("")
             return
         try:
             n = self._corpusStore.fileCount()
             total = self._corpusStore.totalChars()
         except AttributeError:
             self._countLabel.setText("未加载文件")
+            self._cleanBadge.setText("")
             return
+
         if n == 0:
             self._countLabel.setText("未加载文件")
+            self._cleanBadge.setText("")
+            return
+
+        self._countLabel.setText(f"已加载 {n} 个文件，{total:,} 字符（原文）")
+        self._refreshCleanBadge()
+
+    def _refreshCleanBadge(self) -> None:
+        """刷新清洗状态徽章
+
+        三种状态:
+            1) clean_enabled=True  → 绿色徽章,显示原文/清洗后字符对比
+            2) clean_enabled=False 且有规则 → 黄色警告徽章
+            3) 无规则 → 灰色提示徽章
+        """
+        if self._corpusStore is None:
+            self._cleanBadge.setText("")
+            return
+
+        # 优先使用新 API;若 store 不支持(版本不一致)则降级
+        statusFn = getattr(self._corpusStore, "cleaningStatus", None)
+        cleanEnabledFn = getattr(self._corpusStore, "cleanEnabled", None)
+
+        if statusFn is None:
+            # 旧 store:仅显示开关状态
+            enabled = bool(cleanEnabledFn()) if cleanEnabledFn else False
+            if enabled:
+                self._cleanBadge.setText("🟢 清洗已启用")
+                self._cleanBadge.setStyleSheet(
+                    "color: #2c8a4a; font-size: 11px; padding: 2px 0;"
+                )
+            else:
+                self._cleanBadge.setText("⚪ 清洗未启用（将使用原文）")
+                self._cleanBadge.setStyleSheet(
+                    "color: #888; font-size: 11px; padding: 2px 0;"
+                )
+            return
+
+        try:
+            status = statusFn()
+        except Exception:
+            self._cleanBadge.setText("")
+            return
+
+        enabled = status["enabled"]
+        hasRule = status.get("hasRule", False)
+        raw = status.get("rawChars", 0)
+        eff = status.get("effectiveChars")
+
+        if enabled:
+            if eff is None:
+                # enabled=True 但无规则:不会发生,但兜底
+                text = "🟢 清洗已启用"
+                color = "#2c8a4a"
+            else:
+                saved = raw - eff
+                if saved > 0:
+                    text = (
+                        f"🟢 清洗已启用 → {eff:,} 字符"
+                        f"（节省 {saved:,} 字符 / {raw:,}）"
+                    )
+                else:
+                    text = (
+                        f"🟢 清洗已启用 → {eff:,} 字符（与原文相同）"
+                    )
+                color = "#2c8a4a"
+        elif hasRule:
+            # ⚠️ 关键状态:有规则但开关关着 — 容易被忽视
+            text = (
+                "⚠ 清洗规则已配置但未启用 → 当前使用原文。"
+                "请到「语料导入与清洗」开启「启用清洗」开关。"
+            )
+            color = "#c97a00"
         else:
-            self._countLabel.setText(f"已加载 {n} 个文件，{total:,} 字符")
+            text = "ℹ 未配置清洗规则,使用原文分析。"
+            color = "#888"
+
+        self._cleanBadge.setText(text)
+        self._cleanBadge.setStyleSheet(
+            f"color: {color}; font-size: 11px; padding: 2px 0;"
+        )
 
 
 # ===========================================================================
