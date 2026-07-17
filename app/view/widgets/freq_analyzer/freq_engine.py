@@ -609,15 +609,15 @@ class FrequencyAnalyzer:
             )
         df = pd.DataFrame(rows)
         if not df.empty:
-                    # Zipf 律参考值(Rank × Freq):
-                    #   严格 Zipf 律 freq ∝ 1/Rank^α(α≈1.0),即 log Freq ≈ C - α·log Rank;
-                    #   若 α=1,则 Rank × Freq ≈ const(常数 C)。此处直接给出该乘积,
-                    #   作为「是否符合 Zipf 律」的快速诊断指标 ——
-                    #   若该列近似常数,说明语料接近理想 Zipf 分布。
-                    #   严格的 α 估计需对 (log Rank, log Freq) 做线性回归,
-                    #   见 computeZipf()。
-                    df["Zipf"] = df["Freq"] * df["Rank"]
-                return df
+                # Zipf 律参考值(Rank × Freq):
+                #   严格 Zipf 律 freq ∝ 1/Rank^α(α≈1.0),即 log Freq ≈ C - α·log Rank;
+                #   若 α=1,则 Rank × Freq ≈ const(常数 C)。此处直接给出该乘积,
+                #   作为「是否符合 Zipf 律」的快速诊断指标 ——
+                #   若该列近似常数,说明语料接近理想 Zipf 分布。
+                #   严格的 α 估计需对 (log Rank, log Freq) 做线性回归,
+                #   见 computeZipf()。
+                df["Zipf"] = df["Freq"] * df["Rank"]
+        return df
 
     def analyzeCorpus(
         self,

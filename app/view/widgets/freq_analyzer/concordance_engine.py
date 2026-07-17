@@ -449,17 +449,17 @@ class ConcordanceEngine:
             以减少歧义;但本引擎为兼顾中文分词歧义,采用词典优先+最短填充。
             参考:Cheng et al. (2006) "Concordance: A fundamental tool
             for corpus linguistics" 中关于 multi-word node 处理的讨论。
-            """
-            if start < len(normalized) and normalized[start] == target:
-                return 1
-            maxLen = min(len(normalized) - start, max(1, len(target)))
-            for length in range(1, maxLen + 1):
-                joined = "".join(normalized[start : start + length])
-                if joined == target:
-                    return length
-                if len(joined) > len(target):
-                    break
-            return 0
+        """
+        if start < len(normalized) and normalized[start] == target:
+            return 1
+        maxLen = min(len(normalized) - start, max(1, len(target)))
+        for length in range(1, maxLen + 1):
+            joined = "".join(normalized[start : start + length])
+            if joined == target:
+                return length
+            if len(joined) > len(target):
+                break
+        return 0
 
     def _filterSecondary(
         self,

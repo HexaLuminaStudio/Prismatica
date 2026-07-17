@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Prismatica（棱溯客户端）** —— 中文学术语料处理桌面应用。基于 PySide6 + qfluentwidgets（Pro 版），提供 HSK / 全球中介语语料库下载、偏误统计、词频 / KWIC / 共现网络 / 句法依存 / 词云 / 情感 / 词语分析等功能，对标 AntConc 的中文场景。Python 3.11（见 `.python-version`），打包工具为 PyInstaller / Nuitka。
 
-完整命名规范（强制优先于 PEP 8）见 [.github/instructions/命名规范.instructions.md](.github/instructions/命名规范.instructions.md) —— **每次修改 Python 代码前必须重读**。提交信息规范见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)，目录职责见 [.trae/rules/代码存放规则.md](.trae/rules/代码存放规则.md)。
+完整命名规范（强制优先于 PEP 8）见 [.trae\rules\命名规则.md](.trae\rules\命名规则.md) —— **每次修改 Python 代码前必须重读**。提交信息规范见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)，目录职责见 [.trae/rules/代码存放规则.md](.trae/rules/代码存放规则.md)。每次给用户的回答必须是中文！
 
 ## 常用命令
 
@@ -29,7 +29,7 @@ uv run python main.py            # 在 venv 中运行
 **目前未配置 pytest、ruff、mypy 等工具**（无 `pytest.ini`、无 `tests/` 目录、无 `[tool.ruff]` 等配置）。`test/` 目录存放的是 BCC / HSK 示例语料与 PySide6 示例工程，不参与单元测试。修改代码前请确认是否需要顺带搭建这些工具。
 
 ### 资源编译
-`app/resource/resource.py` 由 Qt 从 `app/resource/resource.qrc` 自动生成，**不要手动编辑**。新增图标 / 图片后需重新编译 .qrc 才能在代码中通过 `:/app/icons/xxx` 引用。
+`app/resource/resource.py` 由 Qt 从 `app/resource/resource.qrc` 自动生成，**不要手动编辑**。新增图标 / 图片后需重新编译 .qrc 才能在代码中通过 `:app/icons/xxx` 引用（与 qrc 中 `<qresource prefix="/app">` 对应）。
 
 ### 打包
 `app/core/utils/setting.py` 中 `DEBUG = "__compiled__" not in globals()` 用于区分开发模式与 PyInstaller / Nuitka 打包后的 exe 环境。打包前的 `MODE = "DEV"` 在 `app/core/utils/setting.py` 末尾，可切换为 `"TEST"` / `"RES"`。
@@ -55,7 +55,7 @@ app/
 └── resource/      Qt 资源（icons/*.svg, images/*.png, resource.qrc, 自动生成的 resource.py）
 ```
 
-**导入规则（强制）**：使用绝对导入，根包为 `app.core.*` / `app.view.*` / `app.resource.*`。视图层**只能**调用 `app.core.services`，禁止直接调 `app.core.api` 或操作 models。资源通过 `:/app/icons/xxx`、`:/app/images/xxx` 引用。
+**导入规则（强制）**：使用绝对导入，根包为 `app.core.*` / `app.view.*` / `app.resource.*`。视图层**只能**调用 `app.core.services`，禁止直接调 `app.core.api` 或操作 models。资源通过 Qt 资源系统引用，前缀为 `:app/...`（如 `:app/icons/Hsk.svg`、`:app/images/logo.png`），对应 `app/resource/resource.qrc` 中 `<qresource prefix="/app">` 的声明。
 
 ### 路径管理（数据文件唯一权威来源）
 所有运行时路径常量定义在 [app/core/utils/setting.py](app/core/utils/setting.py) 和 [app/core/utils/data_paths.py](app/core/utils/data_paths.py)。**严禁在代码中硬编码路径**。安装目录由 `sys.frozen` 区分开发模式（项目根）与打包后（exe 所在目录）。
@@ -106,7 +106,7 @@ app/
 ## 开发注意点
 
 - **命名规范优先于 PEP 8**：变量 / 函数 / 方法参数 / 类属性用 lowerCamelCase（`userName`），类名 UpperCamelCase，常量 `UPPER_SNAKE_CASE`，模块文件名 snake_case 但目录名小写无下划线。完整规则见上述链接。
-- **中文提交信息**：必须中文，按需求编号 + 动作（完成 / 修复 / 更新 / 重构 / 文档 / 配置）+ 标题，标题 ≤ 72 字符。详见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)。
+- **中文提交信息**：格式为 `[需求编号] 动作：标题`（如 `[REQ-001] 完成：实现用户注册接口`），动作用中文（完成 / 修复 / 更新 / 部分实现 / 重构 / 文档 / 配置），标题 ≤ 72 字符。无需求关联时使用 `[chore]` / `[docs]` / `[style]` 前缀。需求编号默认从项目内的需求总结文档（如 `.trae/rules/` 下以 `需求总结` 命名的文件）解析；找不到时主动询问。完整规则见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)。
 - **新功能流程**：在 `app/core/services/` 加业务服务 → 在 `app/view/widgets/` 加 UI 组件 → 在对应 `*_interface.py` 接入导航。视图层不要直接 import `app.core.api.*`。
 - **保存路径**：用户数据全部在 `INSTALL_DIR` 下派生，开发模式下即项目根目录，`config/`、`download/`、`logs/`、`datas/` 均被 `.gitignore` 排除，提交前不会被误纳入。
 - **路径常量**：所有数据文件路径统一从 `app.core.utils.data_paths` 或 `app.core.utils.setting` 取，不要在业务代码里写死。

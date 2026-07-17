@@ -966,22 +966,22 @@ class SentimentEngine:
                 continue
 
             # 查找回看窗口内的修饰语
-                    # 学术依据:程度副词对情感强度的修饰采用**乘性叠加**(Taboada 2011,
-                    #   "Lexicon-based methods for sentiment analysis", CL);
-                    # 即 N 个程度副词 => 系数 = Π d_i,而非只取最近的一个。
-                    # 例:"非常非常高兴" => 1.5 * 1.5 = 2.25(原代码只取 1.5)。
-                    degree = 1.0
-                    negated = False
-                    lookback = max(0, i - self.LOOKBACK_WINDOW)
-                    for j in range(i - 1, lookback - 1, -1):
-                        if j < 0:
-                            break
-                        prev = tokens[j]
-                        if prev in NEGATION_WORDS:
-                            negated = not negated  # 否定词累加(双重否定 = 肯定)
-                        if prev in DEGREE_WORDS:
-                            # 乘性叠加(取全部出现在回看窗口内的程度副词)
-                            degree *= DEGREE_WORDS[prev]
+            # 学术依据:程度副词对情感强度的修饰采用**乘性叠加**(Taboada 2011,
+            #   "Lexicon-based methods for sentiment analysis", CL);
+            # 即 N 个程度副词 => 系数 = Π d_i,而非只取最近的一个。
+            # 例:"非常非常高兴" => 1.5 * 1.5 = 2.25(原代码只取 1.5)。
+            degree = 1.0
+            negated = False
+            lookback = max(0, i - self.LOOKBACK_WINDOW)
+            for j in range(i - 1, lookback - 1, -1):
+                if j < 0:
+                    break
+                prev = tokens[j]
+                if prev in NEGATION_WORDS:
+                    negated = not negated  # 否定词累加(双重否定 = 肯定)
+                if prev in DEGREE_WORDS:
+                    # 乘性叠加(取全部出现在回看窗口内的程度副词)
+                    degree *= DEGREE_WORDS[prev]
 
             base_weight = self._weights.get(token, 1.0)
             if base_polarity == Polarity.NEGATIVE:
@@ -1006,13 +1006,13 @@ class SentimentEngine:
         else:
             raw = sum(h.finalScore for h in hits)
             # 归一化:除以 sqrt(token 数),使长句不至于被拉低
-                    # 注:本引擎采用 sqrt 归一化而非线性归一化(N/tokens)是为了
-                    # 缓解长句中累加误差过大的问题(Pang & Lee 2004 综述指出
-                    # 词典法对长文本倾向给出更"中性"的分数,sqrt 是一种工程折中)。
-                    # 严格学术场景推荐报告 raw 平均分 + 命中数 2 项,而非单一 score。
-                    norm = max(1.0, len(tokens) ** 0.5)
-                    score = max(-1.0, min(1.0, raw / norm))
-                    polarity = self._scoreToPolarity(score)
+            # 注:本引擎采用 sqrt 归一化而非线性归一化(N/tokens)是为了
+            # 缓解长句中累加误差过大的问题(Pang & Lee 2004 综述指出
+            # 词典法对长文本倾向给出更"中性"的分数,sqrt 是一种工程折中)。
+            # 严格学术场景推荐报告 raw 平均分 + 命中数 2 项,而非单一 score。
+            norm = max(1.0, len(tokens) ** 0.5)
+            score = max(-1.0, min(1.0, raw / norm))
+            polarity = self._scoreToPolarity(score)
 
         pos = sum(1 for h in hits if h.polarity == Polarity.POSITIVE and not h.negated)
         neg = sum(1 for h in hits if h.polarity == Polarity.NEGATIVE and not h.negated)

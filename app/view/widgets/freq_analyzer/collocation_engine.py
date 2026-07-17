@@ -161,14 +161,14 @@ class CollocateEntry:
     tScore: float = 0.0  # T-score(Church & Hanks 1990)
     logDice: float = 0.0  # LogDice(Rychlý 2008)
     zScore: float = 0.0  # Z-score(Dunning 1993, 超几何近似)
-        logLikelihood: float = 0.0  # G² / Log-Likelihood ratio (Dunning 1993)
-        deltaP1: float = 0.0  # ΔP₁: w₁ → w₂ 方向性
-        deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
+    logLikelihood: float = 0.0  # G² / Log-Likelihood ratio (Dunning 1993)
+    deltaP1: float = 0.0  # ΔP₁: w₁ → w₂ 方向性
+    deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
 
-        # 元数据(用于学术报告)
-        collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
-        expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
-        isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
+    # 元数据(用于学术报告)
+    collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
+    expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
+    isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
 
 
 @dataclass
@@ -444,49 +444,49 @@ class CollocationEngine:
         logDice = max(0.0, min(14.0, logDice))
 
         # ---- Z-score = (O - E) / sqrt(V_O) ----
-                # 使用超几何分布方差(Dunning 1993, CL Vol.19 No.1, eq.7):
-                #   V_O = E · (N - R) / N · (N - C) / (N - 1)
-                # 该方差是超几何分布在零假设下的精确方差,优于 Barry (2018) 的简化形式。
-                # 注:Yates continuity correction 在 Z-score 上**没有学术依据** —
-                # Yates 修正仅用于 Pearson 卡方,误用于 Z 会破坏其正态性近似,
-                # 因此 useCorrection 仅影响 G²/LL 计算,不影响 Z-score。
-                if N > 1:
-                    var = E * (N - R) / N * (N - C) / (N - 1)
-                    sigma = math.sqrt(max(var, 1e-12))
-                    zScore = (O - E) / sigma if sigma > 0 else 0.0
-                else:
-                    zScore = 0.0
+        # 使用超几何分布方差(Dunning 1993, CL Vol.19 No.1, eq.7):
+        #   V_O = E · (N - R) / N · (N - C) / (N - 1)
+        # 该方差是超几何分布在零假设下的精确方差,优于 Barry (2018) 的简化形式。
+        # 注:Yates continuity correction 在 Z-score 上**没有学术依据** —
+        # Yates 修正仅用于 Pearson 卡方,误用于 Z 会破坏其正态性近似,
+        # 因此 useCorrection 仅影响 G²/LL 计算,不影响 Z-score。
+        if N > 1:
+            var = E * (N - R) / N * (N - C) / (N - 1)
+            sigma = math.sqrt(max(var, 1e-12))
+            zScore = (O - E) / sigma if sigma > 0 else 0.0
+        else:
+            zScore = 0.0
 
-                # ---- Log-Likelihood Ratio (G² / LL) ----
-                # Dunning (1993) 推荐用于低频搭配的显著性检验(优于卡方):
-                #   G² = 2 · Σ O_ij · ln(O_ij / E_ij)
-                # 四格: O11=O, O12=R-O, O21=C-O, O22=N-R-C+O
-                # 对 O_ij = 0 的格子,贡献为 0(0·ln(0/E)=0,工程实现按 0 处理)。
-                # Yates 修正:当 E - 0.5 < O < E + 0.5 时,加 0.5 到各 O_ij
-                # (见 Dunning 1993, eq.11)
-                logLikelihood = 0.0
-                if N > 0 and R > 0 and C > 0:
-                    o11 = O
-                    o12 = R - O
-                    o21 = C - O
-                    o22 = N - R - C + O
-                    cells = [
-                        (o11, R * C / N),
-                        (o12, R * (N - C) / N),
-                        (o21, (N - R) * C / N),
-                        (o22, (N - R) * (N - C) / N),
-                    ]
-                    for observed, expected in cells:
-                        if observed <= 0:
-                            continue
-                        if expected <= 0:
-                            # 期望为 0 但实际 > 0:LL → +inf
-                            logLikelihood = float("inf")
-                            break
-                        if useCorrection and observed == 0:
-                            # Yates 修正:对 O=0 的格子跳过 0.5 加法(无法加到 0)
-                            pass
-                        logLikelihood += 2.0 * observed * math.log(observed / expected)
+            # ---- Log-Likelihood Ratio (G² / LL) ----
+        # Dunning (1993) 推荐用于低频搭配的显著性检验(优于卡方):
+        #   G² = 2 · Σ O_ij · ln(O_ij / E_ij)
+        # 四格: O11=O, O12=R-O, O21=C-O, O22=N-R-C+O
+        # 对 O_ij = 0 的格子,贡献为 0(0·ln(0/E)=0,工程实现按 0 处理)。
+        # Yates 修正:当 E - 0.5 < O < E + 0.5 时,加 0.5 到各 O_ij
+        # (见 Dunning 1993, eq.11)
+        logLikelihood = 0.0
+        if N > 0 and R > 0 and C > 0:
+            o11 = O
+            o12 = R - O
+            o21 = C - O
+            o22 = N - R - C + O
+            cells = [
+                (o11, R * C / N),
+                (o12, R * (N - C) / N),
+                (o21, (N - R) * C / N),
+                (o22, (N - R) * (N - C) / N),
+            ]
+            for observed, expected in cells:
+                if observed <= 0:
+                    continue
+                if expected <= 0:
+                    # 期望为 0 但实际 > 0:LL → +inf
+                    logLikelihood = float("inf")
+                    break
+                if useCorrection and observed == 0:
+                    # Yates 修正:对 O=0 的格子跳过 0.5 加法(无法加到 0)
+                    pass
+                logLikelihood += 2.0 * observed * math.log(observed / expected)
 
         # ---- Delta-P₁ = P(w₂|w₁) - P(w₂|¬w₁) ----
         # (Ellis 2006;Gablasova 2017 推荐作为方向搭配强度)
@@ -520,15 +520,17 @@ class CollocationEngine:
             tScore=round(tScore, 4),
             logDice=round(logDice, 4),
             zScore=round(zScore, 4),
-                    logLikelihood=round(logLikelihood, 4)
-                    if math.isfinite(logLikelihood)
-                    else logLikelihood,
-                    deltaP1=round(deltaP1, 4),
-                    deltaP2=round(deltaP2, 4),
-                    collocateFreq=C,
-                    expectedFreq=round(E, 4),
-                    isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
-                )
+            logLikelihood=(
+                round(logLikelihood, 4)
+                if math.isfinite(logLikelihood)
+                else logLikelihood
+            ),
+            deltaP1=round(deltaP1, 4),
+            deltaP2=round(deltaP2, 4),
+            collocateFreq=C,
+            expectedFreq=round(E, 4),
+            isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
+        )
 
     # ============================================================
     # 工具:标点判断

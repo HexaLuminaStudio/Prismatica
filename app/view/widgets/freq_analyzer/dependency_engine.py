@@ -385,39 +385,34 @@ class HanLPDependencyParser(DependencyParser):
     HANLP_API_URL = "https://hanlp.hankcs.com/api"
     HANLP_LANGUAGE = "zh"  # 默认中文(可选: zh/en/ja/mul)
 
-        # HanLP RESTful 认证密钥
-        # 优先级: 显式传入参数 > 环境变量 HANLP_AUTH > 类常量 HANLP_AUTH
-        # 安全建议: 生产环境应优先使用环境变量,以避免密钥泄露到代码仓库。
-        # 留作类常量的目的是为了演示/教学场景的开箱即用,不应直接用于公网部署。
-        HANLP_AUTH = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
+    # HanLP RESTful 认证密钥(写死在此处,用户要求)
+    # 优先级: 显式传入参数 > 类常量 HANLP_AUTH
+    HANLP_AUTH = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
 
-        # HanLP RESTful 联合任务的合法任务名(官方限制)
-        # 合法值:
-        #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
-        #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
-        # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
-        HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
+    # HanLP RESTful 联合任务的合法任务名(官方限制)
+    # 合法值:
+    #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
+    #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
+    # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
+    HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
 
-        def __init__(
-            self,
-            auth: Optional[str] = None,
-            url: Optional[str] = None,
-            language: Optional[str] = None,
-            timeout: float = 30.0,
-        ):
-            """初始化 HanLP RESTful 客户端
+    def __init__(
+        self,
+        auth: Optional[str] = None,
+        url: Optional[str] = None,
+        language: Optional[str] = None,
+        timeout: float = 30.0,
+    ):
+        """初始化 HanLP RESTful 客户端
 
-            Args:
-                auth: HanLP 认证密钥。优先级: 参数 > 环境变量 HANLP_AUTH > 类常量。
-                      强烈建议生产环境通过环境变量注入,避免密钥硬编码。
-                url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
-                language: 语言代码,默认 'zh'
-                timeout: HTTP 请求超时(秒)
-            """
-            self._client = None
-            # 优先级: 显式参数 > 环境变量 > 类常量
-            envAuth = os.environ.get("HANLP_AUTH")
-            self._auth = auth if auth is not None else envAuth or self.HANLP_AUTH
+        Args:
+            auth: HanLP 认证密钥。优先级: 参数 > 类常量 HANLP_AUTH
+            url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
+            language: 语言代码,默认 'zh'
+            timeout: HTTP 请求超时(秒)
+        """
+        self._client = None
+        self._auth = auth if auth is not None else self.HANLP_AUTH
         self._url = url or self.HANLP_API_URL
         self._language = language or self.HANLP_LANGUAGE
         self._timeout = timeout
