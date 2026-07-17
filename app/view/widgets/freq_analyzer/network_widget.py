@@ -172,10 +172,25 @@ class NetworkBuildWorker(QThread):
         self._fileToText = fileToText
         self._params = params
 
+    def cancel(self) -> None:
+        """请求取消任务(由 UI 线程调用)"""
+        self.requestInterruption()
+
     def run(self):
         try:
-            self.progress.emit("正在分词与统计词频...")
-            network = self._engine.build(self._fileToText, self._params)
+            # P1-3 修复:把 progress 通过回调转发到 signal,worker 线程 → UI 线程
+            def _onProgress(stageMsg: str):
+                if self.isInterruptionRequested():
+                    return
+                self.progress.emit(stageMsg)
+
+            if self.isInterruptionRequested():
+                return
+            network = self._engine.build(
+                self._fileToText, self._params, progressCallback=_onProgress
+            )
+            if self.isInterruptionRequested():
+                return
             self.progress.emit(
                 f"构建完成: 节点={network.nodeCount} 边={network.edgeCount}"
             )
@@ -265,8 +280,6 @@ class NetworkWidget(QWidget):
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
-        if hasattr(self, "_corpusStatusCard") and self._corpusStatusCard is not None:
-            self._corpusStatusCard.setStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store) -> None:
@@ -307,11 +320,7 @@ class NetworkWidget(QWidget):
         contentLayout.setContentsMargins(0, 0, 0, 0)
         contentLayout.setSpacing(12)
 
-        # 语料状态卡(只读)
-        from app.view.widgets.freq_analyzer.concordance_widget import CorpusStatusCard
-
-        self._corpusStatusCard = CorpusStatusCard(self, corpusStore=self._corpusStore)
-        contentLayout.addWidget(self._corpusStatusCard)
+        # 语料状态卡(只读)已移除
 
         # 参数卡片
         contentLayout.addWidget(self._buildParamCard())
@@ -325,7 +334,7 @@ class NetworkWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("1. 构建参数", card))
+        layout.addWidget(StrongBodyLabel("构建参数", card))
 
         # 行 1:窗口 + 最小词频 + 最小共现 + Top-K
         row1 = QHBoxLayout()
@@ -427,7 +436,7 @@ class NetworkWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("2. 网络图", card))
+        layout.addWidget(StrongBodyLabel("网络图", card))
 
         # 摘要(优化:统一大指标卡)
         from app.view.widgets.freq_analyzer.result_summary import (
@@ -861,8 +870,18 @@ class NetworkWidget(QWidget):
     # 关闭
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(2000)
+        """关闭前停止后台线程,避免线程悬挂或泄漏(P0-fix)"""
+        worker = self._worker
+        if worker is not None:
+            try:
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+                if worker.isRunning():
+                    worker.wait(2000)
+            except Exception:
+                pass
+            worker.deleteLater()
+            self._worker = None
         super().closeEvent(event)
 
 

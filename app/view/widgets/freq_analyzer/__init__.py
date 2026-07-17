@@ -22,7 +22,10 @@
 
 from .clean_coordinator import CleanCoordinator, CleanWorker
 from .concordance_engine import ConcordanceEngine, KwicHit
-from .concordance_widget import ConcordanceWidget, CorpusStatusCard
+from .concordance_widget import (
+    ConcordanceWidget,
+    CorpusStatusCard,
+)  # noqa: F401  类仍保留供外部兼容
 from .dependency_engine import (
     DependencyParse,
     DependencyParser,
@@ -123,7 +126,7 @@ __all__ = [
     "CorpusManager",
     "CorpusRegistry",
     "CorpusSentimentResult",
-    "CorpusStatusCard",
+    # "CorpusStatusCard",  页面已移除语料来源卡片,类保留供外部 import
     "CorpusStore",
     "CorpusSwitcherWidget",
     "CooccurrenceEdge",

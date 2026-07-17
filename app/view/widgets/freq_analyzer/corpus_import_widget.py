@@ -7,13 +7,15 @@
 import json
 import logging
 import os
+import shutil
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 import pandas as pd
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -49,8 +51,6 @@ from app.view.widgets.freq_analyzer.freq_engine import (
     FrequencyAnalyzer,
     TextCleaner,
     availablePosBackend,
-    loadDocxFile,
-    loadTextFile,
     posTag,
     posTagCategories,
     posTagsFilter,
@@ -89,6 +89,7 @@ class CorpusImportWidget(QWidget):
         # 本地缓存：rawTexts 与清洗后的文本都从 store 拉取
         self.rawTexts: Dict[str, str] = {}
         self._excelLoader = None  # ExcelLoadWorker 引用，防止被 GC
+        self._textLoader = None  # TextLoadWorker 引用，防止被 GC
 
         self._initUi()
 
@@ -244,7 +245,7 @@ class CorpusImportWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        title = StrongBodyLabel("1. 加载语料", card)
+        title = StrongBodyLabel("加载语料", card)
         layout.addWidget(title)
 
         # 加载按钮
@@ -412,31 +413,21 @@ class CorpusImportWidget(QWidget):
         self._loadExcel()
 
     def _loadText(self) -> None:
+        """异步加载文本文件(.txt / .md)。
+
+        P0-fix:原实现 for 循环在主线程同步 read(),
+        几十 MB 以上文件会冻结 UI。改为 TextLoadWorker(QThread),
+        流式 read() + 取消机制,UI 可正常响应。
+        """
         files, _ = QFileDialog.getOpenFileNames(
             self, "选择文本文件", "", "Text Files (*.txt *.md);;All Files (*)"
         )
         if not files:
             return
-        for f in files:
-            try:
-                text = loadTextFile(f)
-                if self._corpusStore is not None:
-                    self._corpusStore.addRawText(os.path.basename(f), text)
-                else:
-                    self.rawTexts[os.path.basename(f)] = text
-            except Exception as e:
-                logger.error(f"[_loadText] 读取文件 {os.path.basename(f)} 失败: {e}")
-                _showInfoBar(
-                    "error",
-                    "加载失败",
-                    f"{os.path.basename(f)}: {e}",
-                    self,
-                    duration=3000,
-                )
-        if self._corpusStore is None:
-            self._updateFileCount()
+        self._startTextLoad(files, label="文本")
 
     def _loadDocx(self) -> None:
+        """异步加载 Word 文档(.docx)。"""
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "选择 Word 文档",
@@ -445,34 +436,89 @@ class CorpusImportWidget(QWidget):
         )
         if not files:
             return
-        ok_count = 0
-        for f in files:
-            try:
-                text = loadDocxFile(f)
-                if self._corpusStore is not None:
-                    self._corpusStore.addRawText(os.path.basename(f), text)
-                else:
-                    self.rawTexts[os.path.basename(f)] = text
-                ok_count += 1
-            except Exception as e:
-                logger.error(f"[_loadDocx] 读取文件 {os.path.basename(f)} 失败: {e}")
-                _showInfoBar(
-                    "error",
-                    "加载失败",
-                    f"{os.path.basename(f)}: {e}",
-                    self,
-                    duration=3000,
-                )
-        if ok_count > 0:
+        self._startTextLoad(files, label="Docx")
+
+    def _startTextLoad(self, files: List[str], label: str = "文本") -> None:
+        """启动 TextLoadWorker 加载文件,完成后统一写入 store/rawTexts。
+
+        Args:
+            files: 待加载的文件路径列表
+            label: 用于 UI 提示的标签("文本" / "Docx")
+        """
+        # 防止重复启动:若已有 loader 在跑,提示用户等待
+        if self._textLoader is not None and self._textLoader.isRunning():
             _showInfoBar(
-                "success",
-                "加载成功",
-                f"成功加载 {ok_count} 个 Docx 文件",
+                "warning",
+                "加载中",
+                "上一次加载尚未完成,请稍候",
                 self,
-                duration=2500,
+                duration=2000,
             )
-        if self._corpusStore is None:
-            self._updateFileCount()
+            return
+
+        try:
+            from app.view.freq_analyzer_interface import TextLoadWorker
+        except ImportError as e:
+            logger.error(f"[TextLoadWorker] 导入失败: {e}")
+            _showInfoBar(
+                "error",
+                "加载失败",
+                f"内部模块导入失败:{e}",
+                self,
+                duration=3000,
+            )
+            return
+
+        self.importStatusLabel.setText(f"正在加载 {len(files)} 个{label}文件...")
+        loader = TextLoadWorker(files, parent=self)
+        self._textLoader = loader
+
+        def onProgress(idx: int, currentFile: str):
+            self.importStatusLabel.setText(
+                f"正在加载({idx}/{len(files)}):{currentFile}"
+            )
+
+        def onFailed(fileName: str, errMsg: str):
+            _showInfoBar(
+                "error",
+                "加载失败",
+                f"{fileName}:{errMsg}",
+                self,
+                duration=3000,
+            )
+
+        def onFinished(result: Dict[str, str]):
+            ok_count = 0
+            for baseName, text in result.items():
+                if self._corpusStore is not None:
+                    try:
+                        self._corpusStore.addRawText(baseName, text)
+                    except Exception as e:
+                        logger.error(f"[{label}Load] addRawText 失败 {baseName}:{e}")
+                        continue
+                else:
+                    self.rawTexts[baseName] = text
+                ok_count += 1
+            self.importStatusLabel.setText(
+                f"{label}加载完成:{ok_count}/{len(files)} 成功"
+            )
+            if ok_count > 0:
+                _showInfoBar(
+                    "success",
+                    "加载完成",
+                    f"成功加载 {ok_count} 个{label}文件",
+                    self,
+                    duration=2500,
+                )
+            if self._corpusStore is None:
+                self._updateFileCount()
+            # 释放引用,允许下一次启动
+            self._textLoader = None
+
+        loader.progress.connect(onProgress)
+        loader.failed.connect(onFailed)
+        loader.finished.connect(onFinished)
+        loader.start()
 
     def _clearAll(self) -> None:
         if self._corpusStore is not None:
@@ -491,7 +537,7 @@ class CorpusImportWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        title = StrongBodyLabel("2. 清洗规则（分词前预处理）", card)
+        title = StrongBodyLabel("清洗规则（分词前预处理）", card)
         layout.addWidget(title)
 
         hint = CaptionLabel(
@@ -530,6 +576,18 @@ class CorpusImportWidget(QWidget):
         self.cleanLowerSwitch = _makeSwitchButton("统一小写", self)
         self.cleanLowerSwitch.setChecked(False)
         switchRow.addWidget(self.cleanLowerSwitch)
+
+        # 清洗时是否同步执行词性标注(写入 pos_cache)
+        self.posOnCleanSwitch = _makeSwitchButton("清洗时同时词性标注", self)
+        self.posOnCleanSwitch.setChecked(False)
+        self.posOnCleanSwitch.setToolTip(
+            "启用后,每次清洗完成的瞬间会同步对该文件做 jieba 词性标注,"
+            "并将结果写入 pos_cache 表。可随后在「词性标记」卡片点"
+            "「导出 POS 语料」获取可复用的标注文件。"
+        )
+        self.posOnCleanSwitch.checkedChanged.connect(self._onCleanEnableChanged)
+        switchRow.addWidget(self.posOnCleanSwitch)
+
         switchRow.addStretch(1)
         layout.addLayout(switchRow)
 
@@ -583,6 +641,30 @@ class CorpusImportWidget(QWidget):
         applyPresetBtn.setIcon(FluentIcon.DOWNLOAD)
         applyPresetBtn.clicked.connect(self._applyPreset)
         btnRow.addWidget(applyPresetBtn)
+
+        # 导入预设(从外部 JSON 文件复制到 config/clean_presets/)
+        importPresetBtn = PushButton("导入预设", card)
+        importPresetBtn.setIcon(FluentIcon.ADD)
+        importPresetBtn.setToolTip(
+            "从外部 JSON 文件导入预设,保存到 config/clean_presets/\n"
+            "之后可在「打开预设目录」中查看"
+        )
+        importPresetBtn.clicked.connect(self._importPreset)
+        btnRow.addWidget(importPresetBtn)
+
+        # 打开用户预设目录
+        openPresetDirBtn = TransparentPushButton("打开目录", card)
+        openPresetDirBtn.setIcon(FluentIcon.FOLDER)
+        openPresetDirBtn.setToolTip("打开 config/clean_presets/ 目录")
+        openPresetDirBtn.clicked.connect(self._openPresetDir)
+        btnRow.addWidget(openPresetDirBtn)
+
+        # 删除当前预设(仅对用户预设有效)
+        deletePresetBtn = TransparentPushButton("删除", card)
+        deletePresetBtn.setIcon(FluentIcon.DELETE)
+        deletePresetBtn.setToolTip("删除当前选中的用户预设(内置预设无法删除)")
+        deletePresetBtn.clicked.connect(self._deletePreset)
+        btnRow.addWidget(deletePresetBtn)
 
         previewBtn = PushButton("预览清洗效果", card)
         previewBtn.setIcon(FluentIcon.VIEW)
@@ -657,6 +739,8 @@ class CorpusImportWidget(QWidget):
             bits.append(f"自定义替换×{len(rule.replaceMap)}")
         if rule.lowercase:
             bits.append("统一小写")
+        if getattr(rule, "posOnClean", False):
+            bits.append("同步词性标注")
         self.cleanSummaryLabel.setText("已启用：" + " / ".join(bits))
 
     # ------------------------------------------------------------------
@@ -673,7 +757,7 @@ class CorpusImportWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        title = StrongBodyLabel("3. 词性标记（POS Tagging）", card)
+        title = StrongBodyLabel("词性标记（POS Tagging）", card)
         layout.addWidget(title)
 
         # 后端状态
@@ -713,6 +797,27 @@ class CorpusImportWidget(QWidget):
         previewBtn.setIcon(FluentIcon.VIEW)
         previewBtn.clicked.connect(self._showPosPreview)
         btnRow.addWidget(previewBtn)
+
+        # POS 语料导出(基于清洗时同步标注的 pos_cache)
+        self.posFormatCombo = ComboBox(self)
+        self.posFormatCombo.addItems(["CoNLL", "TSV", "JSONL"])
+        self.posFormatCombo.setToolTip(
+            "导出格式:\n"
+            "• CoNLL — 每个 token 一行 word/tag\n"
+            "• TSV   — 每行 word\\ttag\n"
+            "• JSONL — 每行 JSON 对象 {word, tag}"
+        )
+        self.posFormatCombo.setFixedWidth(110)
+        btnRow.addWidget(self.posFormatCombo)
+
+        self.exportPosBtn = PushButton("导出 POS 语料", self)
+        self.exportPosBtn.setIcon(FluentIcon.SAVE)
+        self.exportPosBtn.setToolTip(
+            "导出当前 pos_cache 中的词性标注结果为可复用语料文件\n"
+            "(先在「清洗规则」中开启「清洗时同时进行词性标注」)"
+        )
+        self.exportPosBtn.clicked.connect(self._exportPosCorpus)
+        btnRow.addWidget(self.exportPosBtn)
 
         btnRow.addStretch(1)
         self.posSummaryLabel = CaptionLabel("已选 0 个词性,过滤未启用", card)
@@ -833,6 +938,99 @@ class CorpusImportWidget(QWidget):
             parent=self.window(),
         )
 
+    def _exportPosCorpus(self) -> None:
+        """导出 pos_cache 中的词性标注结果到外部文件。
+
+        流程:
+            1. 检查 pos_cache 中是否存在当前 rule_hash 的数据
+            2. 让用户选择导出路径与确认格式
+            3. 调用 CorpusStore.exportPosCorpus 写出文件
+        """
+        if self._corpusStore is None:
+            _showInfoBar(
+                "warning",
+                "无法导出",
+                "未连接语料库",
+                self,
+                duration=2200,
+            )
+            return
+
+        # 当前清洗规则的 hash(用于定位 pos_cache 行)
+        ruleHash = None
+        try:
+            rule = self._collectCleanRule()
+            ruleHash = self._corpusStore._ruleHash(rule)
+        except Exception:
+            ruleHash = None
+
+        # 检查覆盖率(若全无数据,提示用户先去开启「清洗时同时词性标注」)
+        cov = self._corpusStore.posCacheCoverage(ruleHash or "")
+        if cov["total"] == 0:
+            _showInfoBar(
+                "warning",
+                "无可导出数据",
+                "当前语料库为空,请先加载语料",
+                self,
+                duration=2500,
+            )
+            return
+        if cov["coverage"] < 1.0:
+            # 给出明确提示,告知需等待后台清洗完成
+            pct = int(cov["coverage"] * 100)
+            _showInfoBar(
+                "warning",
+                "POS 缓存未就绪",
+                f"当前规则下 POS 缓存覆盖率 {pct}%"
+                f"({cov['cached']}/{cov['total']})。"
+                "请先开启「清洗时同时词性标注」并等待清洗完成",
+                self,
+                duration=3500,
+            )
+            return
+
+        # 选定格式
+        formatMap = {"CoNLL": "conll", "TSV": "tsv", "JSONL": "jsonl"}
+        fmtKey = self.posFormatCombo.currentText()
+        fmt = formatMap.get(fmtKey, "conll")
+        extMap = {"conll": "conll", "tsv": "tsv", "jsonl": "jsonl"}
+        ext = extMap[fmt]
+
+        # 选保存路径
+        defaultName = f"pos_corpus.{ext}"
+        filePath, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出 POS 标注语料",
+            defaultName,
+            f"POS Corpus (*.{ext});;All Files (*)",
+        )
+        if not filePath:
+            return
+
+        try:
+            result = self._corpusStore.exportPosCorpus(
+                exportPath=filePath,
+                ruleHash=ruleHash,
+                format=fmt,
+            )
+        except Exception as e:
+            _showInfoBar(
+                "error",
+                "导出失败",
+                str(e)[:80],
+                self,
+                duration=3500,
+            )
+            return
+
+        _showInfoBar(
+            "success",
+            "导出完成",
+            f"共 {result['files']} 个文件 / {result['tokens']:,} token → {filePath}",
+            self,
+            duration=3000,
+        )
+
     def _collectCleanRule(self) -> CleanRule:
         def _splitLines(text: str) -> List[str]:
             return [line.strip() for line in (text or "").splitlines() if line.strip()]
@@ -855,6 +1053,11 @@ class CorpusImportWidget(QWidget):
             customRemoveList=_splitLines(self.cleanRemoveEdit.toPlainText()),
             customRegexList=_splitLines(self.cleanRegexEdit.toPlainText()),
             replaceMap=replaceMap,
+            posOnClean=(
+                self.posOnCleanSwitch.isChecked()
+                if hasattr(self, "posOnCleanSwitch")
+                else False
+            ),
         )
 
     def _pushCleanToStore(self) -> None:
@@ -928,32 +1131,50 @@ class CorpusImportWidget(QWidget):
     # ------------------------------------------------------------------
     # 清洗预设
     # ------------------------------------------------------------------
-    def _scanPresetFiles(self) -> List[Tuple[str, str]]:
-        # 延迟 import：避免与主文件 freq_analyzer_interface 循环依赖
-        from app.view.freq_analyzer_interface import PRESETS_DIR
+    def _scanPresetFiles(self) -> List[Tuple[str, str, bool]]:
+        """扫描所有预设目录
 
-        try:
-            os.makedirs(PRESETS_DIR, exist_ok=True)
-            entries: List[Tuple[str, str]] = []
-            for name in sorted(os.listdir(PRESETS_DIR)):
-                if not name.lower().endswith(".json"):
-                    continue
-                if name.startswith("_"):
-                    continue
-                absPath = os.path.join(PRESETS_DIR, name)
-                if not os.path.isfile(absPath):
-                    continue
-                try:
-                    with open(absPath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    presetName = str(data.get("name") or os.path.splitext(name)[0])
-                    entries.append((presetName, absPath))
-                except Exception as e:
-                    logger.error(f"[_scanPresetFiles] 解析预设失败 {absPath}: {e}")
-            return entries
-        except Exception as e:
-            logger.error(f"[_scanPresetFiles] 扫描预设目录失败: {e}")
-            return []
+        Returns:
+            List[Tuple[str, str, bool]]: (显示名, 绝对路径, 是否内置) 列表
+                - 显示名: 已加 "(内置)" / "(自定义)" 前缀
+                - 是否内置: True=只读;False=可写(用户目录)
+        """
+        # 延迟 import:避免与主文件 freq_analyzer_interface 循环依赖
+        from app.view.freq_analyzer_interface import getAllPresetDirs
+
+        entries: List[Tuple[str, str, bool]] = []
+        for dirPath, isBuiltin in getAllPresetDirs():
+            try:
+                os.makedirs(dirPath, exist_ok=True)
+            except Exception as e:
+                logger.error(f"[_scanPresetFiles] 创建目录失败 {dirPath}: {e}")
+                continue
+
+            try:
+                for name in sorted(os.listdir(dirPath)):
+                    if not name.lower().endswith(".json"):
+                        continue
+                    if name.startswith("_"):
+                        continue
+                    absPath = os.path.join(dirPath, name)
+                    if not os.path.isfile(absPath):
+                        continue
+                    try:
+                        with open(absPath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        rawName = str(data.get("name") or os.path.splitext(name)[0])
+                        # 加前缀区分内置与用户预设
+                        prefix = "(内置) " if isBuiltin else "(自定义) "
+                        displayName = prefix + rawName
+                        entries.append((displayName, absPath, isBuiltin))
+                    except Exception as e:
+                        logger.error(f"[_scanPresetFiles] 解析预设失败 {absPath}: {e}")
+            except Exception as e:
+                logger.error(f"[_scanPresetFiles] 扫描目录失败 {dirPath}: {e}")
+
+        # 内置排在前,用户在后;同类内按名字典序
+        entries.sort(key=lambda x: (not x[2], x[0]))
+        return entries
 
     def _reloadPresetCombo(self) -> None:
         if not hasattr(self, "presetCombo"):
@@ -963,14 +1184,174 @@ class CorpusImportWidget(QWidget):
         if not files:
             self.presetCombo.addItem("(无可用预设)", userData=None)
             return
-        for name, absPath in files:
-            self.presetCombo.addItem(name, userData=absPath)
+        # 保存所有 (name, path, isBuiltin) 到 widget,后续操作可读取 isBuiltin
+        self._presetEntries = files
+        for name, absPath, isBuiltin in files:
+            # userData 用 (path, isBuiltin) 元组
+            self.presetCombo.addItem(name, userData=(absPath, isBuiltin))
+
+    # ---------- 预设目录操作 ----------
+    def _importPreset(self) -> None:
+        """导入外部预设:从文件对话框选 JSON,复制到 config/clean_presets/"""
+        from app.view.freq_analyzer_interface import USER_PRESETS_DIR
+
+        # 确保目录存在
+        try:
+            os.makedirs(USER_PRESETS_DIR, exist_ok=True)
+        except Exception as e:
+            _showInfoBar(
+                "error",
+                "创建目录失败",
+                f"无法创建 {USER_PRESETS_DIR}: {e}",
+                self,
+                duration=3500,
+            )
+            return
+
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择要导入的预设 JSON",
+            "",
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not paths:
+            return
+
+        imported = 0
+        skipped = 0
+        for src in paths:
+            try:
+                # 先验证 JSON 合法
+                with open(src, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    logger.warning(
+                        f"[_importPreset] 跳过非法文件 {src}: 不是 JSON 对象"
+                    )
+                    skipped += 1
+                    continue
+
+                # 目标文件名:用户目录 + 原文件名(若有冲突自动加数字后缀)
+                basename = os.path.basename(src)
+                target = os.path.join(USER_PRESETS_DIR, basename)
+                if os.path.exists(target):
+                    base, ext = os.path.splitext(basename)
+                    i = 1
+                    while True:
+                        candidate = os.path.join(USER_PRESETS_DIR, f"{base}_{i}{ext}")
+                        if not os.path.exists(candidate):
+                            target = candidate
+                            break
+                        i += 1
+
+                shutil.copy2(src, target)
+                imported += 1
+                logger.info(f"[_importPreset] 已导入预设 {src} → {target}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"[_importPreset] JSON 解析失败 {src}: {e}")
+                skipped += 1
+            except Exception as e:
+                logger.error(f"[_importPreset] 复制失败 {src}: {e}")
+                skipped += 1
+
+        self._reloadPresetCombo()
+        msg = f"已导入 {imported} 个预设"
+        if skipped:
+            msg += f",跳过 {skipped} 个"
+        _showInfoBar(
+            "success" if imported else "warning",
+            "导入完成" if imported else "导入失败",
+            msg + (f"\n保存目录:{USER_PRESETS_DIR}" if imported else ""),
+            self,
+            duration=3000,
+        )
+
+    def _openPresetDir(self) -> None:
+        """打开用户预设目录(系统资源管理器)"""
+        from app.view.freq_analyzer_interface import USER_PRESETS_DIR
+
+        try:
+            os.makedirs(USER_PRESETS_DIR, exist_ok=True)
+            url = QUrl.fromLocalFile(USER_PRESETS_DIR)
+            if not QDesktopServices.openUrl(url):
+                raise RuntimeError("系统拒绝打开目录")
+            _showInfoBar(
+                "info",
+                "已打开目录",
+                USER_PRESETS_DIR,
+                self,
+                duration=2500,
+            )
+        except Exception as e:
+            _showInfoBar(
+                "error",
+                "打开目录失败",
+                f"{USER_PRESETS_DIR}\n{e}",
+                self,
+                duration=3500,
+            )
+
+    def _deletePreset(self) -> None:
+        """删除当前选中的用户预设(内置预设不可删除)"""
+        data = self.presetCombo.currentData()
+        if not data or not isinstance(data, tuple) or len(data) != 2:
+            _showInfoBar("info", "提示", "请先选择一个预设项", self, duration=2000)
+            return
+
+        path, isBuiltin = data
+        if isBuiltin:
+            _showInfoBar(
+                "warning",
+                "无法删除",
+                "内置预设由官方维护,不可删除。\n如需修改,请使用「导入预设」添加自己的版本。",
+                self,
+                duration=3500,
+            )
+            return
+
+        # 二次确认
+        from qfluentwidgets import MessageBox
+
+        dlg = MessageBox(
+            "确认删除",
+            f"确定要删除预设?\n\n{os.path.basename(path)}\n\n此操作不可撤销。",
+            self.window(),
+        )
+        dlg.yesButton.setText("删除")
+        dlg.cancelButton.setText("取消")
+        if not dlg.exec():
+            return
+
+        try:
+            os.remove(path)
+            logger.info(f"[_deletePreset] 已删除预设 {path}")
+            _showInfoBar(
+                "success",
+                "已删除",
+                os.path.basename(path),
+                self,
+                duration=2000,
+            )
+            self._reloadPresetCombo()
+        except Exception as e:
+            logger.error(f"[_deletePreset] 删除失败 {path}: {e}")
+            _showInfoBar("error", "删除失败", str(e), self, duration=3000)
 
     def _applyPreset(self) -> None:
-        path = self.presetCombo.currentData()
-        if not path or not isinstance(path, str):
+        data = self.presetCombo.currentData()
+        # 新格式:userData = (path, isBuiltin) 元组
+        if isinstance(data, tuple) and len(data) == 2:
+            path, _isBuiltin = data
+        elif isinstance(data, str):  # 向后兼容旧 userData
+            path = data
+        else:
             _showInfoBar("info", "提示", "请先选择预设项", self, duration=2000)
             return
+
+        if not path:
+            _showInfoBar("info", "提示", "请先选择预设项", self, duration=2000)
+            return
+
         try:
             with open(path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
@@ -1004,6 +1385,7 @@ class CorpusImportWidget(QWidget):
             customRegexList=list(d.get("customRegexList", []) or []),
             replaceMap=dict(d.get("replaceMap", {}) or {}),
             lowercase=bool(d.get("lowercase", False)),
+            posOnClean=bool(d.get("posOnClean", False)),
         )
 
     def _applyRuleToUi(self, rule: CleanRule) -> None:
@@ -1012,6 +1394,8 @@ class CorpusImportWidget(QWidget):
         self.cleanPunctSwitch.setChecked(rule.removePunct)
         self.cleanSpecialSwitch.setChecked(rule.removeSpecialSymbols)
         self.cleanLowerSwitch.setChecked(rule.lowercase)
+        if hasattr(self, "posOnCleanSwitch"):
+            self.posOnCleanSwitch.setChecked(bool(getattr(rule, "posOnClean", False)))
         self.cleanRemoveEdit.setPlainText("\n".join(rule.customRemoveList or []))
         self.cleanRegexEdit.setPlainText("\n".join(rule.customRegexList or []))
         replaceLines = [f"{k}=>{v}" for k, v in (rule.replaceMap or {}).items()]

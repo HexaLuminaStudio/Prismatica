@@ -36,9 +36,41 @@ logger = logging.getLogger(__name__)
 import pandas as pd
 
 # 内置模块: presets 目录位于 app/view/widgets/freq_analyzer/presets
+# —————————————————————————————————————————————————————————————————————
+# 预设目录采用"双目录"策略:
+#   1. BUILTIN_PRESETS_DIR  (只读,内置): 项目源码随包发布的预设模板
+#   2. USER_PRESETS_DIR     (可写,用户): config/clean_presets/
+#        - 用户通过"导入预设"按钮添加的预设文件存放在这里
+#        - 与语料库、清洗缓存同级,均为用户私有数据
+#        - 即使更新软件版本,用户预设也不会被覆盖
+# UI 下拉框会同时扫描两个目录,并以"(内置)" / "(自定义)" 前缀区分
+# —————————————————————————————————————————————————————————————————————
+from app.core.utils.setting import CONFIG_FOLDER  # noqa: E402
+
 _moduleDir = os.path.dirname(os.path.abspath(__file__))
 _widgetsDir = os.path.join(_moduleDir, "widgets", "freq_analyzer")
-PRESETS_DIR = os.path.join(_widgetsDir, "presets")
+
+# 内置预设目录(随包发布,只读)
+BUILTIN_PRESETS_DIR = os.path.join(_widgetsDir, "presets")
+
+# 用户预设目录(config/clean_presets,可写)
+USER_PRESETS_DIR = str(CONFIG_FOLDER / "clean_presets")
+
+# 向后兼容(保留 PRESETS_DIR 旧名,指向内置目录)
+PRESETS_DIR = BUILTIN_PRESETS_DIR
+
+
+def getAllPresetDirs() -> List[Tuple[str, bool]]:
+    """返回所有预设目录
+
+    Returns:
+        List[Tuple[str, bool]]: (目录路径, 是否内置) 元组列表
+    """
+    return [
+        (BUILTIN_PRESETS_DIR, True),  # 内置(只读)
+        (USER_PRESETS_DIR, False),  # 用户(可写)
+    ]
+
 
 from app.view.widgets.freq_analyzer.freq_analyzer_widget import (
     JIEBA_AVAILABLE,  # noqa: F401  兼容性 re-export
@@ -88,7 +120,19 @@ from qfluentwidgets import (
 from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 import matplotlib  # noqa: E402
 
-matplotlib.use("QtAgg", force=False)
+# matplotlib 后端切换要点:
+#   1. 必须在 FigureCanvasQTAgg 导入之前调用 matplotlib.use()
+#   2. 使用 force=True 确保即使 main.py 设置了 MPLBACKEND=Agg 也能切换
+#   3. 关闭 IPython 的 matplotlib 自动集成(避免 VSCode 调试器下 IPython
+#      试图 hook 进 QApplication 触发 QtGui.QApplication AttributeError)
+#   4. 设置 figure.max_open_warning = 0 防止大量图表时刷屏警告
+#   5. interactive(False) 防止 pyplot 在交互模式下抢事件循环
+matplotlib.use("QtAgg", force=True)
+matplotlib.set_loglevel("warning")
+import matplotlib.pyplot as _plt_for_backend
+
+_plt_for_backend.ioff()  # 关闭交互模式(避免 pyplot 抢 Qt 事件循环)
+del _plt_for_backend
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.backends.backend_qtagg import (
     FigureCanvasQTAgg as FigureCanvas,
@@ -114,10 +158,7 @@ from app.view.widgets.freq_analyzer.concordance_engine import (  # type: ignore 
     KwicHit,
     SortMode,
 )
-from app.view.widgets.freq_analyzer.concordance_widget import (
-    ConcordanceWidget,
-    CorpusStatusCard,
-)
+from app.view.widgets.freq_analyzer.concordance_widget import ConcordanceWidget
 
 
 # 设置 matplotlib 中文字体
@@ -151,6 +192,91 @@ class ExcelLoadWorker(QThread):
                 text = loadExcelColumn(f, column=self._column)
                 result[baseName] = text
             except Exception as e:
+                self.failed.emit(baseName, str(e))
+        self.finished.emit(result)
+
+
+class TextLoadWorker(QThread):
+    """后台加载纯文本 / Markdown / Word(.docx) 文件，避免大文件阻塞 UI 线程。
+
+    设计要点:
+        1. 复用现有的 loadTextFile / loadDocxFile,但调用前/中可被取消
+        2. 文本文件支持流式 iter_lines(read1 → line by line),避免一次性 read() 占满内存
+        3. 单文件失败不影响后续文件,失败通过 failed 信号上报
+        4. 取消通过 cancel() 发起,内部轮询 self._isCanceled 退出
+
+    信号:
+        progress = Signal(int, str)         # (当前完成数/总数, 当前文件名)
+        finished = Signal(dict)             # {baseName: text}
+        failed  = Signal(str, str)           # (fileName, errorMsg)
+    """
+
+    progress = Signal(int, str)
+    finished = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(self, files: List[str], parent=None):
+        super().__init__(parent)
+        self._files = list(files)
+        self._isCanceled = False
+
+    def cancel(self):
+        """请求取消(由 UI 在用户点「取消」或关闭面板时调用)"""
+        self._isCanceled = True
+
+    def _streamLoadText(self, filePath: str, chunkSize: int = 65536) -> str:
+        """流式读取文本文件,逐块拼接,避免一次性 read() 大文件占满内存。
+
+        编码自动嗅探:utf-8 → gbk → utf-16 → latin-1 → utf-8(ignore)。
+        """
+        encodings = ("utf-8", "gbk", "utf-16", "latin-1")
+        for enc in encodings:
+            try:
+                with open(filePath, "r", encoding=enc) as fp:
+                    chunks: List[str] = []
+                    while not self._isCanceled:
+                        chunk = fp.read(chunkSize)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    if self._isCanceled:
+                        return ""  # 取消时丢弃已读取内容
+                    return "".join(chunks)
+            except UnicodeDecodeError:
+                continue
+        # fallback:忽略错误字符(必须保留原行为)
+        with open(filePath, "r", encoding="utf-8", errors="ignore") as fp:
+            return fp.read()
+
+    def _streamLoadDocx(self, filePath: str) -> str:
+        """读取 .docx,与原 loadDocxFile 行为一致(全量解析段落/表格)。
+
+        docx 库内部已对 body 元素做流式解析,这里复用其 API。
+        """
+        from app.view.widgets.freq_analyzer.freq_engine import loadDocxFile
+
+        return loadDocxFile(filePath)
+
+    def run(self):
+        result: Dict[str, str] = {}
+        total = len(self._files)
+        for idx, f in enumerate(self._files):
+            if self._isCanceled:
+                logger.info("[TextLoadWorker] 已取消,提前结束")
+                break
+            baseName = os.path.basename(f)
+            self.progress.emit(idx + 1, baseName)
+            try:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in (".docx",):
+                    text = self._streamLoadDocx(f)
+                else:
+                    text = self._streamLoadText(f)
+                if self._isCanceled:
+                    break
+                result[baseName] = text
+            except Exception as e:
+                logger.error(f"[TextLoadWorker] 读取文件 {baseName} 失败: {e}")
                 self.failed.emit(baseName, str(e))
         self.finished.emit(result)
 

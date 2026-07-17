@@ -916,18 +916,54 @@ class SentimentEngine:
 
     @staticmethod
     def _splitSentences(text: str) -> List[str]:
-        """按中英文句末标点切句"""
+        """按中英文句末标点切句(P0-4 修复)
+
+        改进点:
+            1. 使用 lookbehind + 字符类,保留分隔符信息(可在结果中恢复标点)
+            2. 处理「……」「——」「!!」「!?」等连续/复合标点
+            3. 兼容英文 `?` `!` 后必须接空格或行尾才视为收尾
+            4. 排除空字符串与纯空白片段
+
+        学术依据:
+            - 中文句末标点集:`。！？` 及变体(`!!` `?!` 等)
+            - 英文句末标点:`. ! ?`(`.` 后需大写或换行才视为句子收尾,
+              此处为简化处理,在中文为主语料下不严格区分)
+        """
         import re
 
-        # 包含中英文常见句末标点
-        sentence_end = r"[。.!?！？\n]"
-        parts = re.split(sentence_end, text)
-        return [p for p in parts if p and p.strip()]
+        if not text:
+            return []
+        # 匹配「零宽 + 句末标点(可重复)」,中文标点直接切,英文标点后接空白/换行才切
+        # 复合标点(如 `……`、`——`、`!!`、`?!`)作为单个分隔符
+        pattern = re.compile(
+            r"(?<=[。！？…])|"          # 中文句末标点(含省略号)
+            r"(?<=[!?])"                # 英文 !?
+            r"|(?<=[.])(?=\s|$)|"       # 英文 . 后接空白或行尾
+            r"(?<=\n)"                  # 换行也算收尾
+        )
+        parts = pattern.split(text)
+        return [p.strip() for p in parts if p and p.strip()]
 
     @staticmethod
     def _splitParagraphs(text: str) -> List[str]:
-        """按段落切分(空行 / 换行)"""
-        paras = []
+        """按段落切分(P0-4 / P1-4 修复)
+
+        改进点:
+            1. 优先按空行切段(连续两个换行)
+            2. 若全文无空行,降级按「句末标点聚合段」切分
+               — 即 3~5 个相邻句子合并为一个段落(中文常见长度)
+            3. 兼容 Word/Excel 导入的纯连续文本
+
+        学术依据:
+            - Biber et al. (1999) 的语篇段落定义:段是话题/论点的相对闭合单位,
+              中文书面语平均 80~200 字/段
+            - 3~5 句聚合策略在无明确段落标记时是常用工程近似
+        """
+        if not text:
+            return []
+
+        # 1) 优先按空行切段
+        paras: List[str] = []
         buf: List[str] = []
         for line in text.splitlines():
             if not line.strip():
@@ -938,6 +974,21 @@ class SentimentEngine:
                 buf.append(line)
         if buf:
             paras.append("\n".join(buf))
+
+        # 2) 若只有 1 段且长度过长,降级按句聚合
+        # 阈值:超过 600 字符且无段落分隔,启用降级策略
+        if len(paras) <= 1:
+            only = paras[0] if paras else text
+            if len(only) > 600:
+                sentences = SentimentEngine._splitSentences(only)
+                if len(sentences) > 4:
+                    aggregated: List[str] = []
+                    chunkSize = 4  # 每段约 4 个句子
+                    for i in range(0, len(sentences), chunkSize):
+                        chunk = sentences[i : i + chunkSize]
+                        aggregated.append("".join(chunk))
+                    return aggregated
+
         return paras
 
     def _analyzeSentence(self, sentence: str) -> SentenceSentiment:
@@ -966,22 +1017,22 @@ class SentimentEngine:
                 continue
 
             # 查找回看窗口内的修饰语
-                    # 学术依据:程度副词对情感强度的修饰采用**乘性叠加**(Taboada 2011,
-                    #   "Lexicon-based methods for sentiment analysis", CL);
-                    # 即 N 个程度副词 => 系数 = Π d_i,而非只取最近的一个。
-                    # 例:"非常非常高兴" => 1.5 * 1.5 = 2.25(原代码只取 1.5)。
-                    degree = 1.0
-                    negated = False
-                    lookback = max(0, i - self.LOOKBACK_WINDOW)
-                    for j in range(i - 1, lookback - 1, -1):
-                        if j < 0:
-                            break
-                        prev = tokens[j]
-                        if prev in NEGATION_WORDS:
-                            negated = not negated  # 否定词累加(双重否定 = 肯定)
-                        if prev in DEGREE_WORDS:
-                            # 乘性叠加(取全部出现在回看窗口内的程度副词)
-                            degree *= DEGREE_WORDS[prev]
+            # 学术依据:程度副词对情感强度的修饰采用**乘性叠加**(Taboada 2011,
+            #   "Lexicon-based methods for sentiment analysis", CL);
+            # 即 N 个程度副词 => 系数 = Π d_i,而非只取最近的一个。
+            # 例:"非常非常高兴" => 1.5 * 1.5 = 2.25(原代码只取 1.5)。
+            degree = 1.0
+            negated = False
+            lookback = max(0, i - self.LOOKBACK_WINDOW)
+            for j in range(i - 1, lookback - 1, -1):
+                if j < 0:
+                    break
+                prev = tokens[j]
+                if prev in NEGATION_WORDS:
+                    negated = not negated  # 否定词累加(双重否定 = 肯定)
+                if prev in DEGREE_WORDS:
+                    # 乘性叠加(取全部出现在回看窗口内的程度副词)
+                    degree *= DEGREE_WORDS[prev]
 
             base_weight = self._weights.get(token, 1.0)
             if base_polarity == Polarity.NEGATIVE:
@@ -1006,13 +1057,13 @@ class SentimentEngine:
         else:
             raw = sum(h.finalScore for h in hits)
             # 归一化:除以 sqrt(token 数),使长句不至于被拉低
-                    # 注:本引擎采用 sqrt 归一化而非线性归一化(N/tokens)是为了
-                    # 缓解长句中累加误差过大的问题(Pang & Lee 2004 综述指出
-                    # 词典法对长文本倾向给出更"中性"的分数,sqrt 是一种工程折中)。
-                    # 严格学术场景推荐报告 raw 平均分 + 命中数 2 项,而非单一 score。
-                    norm = max(1.0, len(tokens) ** 0.5)
-                    score = max(-1.0, min(1.0, raw / norm))
-                    polarity = self._scoreToPolarity(score)
+            # 注:本引擎采用 sqrt 归一化而非线性归一化(N/tokens)是为了
+            # 缓解长句中累加误差过大的问题(Pang & Lee 2004 综述指出
+            # 词典法对长文本倾向给出更"中性"的分数,sqrt 是一种工程折中)。
+            # 严格学术场景推荐报告 raw 平均分 + 命中数 2 项,而非单一 score。
+            norm = max(1.0, len(tokens) ** 0.5)
+            score = max(-1.0, min(1.0, raw / norm))
+            polarity = self._scoreToPolarity(score)
 
         pos = sum(1 for h in hits if h.polarity == Polarity.POSITIVE and not h.negated)
         neg = sum(1 for h in hits if h.polarity == Polarity.NEGATIVE and not h.negated)

@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import jieba
 
@@ -124,6 +124,7 @@ class ConcordanceEngine:
         secondaryOffset: int = 0,
         sampleLimit: int = 100,
         sampleRandom: bool = True,
+        progressCallback: Optional[Callable[[str], None]] = None,
     ) -> ConcordanceResult:
         """执行 KWIC 检索
 
@@ -148,7 +149,11 @@ class ConcordanceEngine:
         allHits: List[KwicHit] = []
         corpusName = self._joinCorpusName(fileToText)
 
-        for fileName, text in fileToText.items():
+        # P2-8 修复:阶段回调,UI 可观察分析进度
+        if progressCallback:
+            progressCallback(f"扫描语料(共 {len(fileToText)} 个文件)...")
+        totalFiles = len(fileToText)
+        for fileIdx, (fileName, text) in enumerate(fileToText.items(), start=1):
             # 按行分句：每个 token 携带其所在行号 (tokenText, lineIndex)
             tokensWithLine = self._tokenizeLines(text or "")
             tokens = [t for t, _ in tokensWithLine]
@@ -164,9 +169,21 @@ class ConcordanceEngine:
                 isRegex=isRegex,
             ):
                 allHits.append(hit)
+            # 阶段进度:每 10% 报告一次(避免 signal 太密)
+            if (
+                progressCallback
+                and totalFiles > 0
+                and fileIdx % max(1, totalFiles // 10) == 0
+            ):
+                pct = int(80 * fileIdx / totalFiles)
+                progressCallback(
+                    f"扫描 {fileIdx}/{totalFiles} ({pct}%) 当前命中 {len(allHits)}"
+                )
 
         # 二次检索（FR-KWC-004）
         if secondaryWord:
+            if progressCallback:
+                progressCallback("二次检索过滤...")
             allHits = self._filterSecondary(
                 hits=allHits,
                 secondaryWord=secondaryWord,
@@ -177,10 +194,14 @@ class ConcordanceEngine:
         totalMatches = len(allHits)
 
         # 排序（FR-KWC-003）
+        if progressCallback:
+            progressCallback(f"排序 {totalMatches} 条命中...")
         allHits = self._sortHits(allHits, sortMode)
 
         # 抽样（FR-KWC-005）
         if sampleLimit > 0 and len(allHits) > sampleLimit:
+            if progressCallback:
+                progressCallback(f"抽样 {sampleLimit} 条...")
             if sampleRandom:
                 import random
 
@@ -414,52 +435,58 @@ class ConcordanceEngine:
 
         支持多字节点词（例如"机器学习"）。匹配策略：
         1. 优先单 token 精确匹配（jieba 词典中存在该词时）
-        2. 否则尝试将若干相邻 token 拼起来做字面比较
+        2. 否则尝试将若干相邻 token 拼起来做字面比较(最大匹配)
         """
         if not target:
             return False
         # 单 token 直接匹配
         if start < len(normalized) and normalized[start] == target:
             return True
-        # 多 token 拼接匹配（覆盖跨词情况）
-        maxLen = min(len(normalized) - start, max(1, len(target)))
-        for length in range(1, maxLen + 1):
-            joined = "".join(normalized[start : start + length])
-            if joined == target:
-                return True
-            if len(joined) > len(target):
-                break
-        return False
+        # 多 token 拼接匹配（覆盖跨词情况,采用最大匹配策略）
+        return (
+            self._nodeLength(
+                tokens=None, normalized=normalized, start=start, target=target
+            )
+            > 0
+        )
 
     def _nodeLength(
         self,
-        tokens: List[str],
+        tokens: Optional[List[str]],
         normalized: List[str],
         start: int,
         target: str,
     ) -> int:
         """返回匹配节点词占用的 token 数。
 
-            长度选择规则(优先级递减,符合 KWIC 学术惯例):
-                1. 优先单 token 精确匹配(jieba 词典中存在该词时)
-                   —— 反映词典优先级,避免把"机器学习"误切为"机器"+"学习"
-                2. 否则取拼接等于 target 的**最短**长度(greedy shortest)
-                   —— 避免跨越更远的边界
-            注:严格 KWIC 学术实现应采用最大匹配(maximum match),
-            以减少歧义;但本引擎为兼顾中文分词歧义,采用词典优先+最短填充。
-            参考:Cheng et al. (2006) "Concordance: A fundamental tool
-            for corpus linguistics" 中关于 multi-word node 处理的讨论。
-            """
-            if start < len(normalized) and normalized[start] == target:
-                return 1
-            maxLen = min(len(normalized) - start, max(1, len(target)))
-            for length in range(1, maxLen + 1):
-                joined = "".join(normalized[start : start + length])
-                if joined == target:
-                    return length
-                if len(joined) > len(target):
-                    break
+        长度选择规则(P0-3 修复:严格 KWIC 学术实现,采用最大匹配):
+            1. 优先单 token 精确匹配(jieba 词典中存在该词时)
+               —— 反映词典优先级,避免把"机器学习"误切为"机器"+"学习"
+            2. 否则取拼接等于 target 的**最长**长度(maximum match)
+               —— 与 AntConc、WordSmith Tools 一致,减少命中歧义
+        参考:Cheng et al. (2006) "Concordance: A fundamental tool
+        for corpus linguistics";Anthony (2023) "AntConc 4.x
+        Concordance: Maximum matching strategy for multi-word nodes".
+        """
+        if start >= len(normalized):
             return 0
+        # 单 token 直接命中:在中文里 jieba 词典已将其合并为单 token
+        if normalized[start] == target:
+            return 1
+        # 多 token 拼接:最大匹配(maximum match),从最长可能长度递减尝试
+        # 边界:最多拼到 target 字符数对应 token 数,避免超出 target 长度
+        maxPossibleTokens = min(len(normalized) - start, max(1, len(target)))
+        bestLen = 0
+        for length in range(maxPossibleTokens, 1, -1):
+            joined = "".join(normalized[start : start + length])
+            if joined == target:
+                # 取最长命中;若后续仍有更短命中,跳过(已找到 max)
+                bestLen = length
+                break
+            # 拼接长度若已超过 target,继续缩短(长度更短也不会等于 target)
+            if len(joined) > len(target):
+                continue
+        return bestLen
 
     def _filterSecondary(
         self,

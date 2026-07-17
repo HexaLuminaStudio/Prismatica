@@ -230,10 +230,78 @@ class WordCloudWidget(QWidget):
     # 语料库绑定
     # ------------------------------------------------------------------
     def setCorpusStore(self, store):
+        if self._corpusStore is store:
+            return
         self._corpusStore = store
         tokenCache = store.tokenCache() if store is not None else None
         self._segmenter = TextSegmenter(tokenCache=tokenCache)
+        # 切换语料库时清空旧结果
+        self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
+
+    def _resetResultsForCorpusSwitch(self) -> None:
+        """切换语料库时清空旧词云结果与 UI(P0-fix)"""
+        self._result = None
+        self._lastFigure = None
+        # 取消正在运行的 worker,避免旧 worker 写回新 store
+        worker = getattr(self, "_worker", None)
+        if worker is not None and worker.isRunning():
+            try:
+                # WordCloudWorker 没有 cancel 方法,只能 wait
+                worker.wait(200)
+            except Exception:
+                pass
+            self._worker = None
+        # 清空预览画布
+        ax = getattr(self, "_ax", None)
+        canvas = getattr(self, "_canvas", None)
+        figure = getattr(self, "_figure", None)
+        if ax is not None:
+            try:
+                ax.clear()
+                ax.set_xlim(0, 800)
+                ax.set_ylim(0, 600)
+                ax.set_aspect("equal")
+                ax.axis("off")
+                if figure is not None:
+                    figure.patch.set_facecolor("white")
+                    ax.set_facecolor("white")
+                ax.text(
+                    0.5, 0.5,
+                    "已切换语料库,请重新生成",
+                    ha="center", va="center",
+                    transform=ax.transAxes,
+                    color="#999", fontsize=14,
+                )
+            except Exception:
+                pass
+        if canvas is not None:
+            try:
+                canvas.draw_idle()
+            except Exception:
+                pass
+        # 摘要与状态栏复位
+        if hasattr(self, "summaryLabel") and self.summaryLabel is not None:
+            try:
+                self.summaryLabel.setText("")
+            except Exception:
+                pass
+        if hasattr(self, "statusLabel") and self.statusLabel is not None:
+            try:
+                self.statusLabel.setText("已切换语料库,请重新生成")
+            except Exception:
+                pass
+        # 导出按钮复位
+        for btnName in (
+            "exportPngBtn", "exportSvgBtn",
+            "exportPngBtnPro", "exportSvgBtnPro",
+        ):
+            btn = getattr(self, btnName, None)
+            if btn is not None:
+                try:
+                    btn.setEnabled(False)
+                except Exception:
+                    pass
 
     def _bindCorpusStore(self, store):
         if hasattr(store, "filesAdded"):
@@ -307,7 +375,7 @@ class WordCloudWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("1. 生成参数", card))
+        layout.addWidget(StrongBodyLabel("生成参数", card))
 
         # ---- 第 1 行: Top-N / 最小词长 / 最低频次 ----
         row1 = QHBoxLayout()
@@ -488,7 +556,7 @@ class WordCloudWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("2. 词云预览", card))
+        layout.addWidget(StrongBodyLabel("词云预览", card))
 
         # 画布
         self._figure = Figure(figsize=(8, 6), dpi=100, facecolor="white")

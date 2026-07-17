@@ -22,7 +22,8 @@ class GlobalDownloadWorker(QThread):
     """Global下载工作线程"""
 
     progress = Signal(dict)  # 进度信息字典
-    finished = Signal(bool, str)  # 完成信号
+    # 完成信号:(success, message, filePath)
+    finished = Signal(bool, str, str)
     failed = Signal(str)  # 失败信号
     folderMissing = Signal(str)  # 文件夹缺失信号
 
@@ -239,7 +240,7 @@ class GlobalDownloadWorker(QThread):
             if not firstPage:
                 errorMsg = "获取初始数据失败"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 解析总数据量
@@ -252,7 +253,7 @@ class GlobalDownloadWorker(QThread):
             if total == 0:
                 errorMsg = "未找到相关数据"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 准备数据列表
@@ -280,7 +281,9 @@ class GlobalDownloadWorker(QThread):
                 # 每5页检查一次目标文件夹
                 if page % 5 == 1 and not self._checkOutputDir():
                     self.failed.emit("目标文件夹已被删除")
-                    self.finished.emit(False, "目标文件夹已被删除")
+                    self.finished.emit(
+                        False, "目标文件夹已被删除", getattr(self, "filePath", "") or ""
+                    )
                     return
 
                 pageData = self._downloadPage(page)
@@ -299,7 +302,7 @@ class GlobalDownloadWorker(QThread):
             if not self.isRunning:
                 errorMsg = "下载已取消"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 合并数据
@@ -311,13 +314,15 @@ class GlobalDownloadWorker(QThread):
             if not mergedData:
                 errorMsg = "没有有效数据"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 第三步：保存为Excel
             if not self._checkOutputDir():
                 self.failed.emit("目标文件夹已被删除")
-                self.finished.emit(False, "目标文件夹已被删除")
+                self.finished.emit(
+                    False, "目标文件夹已被删除", getattr(self, "filePath", "") or ""
+                )
                 return
 
             logger.info(
@@ -380,16 +385,17 @@ class GlobalDownloadWorker(QThread):
                 self.finished.emit(
                     True,
                     f"下载完成！共{len(mergedData)}条数据，平均速度{avgSpeed:.2f}页/秒",
+                    getattr(self, "filePath", "") or "",
                 )
             else:
                 errorMsg = "生成Excel文件失败"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
 
         except Exception as e:
             errorMsg = f"处理失败: {str(e)}"
             self.failed.emit(errorMsg)
-            self.finished.emit(False, errorMsg)
+            self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
 
     def _downloadPage(self, page: int) -> Optional[Dict]:
         """下载单页数据"""

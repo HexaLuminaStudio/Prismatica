@@ -25,7 +25,10 @@ class HSKDownloadWorker(QThread):
     """优化的下载工作线程，避免429错误"""
 
     progress = Signal(dict)  # 进度信息字典
-    finished = Signal(bool, str)  # 完成信号
+    # 完成信号:(success, message, filePath)
+    # - filePath 即使在失败/取消路径下也会带上
+    #   (若未生成文件则为 ""),避免下游读 worker 属性产生竞态
+    finished = Signal(bool, str, str)
     failed = Signal(str)  # 失败信号
 
     def __init__(self, payload: Dict[str, Any]):
@@ -287,7 +290,7 @@ class HSKDownloadWorker(QThread):
             if not firstPage:
                 errorMsg = "获取初始数据失败"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 解析总数据量
@@ -297,7 +300,7 @@ class HSKDownloadWorker(QThread):
             if total == 0:
                 errorMsg = "未找到相关数据"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 准备数据列表
@@ -332,7 +335,7 @@ class HSKDownloadWorker(QThread):
             if not self.isRunning:
                 errorMsg = "下载已取消"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 合并数据
@@ -344,7 +347,7 @@ class HSKDownloadWorker(QThread):
             if not mergedData:
                 errorMsg = "没有有效数据"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
 
             # 第三步：保存为Excel
@@ -408,13 +411,14 @@ class HSKDownloadWorker(QThread):
                 self.finished.emit(
                     True,
                     f"下载完成！共{len(mergedData)}条数据，平均速度{avgSpeed:.2f}页/秒",
+                    getattr(self, "filePath", "") or "",
                 )
             else:
                 errorMsg = "生成Excel文件失败"
                 self.failed.emit(errorMsg)
-                self.finished.emit(False, errorMsg)
+                self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
 
         except Exception as e:
             errorMsg = f"处理失败: {str(e)}"
             self.failed.emit(errorMsg)
-            self.finished.emit(False, errorMsg)
+            self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")

@@ -46,7 +46,6 @@ from app.view.widgets.freq_analyzer.result_summary import (
     ResultSummary,
 )
 
-from app.view.widgets.freq_analyzer.concordance_widget import CorpusStatusCard
 from app.view.widgets.freq_analyzer.dialogs import (
     AdvancedSettingsDialog,
     NgramDialog,
@@ -110,9 +109,6 @@ class FreqAnalyzerWidget(QWidget):
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
-        # 把 store 同步给语料状态卡
-        if hasattr(self, "_corpusStatusCard") and self._corpusStatusCard is not None:
-            self._corpusStatusCard.setStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store: "CorpusStore") -> None:
@@ -169,10 +165,6 @@ class FreqAnalyzerWidget(QWidget):
         # 标题（L0：SubtitleLabel）
         titleLabel = SubtitleLabel("词频分析统计", scrollContent)
         scrollLayout.addWidget(titleLabel)
-
-        # ===== 语料来源提示（导入/清空 已迁移到 CorpusImportWidget） =====
-        infoCard = CorpusStatusCard(self, corpusStore=self._corpusStore)
-        self._corpusStatusCard = infoCard  # 保留引用，setCorpusStore 时调用 setStore
 
         # 参数设置
         paramCard = CardWidget(self)
@@ -279,7 +271,6 @@ class FreqAnalyzerWidget(QWidget):
         self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
         paramLayout.addWidget(self.statusLabel)
 
-        scrollLayout.addWidget(infoCard)
         scrollLayout.addWidget(paramCard)
 
         # ===== 结果摘要卡(优化:大指标卡显示) =====
@@ -409,9 +400,8 @@ class FreqAnalyzerWidget(QWidget):
         )
 
     def _updateFileCount(self):
-        # 委托给 CorpusStatusCard；_refresh 会从 store 重新读取最新数据
-        if hasattr(self, "_corpusStatusCard") and self._corpusStatusCard is not None:
-            self._corpusStatusCard._refresh()
+        # 已移除 CorpusStatusCard,此方法保留为空以避免外部调用崩溃
+        pass
 
     def _runAnalysis(self):
         if not self.rawTexts:
@@ -497,8 +487,9 @@ class FreqAnalyzerWidget(QWidget):
         # 同步按钮标题为本次分析使用的阶数
         self.ngramBtn.setText(self._ngramButtonText(self.ngramN))
 
-        # 过滤最低频次（仅对 unigram 表生效）
-        minFreq = 2
+        # 过滤最低频次（仅对 unigram 表生效,P2-1 修复:应用用户配置值）
+        # 之前硬编码 minFreq = 2 会覆盖用户在「高级设置」中设置的 unigramMinFreq
+        minFreq = max(1, int(getattr(self, "unigramMinFreq", 1) or 1))
         if unigramDf is not None and not unigramDf.empty and minFreq > 1:
             unigramDf = unigramDf[unigramDf["Freq"] >= minFreq].reset_index(drop=True)
             unigramDf["Rank"] = unigramDf.index + 1

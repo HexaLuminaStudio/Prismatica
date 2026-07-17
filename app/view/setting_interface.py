@@ -529,17 +529,14 @@ class SponsorSettingWidget(GroupHeaderCardWidget):
 
     展示本项目所有赞助人的昵称与邮箱。
     数据为内部写死（开发者后续可手动更新 _SPONSORS 列表），
-    以"昵称<邮箱>"格式每行展示一位赞助人。
-
+    以"昵称<邮箱>"格式每行展示一位赞
     静态占位数据：
         - 使用示例昵称与示例邮箱，方便开发者按相同格式直接替换为真实数据
     """
 
     _SPONSORS: List[Tuple[str, str]] = [
-        ("示例赞助者 A", "sponsor_a@example.com"),
-        ("示例赞助者 B", "sponsor_b@example.com"),
-        ("示例赞助者 C", "sponsor_c@example.com"),
-        ("示例赞助者 D", "sponsor_d@example.com"),
+        ("🙉", "192****613@qq.com"),
+        ("小红薯69B5B903", "224****626@qq.com"),
     ]
 
     def __init__(self, parent=None):

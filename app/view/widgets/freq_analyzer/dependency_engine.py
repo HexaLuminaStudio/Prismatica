@@ -192,7 +192,39 @@ class RuleBasedDependencyParser(DependencyParser):
         rootId = self._findRoot(tokens)
         self._linkDependencies(tokens, rootId)
 
+        # 5) 防御性校验:head 引用合法性 + root 自挂修复
+        self._sanitizeHeads(tokens, rootId)
+
         return DependencyParse(tokens=tokens, text=sentence, backend=self.name)
+
+    def _sanitizeHeads(self, tokens: List[DepToken], rootId: int) -> None:
+        """校验并修复 head 引用
+
+        - root 节点自身: head 应为 0,deprel 应为 ROOT
+        - 其它节点: head 必须在 validIds 内,且不能等于自身 id
+        """
+        validIds = {t.id for t in tokens}
+        for tok in tokens:
+            # ROOT 节点修复
+            if tok.id == rootId:
+                tok.head = 0
+                if not tok.deprel or tok.deprel != "ROOT":
+                    tok.deprel = "ROOT"
+                continue
+            # 其它节点:head 必须是有效 id,且不能指向自己
+            if tok.head == 0:
+                # 0 只给 ROOT;非 ROOT 节点不应 head=0 → fallback 到 rootId
+                tok.head = rootId
+                if not tok.deprel:
+                    tok.deprel = "DE"
+            elif tok.head not in validIds or tok.head == tok.id:
+                logger.debug(
+                    f"[RuleDepParser] token id={tok.id} ({tok.form!r}) "
+                    f"head={tok.head} 非法,fallback 到 rootId={rootId}"
+                )
+                tok.head = rootId
+                if not tok.deprel:
+                    tok.deprel = "DE"
 
     def _findRoot(self, tokens: List[DepToken]) -> int:
         """找 ROOT:第一个动词优先;否则第一个名词;否则第一个词"""
@@ -385,43 +417,74 @@ class HanLPDependencyParser(DependencyParser):
     HANLP_API_URL = "https://hanlp.hankcs.com/api"
     HANLP_LANGUAGE = "zh"  # 默认中文(可选: zh/en/ja/mul)
 
-        # HanLP RESTful 认证密钥
-        # 优先级: 显式传入参数 > 环境变量 HANLP_AUTH > 类常量 HANLP_AUTH
-        # 安全建议: 生产环境应优先使用环境变量,以避免密钥泄露到代码仓库。
-        # 留作类常量的目的是为了演示/教学场景的开箱即用,不应直接用于公网部署。
-        HANLP_AUTH = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
+    # HanLP RESTful 联合任务的合法任务名(官方限制)
+    # 合法值:
+    #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
+    #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
+    # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
+    HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
 
-        # HanLP RESTful 联合任务的合法任务名(官方限制)
-        # 合法值:
-        #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
-        #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
-        # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
-        HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
+    @classmethod
+    def _resolveAuth(cls, explicit: Optional[str]) -> Optional[str]:
+        """按优先级解析 HanLP 认证密钥(P1-1 修复)。
 
-        def __init__(
-            self,
-            auth: Optional[str] = None,
-            url: Optional[str] = None,
-            language: Optional[str] = None,
-            timeout: float = 30.0,
-        ):
-            """初始化 HanLP RESTful 客户端
+        优先级:
+            1. 显式传入的 `auth` 参数(程序内调用)
+            2. 环境变量 `HANLP_AUTH`(推荐部署方式)
+            3. 配置文件 `setting.py` 中的 `HANLP_AUTH_KEY`(可选)
 
-            Args:
-                auth: HanLP 认证密钥。优先级: 参数 > 环境变量 HANLP_AUTH > 类常量。
-                      强烈建议生产环境通过环境变量注入,避免密钥硬编码。
-                url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
-                language: 语言代码,默认 'zh'
-                timeout: HTTP 请求超时(秒)
-            """
-            self._client = None
-            # 优先级: 显式参数 > 环境变量 > 类常量
-            envAuth = os.environ.get("HANLP_AUTH")
-            self._auth = auth if auth is not None else envAuth or self.HANLP_AUTH
+        注意:
+            - 不再硬编码密钥到源码(P1-1 修复)
+            - 未配置时返回 None,客户端初始化会失败,
+              由 fallback RuleBasedDependencyParser 接替
+        """
+        if explicit:
+            return explicit
+        # 环境变量
+        import os
+        envAuth = os.environ.get("HANLP_AUTH")
+        if envAuth:
+            return envAuth
+        # 配置项(可选)
+        try:
+            from app.core.utils import setting as _setting
+
+            cfgAuth = getattr(_setting, "HANLP_AUTH_KEY", None)
+            if cfgAuth:
+                return cfgAuth
+        except Exception:
+            pass
+        return None
+
+    def __init__(
+        self,
+        auth: Optional[str] = None,
+        url: Optional[str] = None,
+        language: Optional[str] = None,
+        timeout: float = 30.0,
+    ):
+        """初始化 HanLP RESTful 客户端
+
+        Args:
+            auth: HanLP 认证密钥。优先级: 参数 > 环境变量 > 配置项
+            url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
+            language: 语言代码,默认 'zh'
+            timeout: HTTP 请求超时(秒)
+        """
+        self._client = None
+        self._auth = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
         self._url = url or self.HANLP_API_URL
         self._language = language or self.HANLP_LANGUAGE
         self._timeout = timeout
         self._lastError: Optional[str] = None
+
+        if not self._auth:
+            self._lastError = (
+                "HanLP 认证密钥未配置:请通过环境变量 HANLP_AUTH"
+                " 或显式参数传入"
+            )
+            logger.warning(f"[HanLPDepParser] {self._lastError}")
+            return
 
         # 尝试初始化客户端
         try:
@@ -476,10 +539,12 @@ class HanLPDependencyParser(DependencyParser):
         n = len(tokens)
         for i, form in enumerate(tokens):
             posTag = pos[i] if i < len(pos) else ""
-            head = heads[i] if i < len(heads) else 0  # 0-based,0 = ROOT
+            head = heads[i] if i < len(heads) else 0  # HanLP RESTful:1-based,0 = ROOT
             depRel = deprels[i] if i < len(deprels) else "DE"
-            id1 = i + 1  # 转 1-based token id
-            head1 = head if head == 0 else head + 1
+            id1 = i + 1  # 1-based token id
+            # HanLP RESTful 的 head 字段已是 1-based(0=ROOT),直接使用即可
+            # 不要 +1(之前误以为是 0-based,导致偏移)
+            head1 = head
             tokenList.append(
                 DepToken(
                     id=id1,
@@ -490,6 +555,18 @@ class HanLPDependencyParser(DependencyParser):
                     lemma=form,
                 )
             )
+
+        # 防御性:校验 head 引用合法性,超出范围/指向自身的 head → fallback 到 ROOT (0)
+        validIds = {t.id for t in tokenList}
+        for tok in tokenList:
+            if tok.head != 0 and (tok.head not in validIds or tok.head == tok.id):
+                logger.warning(
+                    f"[HanLPDepParser] token id={tok.id} ({tok.form!r}) "
+                    f"head={tok.head} 非法,fallback 到 ROOT"
+                )
+                tok.head = 0
+                if not tok.deprel or tok.deprel == "DE":
+                    tok.deprel = "DE"
 
         return DependencyParse(tokens=tokenList, text=sentence, backend=self.name)
 

@@ -90,6 +90,7 @@ class CollocationWorker(QThread):
         caseSensitive: bool,
         significanceThreshold: float = 3.0,
         continuityCorrection: bool = False,
+        crossSentenceBoundary: bool = False,
     ):
         super().__init__()
         self._corpusStore = corpusStore
@@ -102,6 +103,8 @@ class CollocationWorker(QThread):
         self._caseSensitive = caseSensitive
         self._significanceThreshold = significanceThreshold
         self._continuityCorrection = continuityCorrection
+        # P1-2 修复:跨句边界开关
+        self._crossSentenceBoundary = crossSentenceBoundary
         self._cancel = False
 
     def cancel(self):
@@ -131,6 +134,12 @@ class CollocationWorker(QThread):
             modelVer = backendModelVersion("jieba")
 
             allTokens: List[str] = []
+            # P1-2 修复:跨句边界索引集合,记录「该位置之前存在句边界」
+            # 按 allTokens 的全局下标维护,与分词结果一一对应
+            allBoundaryIndices: List[int] = []
+
+            # 累计偏移,每读一份文件,偏移为 allTokens 当前长度
+            globalOffset = 0
             for idx, name in enumerate(fileNames, start=1):
                 if self._cancel:
                     return
@@ -147,7 +156,23 @@ class CollocationWorker(QThread):
                     )
                 else:
                     tokens = self._segmenter._jiebaCut(text)
+
+                # P1-2 修复:在每份文件的 token 序列里找「句末标点」,
+                # 标点之后第一个 token 的全局下标就是句子边界索引
+                # 使用与 sentiment_engine 相同的切句正则
+                if not self._crossSentenceBoundary:
+                    localBoundaryPositions: List[int] = []
+                    for localIdx, tok in enumerate(tokens):
+                        if self._isSentenceEndToken(tok):
+                            # 边界索引 = 下一 token 的全局下标
+                            globalBoundaryIdx = globalOffset + localIdx + 1
+                            # 仅在该索引 < N 时记入(避免最后一 token 之后越界)
+                            if globalBoundaryIdx < globalOffset + len(tokens):
+                                localBoundaryPositions.append(globalBoundaryIdx)
+                    allBoundaryIndices.extend(localBoundaryPositions)
+
                 allTokens.extend(tokens)
+                globalOffset += len(tokens)
 
                 pct = 10 + int(70 * idx / n)
                 self.progress.emit(pct, f"分词 {idx}/{n}")
@@ -167,6 +192,10 @@ class CollocationWorker(QThread):
                 caseSensitive=self._caseSensitive,
                 significanceThreshold=self._significanceThreshold,
                 continuityCorrection=self._continuityCorrection,
+                crossSentenceBoundary=self._crossSentenceBoundary,
+                sentenceBoundaryIndices=(
+                    allBoundaryIndices if not self._crossSentenceBoundary else None
+                ),
             )
 
             if self._cancel:
@@ -179,6 +208,18 @@ class CollocationWorker(QThread):
 
             logger.exception(f"[CollocationWorker] 失败: {e}")
             self.failed.emit(f"{e}\n{traceback.format_exc()}")
+
+    @staticmethod
+    def _isSentenceEndToken(tok: str) -> bool:
+        """判断该 token 是否含句末标点(P1-2 修复)
+
+        设计:
+            - 中文:`。！？…`
+            - 英文:`! ?`(jieb 切分英文时这些通常会单独成 token)
+        """
+        if not tok:
+            return False
+        return any(ch in tok for ch in "。！？…!?")
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +262,64 @@ class CollocationWidget(QWidget):
     # 语料库绑定
     # ------------------------------------------------------------------
     def setCorpusStore(self, store):
+        if self._corpusStore is store:
+            return
         self._corpusStore = store
         tokenCache = store.tokenCache() if store is not None else None
         self._segmenter = TextSegmenter(tokenCache=tokenCache)
+        # 切换语料库时清空旧结果,避免与新语料错配
+        self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
+
+    def _resetResultsForCorpusSwitch(self) -> None:
+        """切换语料库时清空所有分析结果与 UI(P0-fix)
+
+        设计依据:CorpusStore 是多语料库共享的引用,切换时旧库的分析结果
+        不能继续显示在新语料上(否则表格中的频次/MI 与新语料不一致)。
+        """
+        self._result = None
+        for tbl in (
+            getattr(self, "_collocatesTable", None),
+            getattr(self, "_positionTable", None),
+            getattr(self, "_networkTable", None),
+        ):
+            if tbl is not None:
+                try:
+                    tbl.setRowCount(0)
+                except Exception:
+                    pass
+        # 取消正在运行的 worker,避免旧 worker 写回新 store
+        worker = getattr(self, "_worker", None)
+        if worker is not None and worker.isRunning():
+            try:
+                worker.cancel()
+                worker.wait(200)
+            except Exception:
+                pass
+            self._worker = None
+        # 摘要卡片复位
+        summary = getattr(self, "_summary", None)
+        if summary is not None:
+            try:
+                from app.view.widgets.freq_analyzer.result_summary import MetricColor
+
+                summary.clear()
+                summary.setPlaceholder("已切换语料库,请重新分析")
+                summary.setMetrics(
+                    [
+                        ("节点词频", "—", MetricColor.NEUTRAL),
+                        ("显著搭配(MI≥3)", "—", MetricColor.NEUTRAL),
+                        ("Top-1 MI", "—", MetricColor.NEUTRAL),
+                        ("耗时", "—", MetricColor.NEUTRAL),
+                    ]
+                )
+            except Exception:
+                pass
+        # 状态栏复位
+        try:
+            self.statusLabel.setText("已切换语料库,请重新分析")
+        except Exception:
+            pass
 
     def _bindCorpusStore(self, store):
         """订阅语料库变化信号"""
@@ -383,6 +478,16 @@ class CollocationWidget(QWidget):
             "对低频搭配(O<5)启用 Yates 1934 连续性修正,默认关闭以兼容 AntConc"
         )
         row2b.addWidget(self.yatesSwitch)
+
+        # P1-2 修复:跨句边界开关
+        self.crossSentSwitch = _makeSwitchButton("跨句边界", card)
+        self.crossSentSwitch.setChecked(False)
+        self.crossSentSwitch.setToolTip(
+            "P1-2 修复:默认按学术惯例「不跨句」统计(Sinclair 1991),"
+            "避免把不同句子的词误算为搭配;启用后将忽略句子边界,"
+            "适用于文体学相邻句话题连续性分析"
+        )
+        row2b.addWidget(self.crossSentSwitch)
 
         row2b.addStretch(1)
         layout.addLayout(row2b)
@@ -605,6 +710,7 @@ class CollocationWidget(QWidget):
             caseSensitive=self.caseSwitch.isChecked(),
             significanceThreshold=self.sigSpin.value(),
             continuityCorrection=self.yatesSwitch.isChecked(),
+            crossSentenceBoundary=self.crossSentSwitch.isChecked(),
         )
         self._worker.progress.connect(self._onProgress)
         self._worker.finished.connect(self._onFinished)

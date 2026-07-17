@@ -103,6 +103,10 @@ class DependencyAnalysisWorker(QThread):
         self._parser = parser
         self._sentences = sentences
 
+    def cancel(self) -> None:
+        """请求取消任务(由 UI 线程调用)"""
+        self.requestInterruption()
+
     def run(self):
         try:
             results: List[DependencyParse] = []
@@ -145,6 +149,22 @@ class DependencyWidget(QWidget):
 
         self._buildUi()
         self._refreshBackendLabel()
+
+    def closeEvent(self, event) -> None:
+        """关闭前停止后台线程,避免线程悬挂或泄漏(P0-fix)"""
+        worker = self._worker
+        if worker is not None:
+            try:
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+                if worker.isRunning():
+                    worker.wait(2000)
+            except Exception:
+                pass
+            # deleteLater 让 Qt 在事件循环中安全释放 QThread 资源
+            worker.deleteLater()
+            self._worker = None
+        super().closeEvent(event)
 
     # =====================================================================
     # UI 构建(与其他子页面风格一致: outer 边距 20,标题 + 说明 + ScrollArea)
@@ -197,7 +217,7 @@ class DependencyWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("1. 输入文本", card))
+        layout.addWidget(StrongBodyLabel("输入文本", card))
 
         # 多行输入
         self.textEdit = PlainTextEdit(card)
@@ -256,7 +276,7 @@ class DependencyWidget(QWidget):
 
         # 顶部: 摘要 + 句子选择
         headerRow = QHBoxLayout()
-        layout.addWidget(StrongBodyLabel("2. 依存结构", card))
+        layout.addWidget(StrongBodyLabel("依存结构", card))
 
         subRow = QHBoxLayout()
         self.summaryLabel = CaptionLabel("尚未分析", card)
@@ -369,14 +389,14 @@ class DependencyWidget(QWidget):
             _showInfoBar("warning", "无法分析", "未能切分出句子", self)
             return
 
-        # 启动后台 worker
+        # 启动后台 worker(P0-fix:统一使用 self._worker 命名)
         self.runBtn.setEnabled(False)
         self.summaryLabel.setText("正在分析...")
-        self.worker = DependencyAnalysisWorker(self._parser, sentences)
-        self.worker.progress.connect(self._onProgress)
-        self.worker.finished.connect(self._onFinished)
-        self.worker.failed.connect(self._onFailed)
-        self.worker.start()
+        self._worker = DependencyAnalysisWorker(self._parser, sentences)
+        self._worker.progress.connect(self._onProgress)
+        self._worker.finished.connect(self._onFinished)
+        self._worker.failed.connect(self._onFailed)
+        self._worker.start()
 
     def _onProgress(self, pct: int, msg: str) -> None:
         self.summaryLabel.setText(f"[{pct}%] {msg}")
@@ -443,7 +463,7 @@ class DependencyWidget(QWidget):
             self.deprelLegend.setText("")
             return
 
-        view = self.viewSeg.currentItem() or "tree"
+        view = self.viewSeg.currentRouteKey() or "tree"
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.set_facecolor("white")
@@ -643,6 +663,17 @@ class DependencyWidget(QWidget):
                     x = xs[tok.id]
                     ax.plot([x, x], [0, -0.4], color="#3a76d8", linewidth=1.5)
                 continue
+            # 防御性:head 可能因 parser 数据异常不在 xs 中
+            # (虽然 _sanitizeHeads 应已修复,UI 层再加一道保险)
+            if tok.head not in xs:
+                logger.warning(
+                    f"[DependencyWidget] token id={tok.id} ({tok.form!r}) "
+                    f"head={tok.head} 不在节点列表中,fallback 为 ROOT"
+                )
+                # 临时把 ROOT 指示线画出来
+                x = xs[tok.id]
+                ax.plot([x, x], [0, -0.4], color="#3a76d8", linewidth=1.5)
+                continue
             x1 = xs[tok.head]
             x2 = xs[tok.id]
             level = levelFor(tok.head, tok.id)
@@ -759,7 +790,61 @@ class DependencyWidget(QWidget):
     # =====================================================================
     def setCorpusStore(self, corpusStore) -> None:
         """被 FreqAnalyzerInterface 在切换语料库时调用"""
+        if self._corpusStore is corpusStore:
+            return
         self._corpusStore = corpusStore
         # 句法依存分析不直接消费 corpusStore,这里仅记录引用
         # 如未来需要「从语料中取句子」,可在 _onRunClicked 中读取
         # corpusStore.effectiveTexts() 并送入分析
+        # P0-fix:切换语料库时清空旧分析结果,避免与新语料错配
+        self._resetResultsForCorpusSwitch()
+
+    def _resetResultsForCorpusSwitch(self) -> None:
+        """切换语料库时清空旧依存分析结果与 UI(P0-fix)"""
+        self._results = []
+        self._currentIndex = 0
+        # 取消正在运行的 worker(P0-fix:统一使用 self._worker 命名)
+        worker = getattr(self, "_worker", None)
+        if worker is not None:
+            try:
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+                if worker.isRunning():
+                    worker.wait(200)
+            except Exception:
+                pass
+            self._worker = None
+        # 句子选择器 / 摘要 / 图例复位
+        sel = getattr(self, "sentenceSelector", None)
+        if sel is not None:
+            try:
+                sel.clear()
+            except Exception:
+                pass
+        if hasattr(self, "summaryLabel") and self.summaryLabel is not None:
+            try:
+                self.summaryLabel.setText("已切换语料库,请重新分析")
+            except Exception:
+                pass
+        if hasattr(self, "deprelLegend") and self.deprelLegend is not None:
+            try:
+                self.deprelLegend.setText("")
+            except Exception:
+                pass
+        # 清空画布
+        try:
+            self._drawEmpty("已切换语料库,请重新输入文本并点击「开始分析」")
+        except Exception:
+            pass
+        # 文本编辑区也清空,避免误导用户(可注释掉:用户可能想保留输入)
+        # 当前选择清空:因为依存分析与输入文本一一对应,旧文本在新库语境下无意义
+        try:
+            if hasattr(self, "textEdit") and self.textEdit is not None:
+                self.textEdit.clear()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "previewLabel") and self.previewLabel is not None:
+                self.previewLabel.setText("")
+        except Exception:
+            pass

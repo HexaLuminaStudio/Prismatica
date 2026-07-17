@@ -25,6 +25,9 @@ class TaskControl:
         self.dbPath = CONFIG_FOLDER / "tasks.db"
         self.local = threading.local()
         self.lock = threading.RLock()
+        # P0-fix:统一维护所有线程创建的 connection,close() 时一并关闭,
+        # 避免仅关闭当前线程导致其他线程 connection 永久泄漏。
+        self._connections: set = set()
 
         # 确保配置目录存在
         CONFIG_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -38,10 +41,12 @@ class TaskControl:
     def getConnection(self) -> sqlite3.Connection:
         """获取线程本地的数据库连接"""
         if not hasattr(self.local, "connection") or self.local.connection is None:
-            self.local.connection = sqlite3.connect(
-                str(self.dbPath), check_same_thread=False
-            )
-            self.local.connection.row_factory = sqlite3.Row
+            conn = sqlite3.connect(str(self.dbPath), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self.local.connection = conn
+            # P0-fix:登记到全局集合,便于 close() 统一关闭
+            with self.lock:
+                self._connections.add(conn)
         return self.local.connection
 
     @contextmanager
@@ -383,10 +388,28 @@ class TaskControl:
                 return count
 
     def close(self):
-        """关闭数据库连接"""
-        if hasattr(self.local, "connection") and self.local.connection:
-            self.local.connection.close()
-            self.local.connection = None
+        """关闭数据库连接
+
+        P0-fix:遍历所有线程创建的 connection 统一关闭,避免仅关闭当前线程
+        的 connection 导致其他线程连接永久泄漏。
+        """
+        with self.lock:
+            # 先关闭登记的所有连接
+            for conn in list(self._connections):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._connections.clear()
+
+            # 关闭当前线程 connection(若未被登记集包含,兜底处理)
+            localConn = getattr(self.local, "connection", None)
+            if localConn is not None:
+                try:
+                    localConn.close()
+                except Exception:
+                    pass
+                self.local.connection = None
 
 
 # 创建全局任务控制器实例

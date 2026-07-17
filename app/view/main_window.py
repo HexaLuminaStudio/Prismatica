@@ -90,7 +90,7 @@ class MainWindow(MSFluentWindow):
 
     def initWindow(self):
         logger.info("开始初始化窗口设置")
-        self.resize(1200, 750)
+        self.resize(1250, 750)
         self.setMinimumWidth(900)
         self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))

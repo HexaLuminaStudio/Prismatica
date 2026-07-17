@@ -161,14 +161,14 @@ class CollocateEntry:
     tScore: float = 0.0  # T-score(Church & Hanks 1990)
     logDice: float = 0.0  # LogDice(Rychlý 2008)
     zScore: float = 0.0  # Z-score(Dunning 1993, 超几何近似)
-        logLikelihood: float = 0.0  # G² / Log-Likelihood ratio (Dunning 1993)
-        deltaP1: float = 0.0  # ΔP₁: w₁ → w₂ 方向性
-        deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
+    logLikelihood: float = 0.0  # G² / Log-Likelihood ratio (Dunning 1993)
+    deltaP1: float = 0.0  # ΔP₁: w₁ → w₂ 方向性
+    deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
 
-        # 元数据(用于学术报告)
-        collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
-        expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
-        isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
+    # 元数据(用于学术报告)
+    collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
+    expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
+    isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
 
 
 @dataclass
@@ -255,6 +255,8 @@ class CollocationEngine:
         excludePunct: bool = True,
         significanceThreshold: float = 3.0,
         continuityCorrection: bool = False,
+        crossSentenceBoundary: bool = False,
+        sentenceBoundaryIndices: Optional[List[int]] = None,
     ) -> CollocationResult:
         """搭配分析
 
@@ -271,6 +273,12 @@ class CollocationEngine:
                 Church & Hanks 1990; 中文研究可调至 2.5~3.5)
             continuityCorrection: 是否启用 Yates 连续性修正
                 (仅对 O=0 或 E=O 等边界情况有意义,默认关闭)
+            crossSentenceBoundary: P1-2 修复 — 是否允许跨句边界取搭配词。
+                学术惯例默认 False:搭配关系应受句子边界约束
+                (Sinclair 1991, Stubbs 1995)。
+            sentenceBoundaryIndices: P1-2 修复 — 句子边界索引列表,
+                即「该位置的 token 之前有一个句子结束」。
+                若为 None 则按默认行为(全语料内统计,不切断)。
 
         Returns:
             CollocationResult
@@ -297,6 +305,10 @@ class CollocationEngine:
         if N == 0:
             logger.warning("[CollocationEngine] 语料为空,返回空结果")
             return CollocationResult(nodeWord=nodeWord, nodeKey=nodeKey)
+
+        # P1-2 修复:把句子边界索引转换成 set,O(1) 查询
+        # boundarySet[k] == True 表示「位置 k 之前存在句子边界」
+        boundarySet = set(sentenceBoundaryIndices) if sentenceBoundaryIndices else set()
 
         # 2) 全局频次统计
         totalFreq = Counter(normalizedTokens)
@@ -333,6 +345,9 @@ class CollocationEngine:
                 j = i - d
                 if j < 0:
                     break
+                # P1-2 修复:跨句切断。若该位置之前有句边界,不取该搭配。
+                if not crossSentenceBoundary and (j in boundarySet):
+                    break
                 w = normalizedTokens[j]
                 if excludePunct and self._isPunct(w):
                     continue
@@ -342,6 +357,10 @@ class CollocationEngine:
             for d in range(1, rightSpan + 1):
                 j = i + d
                 if j >= N:
+                    break
+                # P1-2 修复:跨句切断。节点词位置 i 处若存在句边界,
+                # 意味着 i 自身就是上一句的结束,不应向 i 右侧取。
+                if not crossSentenceBoundary and ((i + 1) in boundarySet):
                     break
                 w = normalizedTokens[j]
                 if excludePunct and self._isPunct(w):
@@ -444,49 +463,49 @@ class CollocationEngine:
         logDice = max(0.0, min(14.0, logDice))
 
         # ---- Z-score = (O - E) / sqrt(V_O) ----
-                # 使用超几何分布方差(Dunning 1993, CL Vol.19 No.1, eq.7):
-                #   V_O = E · (N - R) / N · (N - C) / (N - 1)
-                # 该方差是超几何分布在零假设下的精确方差,优于 Barry (2018) 的简化形式。
-                # 注:Yates continuity correction 在 Z-score 上**没有学术依据** —
-                # Yates 修正仅用于 Pearson 卡方,误用于 Z 会破坏其正态性近似,
-                # 因此 useCorrection 仅影响 G²/LL 计算,不影响 Z-score。
-                if N > 1:
-                    var = E * (N - R) / N * (N - C) / (N - 1)
-                    sigma = math.sqrt(max(var, 1e-12))
-                    zScore = (O - E) / sigma if sigma > 0 else 0.0
-                else:
-                    zScore = 0.0
+        # 使用超几何分布方差(Dunning 1993, CL Vol.19 No.1, eq.7):
+        #   V_O = E · (N - R) / N · (N - C) / (N - 1)
+        # 该方差是超几何分布在零假设下的精确方差,优于 Barry (2018) 的简化形式。
+        # 注:Yates continuity correction 在 Z-score 上**没有学术依据** —
+        # Yates 修正仅用于 Pearson 卡方,误用于 Z 会破坏其正态性近似,
+        # 因此 useCorrection 仅影响 G²/LL 计算,不影响 Z-score。
+        if N > 1:
+            var = E * (N - R) / N * (N - C) / (N - 1)
+            sigma = math.sqrt(max(var, 1e-12))
+            zScore = (O - E) / sigma if sigma > 0 else 0.0
+        else:
+            zScore = 0.0
 
-                # ---- Log-Likelihood Ratio (G² / LL) ----
-                # Dunning (1993) 推荐用于低频搭配的显著性检验(优于卡方):
-                #   G² = 2 · Σ O_ij · ln(O_ij / E_ij)
-                # 四格: O11=O, O12=R-O, O21=C-O, O22=N-R-C+O
-                # 对 O_ij = 0 的格子,贡献为 0(0·ln(0/E)=0,工程实现按 0 处理)。
-                # Yates 修正:当 E - 0.5 < O < E + 0.5 时,加 0.5 到各 O_ij
-                # (见 Dunning 1993, eq.11)
-                logLikelihood = 0.0
-                if N > 0 and R > 0 and C > 0:
-                    o11 = O
-                    o12 = R - O
-                    o21 = C - O
-                    o22 = N - R - C + O
-                    cells = [
-                        (o11, R * C / N),
-                        (o12, R * (N - C) / N),
-                        (o21, (N - R) * C / N),
-                        (o22, (N - R) * (N - C) / N),
-                    ]
-                    for observed, expected in cells:
-                        if observed <= 0:
-                            continue
-                        if expected <= 0:
-                            # 期望为 0 但实际 > 0:LL → +inf
-                            logLikelihood = float("inf")
-                            break
-                        if useCorrection and observed == 0:
-                            # Yates 修正:对 O=0 的格子跳过 0.5 加法(无法加到 0)
-                            pass
-                        logLikelihood += 2.0 * observed * math.log(observed / expected)
+            # ---- Log-Likelihood Ratio (G² / LL) ----
+        # Dunning (1993) 推荐用于低频搭配的显著性检验(优于卡方):
+        #   G² = 2 · Σ O_ij · ln(O_ij / E_ij)
+        # 四格: O11=O, O12=R-O, O21=C-O, O22=N-R-C+O
+        # 对 O_ij = 0 的格子,贡献为 0(0·ln(0/E)=0,工程实现按 0 处理)。
+        # Yates 修正:当 E - 0.5 < O < E + 0.5 时,加 0.5 到各 O_ij
+        # (见 Dunning 1993, eq.11)
+        logLikelihood = 0.0
+        if N > 0 and R > 0 and C > 0:
+            o11 = O
+            o12 = R - O
+            o21 = C - O
+            o22 = N - R - C + O
+            cells = [
+                (o11, R * C / N),
+                (o12, R * (N - C) / N),
+                (o21, (N - R) * C / N),
+                (o22, (N - R) * (N - C) / N),
+            ]
+            for observed, expected in cells:
+                if observed <= 0:
+                    continue
+                if expected <= 0:
+                    # 期望为 0 但实际 > 0:LL → +inf
+                    logLikelihood = float("inf")
+                    break
+                if useCorrection and observed == 0:
+                    # Yates 修正:对 O=0 的格子跳过 0.5 加法(无法加到 0)
+                    pass
+                logLikelihood += 2.0 * observed * math.log(observed / expected)
 
         # ---- Delta-P₁ = P(w₂|w₁) - P(w₂|¬w₁) ----
         # (Ellis 2006;Gablasova 2017 推荐作为方向搭配强度)
@@ -520,15 +539,17 @@ class CollocationEngine:
             tScore=round(tScore, 4),
             logDice=round(logDice, 4),
             zScore=round(zScore, 4),
-                    logLikelihood=round(logLikelihood, 4)
-                    if math.isfinite(logLikelihood)
-                    else logLikelihood,
-                    deltaP1=round(deltaP1, 4),
-                    deltaP2=round(deltaP2, 4),
-                    collocateFreq=C,
-                    expectedFreq=round(E, 4),
-                    isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
-                )
+            logLikelihood=(
+                round(logLikelihood, 4)
+                if math.isfinite(logLikelihood)
+                else logLikelihood
+            ),
+            deltaP1=round(deltaP1, 4),
+            deltaP2=round(deltaP2, 4),
+            collocateFreq=C,
+            expectedFreq=round(E, 4),
+            isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
+        )
 
     # ============================================================
     # 工具:标点判断
