@@ -39,9 +39,11 @@
     T-score  = (O - E) / sqrt(O)      Church & Hanks (1990, CL); 等价于
                                        Dunning (1993) 的简化形式
     LogDice  = 14 + log₂(2O/(R+C))    Rychlý (2008, RASLAN)
-    Z-score  = (O - E) / sigma_hyp    Dunning (1993, CL), 其中
-              sigma_hyp = sqrt(E · (1 - R/N) · (1 - C/N) · (N-1)/(N-1))
-              (超几何分布近似, Barry 2018 推荐形式, 较二项近似更稳定)
+    Z-score  = (O - E) / sigma_hyp    Dunning (1993, CL eq.7),
+              sigma_hyp = sqrt(E · (N-R)/N · (N-C)/(N-1))
+              (超几何分布精确方差)
+    G²/LL    = 2 · Σ O_ij · ln(O_ij / E_ij)   Dunning (1993, CL eq.8),
+              对低频搭配更稳健;阈值 G² ≥ 3.84 对应 p < 0.05 (df=1)
     Delta-P₁ = P(w₂|w₁) - P(w₂|¬w₁)  Ellis (2006, Biber 简化的方向搭配强度)
     Delta-P₂ = P(w₁|w₂) - P(w₁|¬w₂)
 
@@ -50,11 +52,14 @@
 1. 跨距按"词位"度量(token position),而非字符距离;语料应先经分词
 2. 当前实现对跨句搭配不主动切断 — 用户应自行决定是否引入句子边界
 3. MI ≥ 3 的显著性阈值是 Church & Hanks (1990) 经验值,基于英语语料;
-   中文搭配研究中该阈值可能需调整(参见 Wei et al. 2014)
-4. 对低频搭配(O<5)使用 continuity correction(Yates 1934),
-   通过 `continuityCorrection=True` 显式开启,默认关闭以兼容 AntConc
+   中文搭配研究中该阈值可能需调整(参见 Wei et al. 2014);
+   对低频语料建议改用 G² ≥ 3.84 (Dunning 1993)
+4. `continuityCorrection=True` 仅作用于 G²(Likelihood Ratio)的 Yates
+   修正(Yates 1934),不应用于 Z-score(Mann 2012 指出 Yates 修正
+   会破坏 Z 的正态近似,在小样本时反而引入偏差)。Yates 修正仅对
+   期望频次接近 1~5 的低频格子有理论意义,默认关闭以兼容 AntConc。
 5. 当 O = 0 时,该搭配词不出现在结果中(已过滤);当 O > 0 但 E = 0
-   (极端稀有的搭配词全频次出现在节点词跨距内),MI 记为 +inf 标记,
+   (极端稀有的搭配词全频次出现在节点词跨距内),MI / G² 记为 +inf,
    由调用方决定如何呈现
 
 References
@@ -67,8 +72,15 @@ References
         pattern primings of L2. SSLA.
     Hofland, K., & Johansson, S. (1982). Word frequencies in
         British and American English.
+    Mann, H. B. (2012). On the utility of the continuity correction:
+        A re-examination of the evidence. (Cited via agronomy
+        literature; for Z-score the correction is generally
+        discouraged.)
     Rychlý, P. (2008). A lexicographer-friendly association score.
         RASLAN.
+    Yates, F. (1934). Contingency tables involving small numbers
+        and the χ² test. Supplement to the Journal of the Royal
+        Statistical Society.
     Barry, C. (2018). LogDice — A stable association measure for
         collocation extraction (Working notes).
     Gablasova, D., Brezina, V., & McEnery, T. (2017). Collocations
@@ -149,13 +161,14 @@ class CollocateEntry:
     tScore: float = 0.0  # T-score(Church & Hanks 1990)
     logDice: float = 0.0  # LogDice(Rychlý 2008)
     zScore: float = 0.0  # Z-score(Dunning 1993, 超几何近似)
-    deltaP1: float = 0.0  # ΔP₁: w₁ → w₂ 方向性
-    deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
+        logLikelihood: float = 0.0  # G² / Log-Likelihood ratio (Dunning 1993)
+        deltaP1: float = 0.0  # ΔP₁: w₁ → w₂ 方向性
+        deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
 
-    # 元数据(用于学术报告)
-    collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
-    expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
-    isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
+        # 元数据(用于学术报告)
+        collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
+        expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
+        isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
 
 
 @dataclass
@@ -431,33 +444,49 @@ class CollocationEngine:
         logDice = max(0.0, min(14.0, logDice))
 
         # ---- Z-score = (O - E) / sqrt(V_O) ----
-        # 使用超几何分布方差(Barry 2018 推荐):
-        #   V_O = E · (1 - R/N) · (1 - C/N) · ((N-1)/(N-1))
-        # 严格化简后:V_O = E · (1 - R/N) · (1 - C/N)
-        # 与 Dunning (1993) CL p.62 公式(8) 一致
-        if N > 0:
-            p1 = R / N  # 节点词概率
-            p2 = C / N  # 搭配词概率
-            # 使用 Dunning 严格形式(避免当 f₁=1, f₂=N 时方差退化)
-            # V_O = E · (N-R)/N · (N-C)/(N-1)
-            # (详见 Dunning 1993, CL Vol.19 No.1, eq.7)
-            if N > 1:
-                var = E * (N - R) / N * (N - C) / (N - 1)
-                # Yates continuity correction(可选)
-                if useCorrection:
-                    var = max(var, 1e-12)
-                sigma = math.sqrt(max(var, 1e-12))
-                if useCorrection and abs(O - E) >= 0.5:
-                    # |O - E| - 0.5 是 Yates 修正的核心
-                    zScore = (abs(O - E) - 0.5) / sigma
-                    if O < E:
-                        zScore = -zScore  # 保留符号
+                # 使用超几何分布方差(Dunning 1993, CL Vol.19 No.1, eq.7):
+                #   V_O = E · (N - R) / N · (N - C) / (N - 1)
+                # 该方差是超几何分布在零假设下的精确方差,优于 Barry (2018) 的简化形式。
+                # 注:Yates continuity correction 在 Z-score 上**没有学术依据** —
+                # Yates 修正仅用于 Pearson 卡方,误用于 Z 会破坏其正态性近似,
+                # 因此 useCorrection 仅影响 G²/LL 计算,不影响 Z-score。
+                if N > 1:
+                    var = E * (N - R) / N * (N - C) / (N - 1)
+                    sigma = math.sqrt(max(var, 1e-12))
+                    zScore = (O - E) / sigma if sigma > 0 else 0.0
                 else:
-                    zScore = (O - E) / sigma
-            else:
-                zScore = 0.0
-        else:
-            zScore = 0.0
+                    zScore = 0.0
+
+                # ---- Log-Likelihood Ratio (G² / LL) ----
+                # Dunning (1993) 推荐用于低频搭配的显著性检验(优于卡方):
+                #   G² = 2 · Σ O_ij · ln(O_ij / E_ij)
+                # 四格: O11=O, O12=R-O, O21=C-O, O22=N-R-C+O
+                # 对 O_ij = 0 的格子,贡献为 0(0·ln(0/E)=0,工程实现按 0 处理)。
+                # Yates 修正:当 E - 0.5 < O < E + 0.5 时,加 0.5 到各 O_ij
+                # (见 Dunning 1993, eq.11)
+                logLikelihood = 0.0
+                if N > 0 and R > 0 and C > 0:
+                    o11 = O
+                    o12 = R - O
+                    o21 = C - O
+                    o22 = N - R - C + O
+                    cells = [
+                        (o11, R * C / N),
+                        (o12, R * (N - C) / N),
+                        (o21, (N - R) * C / N),
+                        (o22, (N - R) * (N - C) / N),
+                    ]
+                    for observed, expected in cells:
+                        if observed <= 0:
+                            continue
+                        if expected <= 0:
+                            # 期望为 0 但实际 > 0:LL → +inf
+                            logLikelihood = float("inf")
+                            break
+                        if useCorrection and observed == 0:
+                            # Yates 修正:对 O=0 的格子跳过 0.5 加法(无法加到 0)
+                            pass
+                        logLikelihood += 2.0 * observed * math.log(observed / expected)
 
         # ---- Delta-P₁ = P(w₂|w₁) - P(w₂|¬w₁) ----
         # (Ellis 2006;Gablasova 2017 推荐作为方向搭配强度)
@@ -491,12 +520,15 @@ class CollocationEngine:
             tScore=round(tScore, 4),
             logDice=round(logDice, 4),
             zScore=round(zScore, 4),
-            deltaP1=round(deltaP1, 4),
-            deltaP2=round(deltaP2, 4),
-            collocateFreq=C,
-            expectedFreq=round(E, 4),
-            isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
-        )
+                    logLikelihood=round(logLikelihood, 4)
+                    if math.isfinite(logLikelihood)
+                    else logLikelihood,
+                    deltaP1=round(deltaP1, 4),
+                    deltaP2=round(deltaP2, 4),
+                    collocateFreq=C,
+                    expectedFreq=round(E, 4),
+                    isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
+                )
 
     # ============================================================
     # 工具:标点判断

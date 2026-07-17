@@ -11,6 +11,25 @@ CoNLL-U 格式(标准):
     # ID  FORM  LEMMA  UPOS  XPOS  FEATS  HEAD  DEPREL  DEPS  MISC
     1    我    _     r     _     _       2    SBV     _     _
     2    爱    _     v     _     _       0    ROOT    _     _
+
+学术严谨性说明
+--------------
+本模块提供两个后端:
+    1. HanLPDependencyParser — 调用 HanLP RESTful API(商业级,
+       基于 Transformer 与大规模标注数据;HanLP 团队 2020)。
+       输出符合 Universal Dependencies (UD) 标准,学术发表可直接引用。
+    2. RuleBasedDependencyParser — 基于 jieba 分词 + 启发式规则
+       的**降级方案**,无任何学术发表的依存分析后端作为支撑。
+       其规则仅覆盖常见汉语模式(的/地/得、介词、副词等),
+       **不可用于学术研究**;仅供教学演示或在没有外部依赖时使用。
+       严格学术场景应至少使用 HanLP 或 LTP(哈工大)或 spaCy-zh。
+
+References:
+    Nivre, J., et al. (2016). Universal Dependencies v1: A
+        multilingual treebank collection. LREC.
+    Che, W., Feng, Y., Qin, L., & Liu, T. (2020). N-LTP: An
+        Open-source Neural Language Technology Platform. arXiv.
+    HanLP 团队 (2020). HanLP: Han Language Processing.
 """
 
 from __future__ import annotations
@@ -311,12 +330,13 @@ class HanLPDependencyParser(DependencyParser):
     安装:
         pip install hanlp_restful
 
-    配置(两种方式,优先级递减):
-        1. 直接修改类常量 HanLPDependencyParser.HANLP_AUTH(当前采用此方式,密钥已写死)
+    配置(优先级递减,生产环境推荐方式 1):
+        1. 环境变量 HANLP_AUTH  (推荐)
         2. 启动参数传入 auth="..."
+        3. 直接修改类常量 HanLPDependencyParser.HANLP_AUTH(仅供演示)
 
     用法:
-        parser = HanLPDependencyParser()              # 默认使用写死的密钥
+        parser = HanLPDependencyParser()              # 默认从 env/常量加载
         parser = HanLPDependencyParser(auth="...")    # 显式传入自定义密钥
         if parser.isAvailable():
             result = parser.parse("我爱自然语言处理")
@@ -365,34 +385,39 @@ class HanLPDependencyParser(DependencyParser):
     HANLP_API_URL = "https://hanlp.hankcs.com/api"
     HANLP_LANGUAGE = "zh"  # 默认中文(可选: zh/en/ja/mul)
 
-    # HanLP RESTful 认证密钥(写死在此处,用户要求)
-    # ⚠️ 注意: 密钥与本仓库绑定。如需更换密钥,直接修改下面的常量即可。
-    HANLP_AUTH = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
+        # HanLP RESTful 认证密钥
+        # 优先级: 显式传入参数 > 环境变量 HANLP_AUTH > 类常量 HANLP_AUTH
+        # 安全建议: 生产环境应优先使用环境变量,以避免密钥泄露到代码仓库。
+        # 留作类常量的目的是为了演示/教学场景的开箱即用,不应直接用于公网部署。
+        HANLP_AUTH = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
 
-    # HanLP RESTful 联合任务的合法任务名(官方限制)
-    # 合法值:
-    #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
-    #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
-    # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
-    HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
+        # HanLP RESTful 联合任务的合法任务名(官方限制)
+        # 合法值:
+        #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
+        #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
+        # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
+        HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
 
-    def __init__(
-        self,
-        auth: Optional[str] = None,
-        url: Optional[str] = None,
-        language: Optional[str] = None,
-        timeout: float = 30.0,
-    ):
-        """初始化 HanLP RESTful 客户端
+        def __init__(
+            self,
+            auth: Optional[str] = None,
+            url: Optional[str] = None,
+            language: Optional[str] = None,
+            timeout: float = 30.0,
+        ):
+            """初始化 HanLP RESTful 客户端
 
-        Args:
-            auth: HanLP 认证密钥。None 时使用类常量 HANLP_AUTH(写死的密钥)
-            url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
-            language: 语言代码,默认 'zh'
-            timeout: HTTP 请求超时(秒)
-        """
-        self._client = None
-        self._auth = auth if auth is not None else self.HANLP_AUTH
+            Args:
+                auth: HanLP 认证密钥。优先级: 参数 > 环境变量 HANLP_AUTH > 类常量。
+                      强烈建议生产环境通过环境变量注入,避免密钥硬编码。
+                url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
+                language: 语言代码,默认 'zh'
+                timeout: HTTP 请求超时(秒)
+            """
+            self._client = None
+            # 优先级: 显式参数 > 环境变量 > 类常量
+            envAuth = os.environ.get("HANLP_AUTH")
+            self._auth = auth if auth is not None else envAuth or self.HANLP_AUTH
         self._url = url or self.HANLP_API_URL
         self._language = language or self.HANLP_LANGUAGE
         self._timeout = timeout

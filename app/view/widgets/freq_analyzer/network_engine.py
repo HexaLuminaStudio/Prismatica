@@ -16,6 +16,34 @@
     - 与 FreqAnalyzerWidget / ConcordanceWidget 共用 TextSegmenter
     - 复用 CorpusStore 的 effectiveTexts(),保证清洗/分词结果一致
     - 关键词优先(可选):仅保留包含关键词的共现关系
+
+学术依据与已知局限
+------------------
+本引擎采用**绝对共现频次**作为边权重(weight = O_{ij}),
+符合 AntConc 与 Sketch Engine 的默认行为。
+更严格的可选权重方案:
+    - PMI (Pointwise Mutual Information):
+        weight = log₂ P(w_i, w_j) / (P(w_i) · P(w_j))
+    - NPMI (Bouma 2009):
+        归一化到 [-1, +1],更利于跨语料比较
+    - Jaccard:
+        weight = |w_i ∩ w_j| / |w_i ∪ w_j|
+    - LogDice:
+        weight = 14 + log₂(2 · O / (f_i + f_j))
+当前默认使用频次权重,与 Gephi 等工具直接兼容;如需上述
+归一化权重,可在调用方对 network.graph 重写 edge 属性。
+
+社区发现采用 Clauset-Newman-Moore 贪心模块度优化
+(NetworkX greedy_modularity_communities),复杂度近似 O(n log² n),
+适用于 n < 10⁴ 的网络;更大网络建议改用 Louvain(Blondel et al. 2008)。
+
+References:
+    Fruchterman, T. M. J., & Reingold, E. M. (1991). Graph drawing
+        by force-directed placement. Software: Practice and Experience.
+    Clauset, A., Newman, M. E. J., & Moore, C. (2004). Finding
+        community structure in very large networks. Phys. Rev. E.
+    Bouma, G. (2009). Normalized (pointwise) mutual information in
+        collocation extraction. GSCL.
 """
 
 from __future__ import annotations

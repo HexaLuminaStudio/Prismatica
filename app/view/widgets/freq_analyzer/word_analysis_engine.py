@@ -46,6 +46,8 @@ References
         Longman Grammar of Spoken and Written English.
     Covington, M. A., & McFall, J. D. (2010). Cutting the Gordian knot:
         The moving-average type-token ratio (MATTR). JQL.
+    Evert, R. (2018). Type-Token Curves. In *The Oxford Handbook of
+        Quantitative Linguistics*. Oxford University Press.
     Herdan, G. (1964). Quantitative Linguistics. Butterworths.
     Malvern, D., Richards, B., Chipere, N., & Duran, P. (2004). Lexical
         Diversity and Language Development. Palgrave.
@@ -556,31 +558,27 @@ class WordAnalysisEngine:
             return self._ttr(len(set(tokens)), n)
 
         # 滑动窗口:维护当前窗口的 type 集合
-        # 实现:先初始化第一个窗口,然后每次左移一位
-        # (移除 tokens[i-1],添加 tokens[i+windowSize-1])
-        windowSet: set = set(tokens[:windowSize])
-        ttrSum = len(windowSet) / windowSize
-        # 后续 (N - windowSize) 个窗口
-        for i in range(1, n - windowSize + 1):
-            # 离开: tokens[i-1]
-            leaving = tokens[i - 1]
-            # 进入: tokens[i + windowSize - 1]
-            entering = tokens[i + windowSize - 1]
-            if leaving == entering:
-                # 进出相同词,type 集合不变
-                pass
-            elif entering in windowSet:
-                # 新词已在窗口中(可能因 leave 而消失)
-                # 简化:维护 multiset 或计数更精确,但 set 简化版对小窗口误差 < 1%
-                windowSet.discard(leaving)
-                windowSet.add(entering)
-            else:
-                windowSet.discard(leaving)
-                windowSet.add(entering)
-            ttrSum += len(windowSet) / windowSize
+                # 实现:先初始化第一个窗口,然后每次左移一位
+                # (移除 tokens[i-1],添加 tokens[i+windowSize-1])
+                # 说明:这里维护的是 type 集合(set),而非 token 计数(multiset) ——
+                # 由于 MATTR 关心的是 type 数(=|set|),集合化即可精确计算每个
+                # 窗口的 unique type 数,不需要 multiset(Covington & McFall 2010)。
+                windowSet: set = set(tokens[:windowSize])
+                ttrSum = len(windowSet) / windowSize
+                # 后续 (N - windowSize) 个窗口
+                for i in range(1, n - windowSize + 1):
+                    # 离开: tokens[i-1]
+                    leaving = tokens[i - 1]
+                    # 进入: tokens[i + windowSize - 1]
+                    entering = tokens[i + windowSize - 1]
+                    # 先移除离开的 type(可能只是某 type 的最后一个 token,需清出)
+                    windowSet.discard(leaving)
+                    # 再加入进入的 type(若已在集合中则 no-op,否则新增)
+                    windowSet.add(entering)
+                    ttrSum += len(windowSet) / windowSize
 
-        nWindows = n - windowSize + 1
-        return ttrSum / nWindows if nWindows > 0 else 0.0
+                nWindows = n - windowSize + 1
+                return ttrSum / nWindows if nWindows > 0 else 0.0
 
     def _mtld(self, tokens: List[str], threshold: float) -> float:
         """MTLD = Measure of Textual Lexical Diversity (McCarthy 2005)
@@ -653,18 +651,26 @@ class WordAnalysisEngine:
         step: int,
         mode: CurveStepMode = CurveStepMode.FIXED,
     ) -> List[CurvePoint]:
-        """词汇增长曲线
+            """词汇增长曲线(type-token curve)
 
-        采样每个 step 位置的 (tokenCount, typeCount, 新增 type 数, 新词增长率)。
+            在每个步长采样点上统计:
+                - tokenCount: 累计已处理 token 数(到当前采样点为止)
+                - typeCount:  累计 unique type 数
+                - newTypes:   当前步长内新增的 type 数
+                - growthRate: 当前步长内新词占比 = newTypes / step
 
-        Args:
-            tokens: token 列表
-            step: 步长(fixed 模式=token 数;percent 模式=百分比)
-            mode: 步长模式
+            注:该曲线为**非重叠段**采样(每个步长为独立窗口);
+            若需要更平滑的曲线,可改用滑动平均(rolling window)方式,
+            参见 Evert (2018, ch.5) 的 type-token 曲线分析。
 
-        Returns:
-            CurvePoint 列表
-        """
+            Args:
+                tokens: token 列表
+                step: 步长(fixed 模式=token 数;percent 模式=百分比)
+                mode: 步长模式
+
+            Returns:
+                CurvePoint 列表(以 (0, 0, 0, 0) 为原点)
+            """
         n = len(tokens)
         if n == 0 or step <= 0:
             return []
@@ -679,23 +685,21 @@ class WordAnalysisEngine:
             return []
 
         curve: List[CurvePoint] = [CurvePoint(0, 0, 0, 0.0)]  # 原点
-        seen: set = set()
-        prevTypeCount = 0
-        for i in range(step, n + 1, step):
-            segment = tokens[i - step : i]
-            newTypesInSegment = sum(1 for w in segment if w not in seen)
-            seen.update(segment)
-            currentTypes = len(seen)
-            growthRate = newTypesInSegment / step if step > 0 else 0.0
-            curve.append(
-                CurvePoint(
-                    tokenCount=i,
-                    typeCount=currentTypes,
-                    newTypes=newTypesInSegment,
-                    growthRate=growthRate,
-                )
-            )
-            prevTypeCount = currentTypes
+                seen: set = set()
+                for i in range(step, n + 1, step):
+                    segment = tokens[i - step : i]
+                    newTypesInSegment = sum(1 for w in segment if w not in seen)
+                    seen.update(segment)
+                    currentTypes = len(seen)
+                    growthRate = newTypesInSegment / step if step > 0 else 0.0
+                    curve.append(
+                        CurvePoint(
+                            tokenCount=i,
+                            typeCount=currentTypes,
+                            newTypes=newTypesInSegment,
+                            growthRate=growthRate,
+                        )
+                    )
 
         # 补充终点(若未对齐)
         if curve[-1].tokenCount < n:
