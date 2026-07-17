@@ -346,6 +346,12 @@ def _loadMaskFromImage(imagePath: str) -> Optional[np.ndarray]:
 def _buildColorFunc(scheme: ColorScheme) -> Optional[Callable]:
     """根据配色方案构造 wordcloud 库的 color_func
 
+    颜色稳定性说明:
+        使用 zlib.crc32 作为哈希函数(而非 Python 内置 hash())——
+        后者在每次进程启动时随机种子(PYTHONHASHSEED 默认为 random),
+        会导致同一词在不同进程/会话中得到不同颜色,破坏**学术可复现性**。
+        zlib.crc32 是确定性的,跨进程、跨平台结果一致。
+
     Returns:
         callable(word, font_size, position, orientation, font_path, random_state)
             → str (HEX 颜色,如 "#1890ff")
@@ -357,7 +363,6 @@ def _buildColorFunc(scheme: ColorScheme) -> Optional[Callable]:
     except Exception:
         cmap = plt.get_cmap("viridis")
 
-    # 预计算固定颜色表(基于 word 哈希,保证同一词同色)
     def colorFunc(
         word: str,
         font_size: int,
@@ -366,12 +371,11 @@ def _buildColorFunc(scheme: ColorScheme) -> Optional[Callable]:
         font_path: str,
         random_state,
     ):
-        # 哈希词 → 0..1 范围,保证稳定
-        h = hash(word) % 1000 / 1000.0
-        # 字体越大颜色越深的梯度(可选)
-        # 但 wordcloud 的内置 color_func 也支持 font_size 调制
+        # 使用确定性哈希(crc32)替代 Python 内置 hash(),保证跨进程同色
+        import zlib
+
+        h = (zlib.crc32(word.encode("utf-8")) & 0xFFFFFFFF) / 0xFFFFFFFF
         rgba = cmap(h)
-        # 转 HEX
         return "#{:02x}{:02x}{:02x}".format(
             int(rgba[0] * 255), int(rgba[1] * 255), int(rgba[2] * 255)
         )

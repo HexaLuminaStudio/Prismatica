@@ -609,8 +609,15 @@ class FrequencyAnalyzer:
             )
         df = pd.DataFrame(rows)
         if not df.empty:
-            df["Zipf"] = df["Freq"] * df["Rank"]  # Zipf 律参考值
-        return df
+                    # Zipf 律参考值(Rank × Freq):
+                    #   严格 Zipf 律 freq ∝ 1/Rank^α(α≈1.0),即 log Freq ≈ C - α·log Rank;
+                    #   若 α=1,则 Rank × Freq ≈ const(常数 C)。此处直接给出该乘积,
+                    #   作为「是否符合 Zipf 律」的快速诊断指标 ——
+                    #   若该列近似常数,说明语料接近理想 Zipf 分布。
+                    #   严格的 α 估计需对 (log Rank, log Freq) 做线性回归,
+                    #   见 computeZipf()。
+                    df["Zipf"] = df["Freq"] * df["Rank"]
+                return df
 
     def analyzeCorpus(
         self,
@@ -632,20 +639,62 @@ class FrequencyAnalyzer:
         return self.analyzeTexts(texts, sources=fileNames, minFreq=minFreq)
 
     def computeZipf(self, df: pd.DataFrame) -> pd.DataFrame:
-        """计算 Zipf 律参考列: ZipfFreq = Rank * Freq
+            """计算 Zipf 律参考列
 
-        Args:
-            df: analyzeCorpus 输出
+            严格 Zipf 律(Zipf 1935 / 1949):
+                Freq ∝ Rank^(-α),即 log₁₀ Freq = log₁₀ C - α · log₁₀ Rank
+            其中 α≈1.0 为理想 Zipf 分布(英语/汉语语料经验值 0.9~1.2,
+            Powers 1998 "Applications and explanations of Zipf's law")。
 
-        Returns:
-            加上 Zipf / LogRank / LogFreq 列的 DataFrame
-        """
-        if df.empty:
+            本方法输出:
+                LogRank: log₁₀(Rank)
+                LogFreq: log₁₀(Freq)
+                ZipfAlpha: 对 (LogRank, LogFreq) 做 OLS 线性回归的斜率取负
+                    —— 即 α 的最小二乘估计;若 |α-1| 较小则语料符合 Zipf 律
+                R2: 拟合优度(R²),越接近 1 表示越符合 Zipf 律
+
+            Args:
+                df: analyzeCorpus 输出
+
+            Returns:
+                加上 LogRank / LogFreq / ZipfAlpha / R2 列的 DataFrame
+            """
+            if df.empty:
+                return df
+            df = df.copy()
+            df["LogRank"] = df["Rank"].apply(lambda r: math.log10(r) if r > 0 else 0)
+            df["LogFreq"] = df["Freq"].apply(lambda f: math.log10(f) if f > 0 else 0)
+            # OLS 拟合 log₁₀ Freq = b - α · log₁₀ Rank
+            try:
+                valid = df[(df["LogRank"] > 0) & (df["LogFreq"] > 0)]
+                if len(valid) >= 2:
+                    xs = valid["LogRank"].values
+                    ys = valid["LogFreq"].values
+                    n = len(xs)
+                    meanX = xs.mean()
+                    meanY = ys.mean()
+                    num = ((xs - meanX) * (ys - meanY)).sum()
+                    den = ((xs - meanX) ** 2).sum()
+                    if den > 0:
+                        slope = num / den  # 斜率 = -α
+                        alpha = -slope
+                        # R² = 1 - SS_res/SS_tot
+                        ssTot = ((ys - meanY) ** 2).sum()
+                        intercept = meanY - slope * meanX
+                        ssRes = ((ys - (slope * xs + intercept)) ** 2).sum()
+                        r2 = 1 - ssRes / ssTot if ssTot > 0 else 0.0
+                        df["ZipfAlpha"] = alpha
+                        df["ZipfR2"] = r2
+                    else:
+                        df["ZipfAlpha"] = float("nan")
+                        df["ZipfR2"] = float("nan")
+                else:
+                    df["ZipfAlpha"] = float("nan")
+                    df["ZipfR2"] = float("nan")
+            except Exception:
+                df["ZipfAlpha"] = float("nan")
+                df["ZipfR2"] = float("nan")
             return df
-        df = df.copy()
-        df["LogRank"] = df["Rank"].apply(lambda r: math.log10(r) if r > 0 else 0)
-        df["LogFreq"] = df["Freq"].apply(lambda f: math.log10(f) if f > 0 else 0)
-        return df
 
     def generateNgrams(self, tokens: List[str], n: int = 2) -> List[Tuple[str, ...]]:
         """生成 N-gram
