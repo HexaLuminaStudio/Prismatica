@@ -1,57 +1,112 @@
-# Python 代码风格与命名规范（强制遵守）
+# CLAUDE.md
 
-**重要**：你是一位 Python 专家。在生成、修改或审查任何 Python 代码时，**必须严格遵循**以下命名与格式规范。这些规则优先于 PEP 8 的命名建议。
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 一、命名规则（核心）
+## 项目概览
 
-| 类别 | 规则 | 示例 |
-|------|------|------|
-| **变量（普通）** | 小驼峰（lowerCamelCase），首字母小写 | `userName`, `totalPrice`, `isActive` |
-| **函数（公开）** | 小驼峰，首字母小写 | `getUserInfo()`, `calculateTotal()` |
-| **函数（内部/私有）** | 小驼峰，前缀单下划线 `_` | `_parseData()`, `_validateInput()` |
-| **类名** | 大驼峰（UpperCamelCase），首字母大写 | `UserManager`, `OrderService` |
-| **常量** | 全大写，单词间用下划线 `_` | `MAX_RETRY_COUNT`, `DEFAULT_TIMEOUT` |
-| **类属性（公有）** | 小驼峰 | `self.userName`, `self.totalPrice` |
-| **类属性（受保护）** | 小驼峰，前缀单下划线 `_` | `self._cache`, `self._internalState` |
-| **类属性（私有）** | 小驼峰，前缀双下划线 `__`（名称修饰） | `self.__password` |
-| **方法参数** | 小驼峰（同变量） | `def send_email(recipient, subject):` |
-| **枚举成员** | 全大写，下划线分隔 | `class Color: RED = 1, GREEN = 2` |
-| **异常类** | 大驼峰，以 `Error` 或 `Exception` 结尾 | `class ValidationError(Exception):` |
-| **模块文件名** | 全小写，可含下划线（蛇形） | `user_service.py`, `data_parser.py` |
-| **包名（目录）** | 全小写，尽量简短，不用下划线 | `utils`, `models`, `api` |
-| **类型别名** | 大驼峰，或遵循变量风格 | `UserId = int`, `UserList = List[User]` |
+**Prismatica（棱溯客户端）** —— 中文学术语料处理桌面应用。基于 PySide6 + qfluentwidgets（Pro 版），提供 HSK / 全球中介语语料库下载、偏误统计、词频 / KWIC / 共现网络 / 句法依存 / 词云 / 情感 / 词语分析等功能，对标 AntConc 的中文场景。Python 3.11（见 `.python-version`），打包工具为 PyInstaller / Nuitka。
 
-## 二、缩写词特殊处理
+完整命名规范（强制优先于 PEP 8）见 [.github/instructions/命名规范.instructions.md](.github/instructions/命名规范.instructions.md) —— **每次修改 Python 代码前必须重读**。提交信息规范见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)，目录职责见 [.trae/rules/代码存放规则.md](.trae/rules/代码存放规则.md)。
 
-- 缩写词（如 URL, HTTP, ID）作为名称一部分时，**保持大写**；若在开头则全部小写：
-  - ✅ `httpRequest`, `userId`, `urlParser`
-  - ❌ 普通变量/函数中不要用 `HttpRequest`（类名除外，类名允许 `HttpRequest`）
+## 常用命令
 
-## 三、语义化前缀建议（非强制，但推荐）
+### 运行
+```bash
+# 启动 GUI（项目根目录）
+python main.py
+# 或通过 VS Code 调试：F5，配置见 .vscode/launch.json（program = main.py）
+```
 
-- **布尔变量/函数**：使用 `is_`、`has_`、`can_` 前缀 → `isActive`, `hasPermission`
-- **集合/容器**：使用复数形式 → `users`, `orderItems`
-- **回调/事件**：使用 `on` 或 `handle` → `onClick`, `handleDataReceived`
+### 依赖管理（uv）
+项目使用 `uv`，`pyproject.toml` + `uv.lock` 是依赖权威来源。`pyside6-fluent-widgets-pro` 不在 PyPI 上，通过本地 whl 安装（路径已在 `[tool.uv.sources]` 配置）。清华源已配置为默认 index。
+```bash
+uv sync                          # 安装所有依赖
+uv add <pkg>                     # 新增依赖
+uv run python main.py            # 在 venv 中运行
+```
 
-## 四、格式与结构
+### 测试 / Lint
+**目前未配置 pytest、ruff、mypy 等工具**（无 `pytest.ini`、无 `tests/` 目录、无 `[tool.ruff]` 等配置）。`test/` 目录存放的是 BCC / HSK 示例语料与 PySide6 示例工程，不参与单元测试。修改代码前请确认是否需要顺带搭建这些工具。
 
-- **缩进**：4 个空格，禁止 Tab
-- **行宽**：不超过 120 字符
-- **空行**：类之间空两行；方法之间空一行；类内第一个方法前空一行
-- **导入顺序**：标准库 → 第三方库 → 本地模块，每组间空一行，按字母排序
+### 资源编译
+`app/resource/resource.py` 由 Qt 从 `app/resource/resource.qrc` 自动生成，**不要手动编辑**。新增图标 / 图片后需重新编译 .qrc 才能在代码中通过 `:/app/icons/xxx` 引用。
 
-## 五、文档与注释
+### 打包
+`app/core/utils/setting.py` 中 `DEBUG = "__compiled__" not in globals()` 用于区分开发模式与 PyInstaller / Nuitka 打包后的 exe 环境。打包前的 `MODE = "DEV"` 在 `app/core/utils/setting.py` 末尾，可切换为 `"TEST"` / `"RES"`。
 
-- **文件头**：简要描述模块功能
-- **函数/方法 docstring**：使用三重双引号 `"""`，描述功能、参数、返回值、异常（推荐 Google 或 NumPy 风格）
-- **行内注释**：仅用于解释复杂逻辑，放在代码上方或右侧（与代码隔两个空格）
+## 架构
 
-## 六、特殊约定
+### 入口与生命周期
+- [main.py](main.py) —— 入口脚本。设置 `qfluentwidgetspro` License、`autoSetup(MODE)` 初始化日志、配置 DPI 缩放、创建 `QApplication`、实例化 `MainWindow`。
+- `MainWindow` (`app/view/main_window.py`) 继承自 `MSFluentWindow`，通过 `qfluentwidgets` 的 `NavigationItemPosition` 注册 6 个子界面（Hsk / Global / Bias / FreqAnalyzer 顶部，Task / Setting 底部）。`closeEvent` 会拦截有未完成任务时的退出。
 
-- **魔术方法**（如 `__init__`, `__str__`）保持 Python 原生双下划线风格
-- **测试函数**：允许以 `test_` 开头（pytest/unittest 惯例），此情况可豁免驼峰
-- **全局变量**：尽量避免；若必须，加 `g_` 前缀或放入配置模块
+### 分层（视图只能调服务，服务可调 API + Models）
+```
+app/
+├── core/
+│   ├── api/        外部接口封装（HTTP、下载）
+│   ├── models/     数据模型定义（目前空，预留 Pydantic/dataclass）
+│   ├── services/   业务逻辑 + 多线程 Worker（HSK 下载、Global 下载、TaskManager）
+│   └── utils/      通用工具（config、logger、license、encryption、setting、data_paths、signal_bus、constant、device_id）
+├── view/
+│   ├── *_interface.py     顶层子界面（每个导航项一个）
+│   ├── main_window.py     主窗口
+│   └── widgets/           可复用 QWidget 组件；每个功能模块一个子包
+└── resource/      Qt 资源（icons/*.svg, images/*.png, resource.qrc, 自动生成的 resource.py）
+```
 
-## 七、检查与执行
+**导入规则（强制）**：使用绝对导入，根包为 `app.core.*` / `app.view.*` / `app.resource.*`。视图层**只能**调用 `app.core.services`，禁止直接调 `app.core.api` 或操作 models。资源通过 `:/app/icons/xxx`、`:/app/images/xxx` 引用。
 
-在生成或修改代码时，请自动应用以上规则。若遇到与 PEP 8 命名冲突，**优先遵循本规范**。确保所有变量、函数、类、常量、属性、参数等均符合上述命名要求。如果发现已有代码不符合，请指出并给出修正建议。
+### 路径管理（数据文件唯一权威来源）
+所有运行时路径常量定义在 [app/core/utils/setting.py](app/core/utils/setting.py) 和 [app/core/utils/data_paths.py](app/core/utils/data_paths.py)。**严禁在代码中硬编码路径**。安装目录由 `sys.frozen` 区分开发模式（项目根）与打包后（exe 所在目录）。
+
+开发与打包目录结构一致：
+```
+<INSTALL_DIR>/
+├── config/        配置文件（config.json，gitignored）
+├── download/      用户下载的语料原始文件（gitignored）
+├── logs/          应用日志（gitignored）
+└── datas/
+    ├── corpora_registry.db    语料库注册表（全局唯一）
+    ├── corpus_state.json      当前/上次活动语料库记忆
+    ├── corpora/*.db           各语料库独立 SQLite
+    └── exports/{reports,charts,csv}/
+```
+
+`data_paths.py` 启动时会自动从旧路径 `<INSTALL_DIR>/app/data/` 迁移数据，新功能无需关心迁移。
+
+### 词频分析子包（最大且最复杂的模块）
+[app/view/widgets/freq_analyzer/](app/view/widgets/freq_analyzer/) 是核心分析模块，遵循 **「主面板 + 引擎 + 弹窗」** 拆分模式：
+- `*_widget.py` —— 主面板（QWidget + 业务编排）
+- `*_engine.py` —— 纯逻辑引擎（不依赖 Qt 控件，方便单测与复用）
+- `dialogs.py` —— 弹窗集中地
+- `corpus_store.py` + `corpus_manager.py` —— 语料存储与注册表
+- `token_cache.py` —— 分词结果缓存（带模型版本号与文本哈希，模型升级自动失效）
+- `clean_coordinator.py` —— 文本清洗调度
+- `presets/` —— 预置文件（HSK 词表等 JSON）
+
+子包公共 API 集中在 [`__init__.py`](app/view/widgets/freq_analyzer/__init__.py) 并通过 `__all__` 导出。新增 widget 时务必同步更新 `__all__` 和文件头注释。
+
+### 跨层通信
+- `signal_bus` (`app/core/utils/signal_bus.py`) —— 全局信号总线，用于解耦模块间事件。
+- `TaskManager.taskManager` (`app/core/services/task_manager.py`) 全局单例，统一管理所有下载 / 业务任务的 pending / in_progress / done / failed 状态；`main_window.closeEvent` 会询问并 `stopAllTasks()`。
+
+### 日志
+使用 loguru（`app/core/utils/logger.py`），启动时通过 `autoSetup(MODE)` 接管。日志文件落在 `<INSTALL_DIR>/logs/`。模块自带敏感信息过滤（API key、Token、邮箱、手机号、身份证号等正则模式在 `SENSITIVE_PATTERNS_LIST`）。`logger` 通过 `app.core.utils` 包统一导入使用，**不要直接 `from loguru import logger`**。
+
+### 关键第三方依赖
+- `PySide6` + `qfluentwidgetspro`（本地 whl）—— UI
+- `hanlp-restful` —— 中文 NLP（分词 / 词性 / 依存）
+- `jieba` —— 备用分词（fallback）
+- `pandas`, `openpyxl`, `python-docx` —— 语料导入
+- `matplotlib`, `networkx`, `wordcloud` —— 可视化
+- `loguru` —— 日志
+- `requests`, `bcrypt`, `cryptography`, `pyperclip`, `olefile`, `mlxtend`, `psutil` —— 杂项
+
+## 开发注意点
+
+- **命名规范优先于 PEP 8**：变量 / 函数 / 方法参数 / 类属性用 lowerCamelCase（`userName`），类名 UpperCamelCase，常量 `UPPER_SNAKE_CASE`，模块文件名 snake_case 但目录名小写无下划线。完整规则见上述链接。
+- **中文提交信息**：必须中文，按需求编号 + 动作（完成 / 修复 / 更新 / 重构 / 文档 / 配置）+ 标题，标题 ≤ 72 字符。详见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)。
+- **新功能流程**：在 `app/core/services/` 加业务服务 → 在 `app/view/widgets/` 加 UI 组件 → 在对应 `*_interface.py` 接入导航。视图层不要直接 import `app.core.api.*`。
+- **保存路径**：用户数据全部在 `INSTALL_DIR` 下派生，开发模式下即项目根目录，`config/`、`download/`、`logs/`、`datas/` 均被 `.gitignore` 排除，提交前不会被误纳入。
+- **路径常量**：所有数据文件路径统一从 `app.core.utils.data_paths` 或 `app.core.utils.setting` 取，不要在业务代码里写死。
