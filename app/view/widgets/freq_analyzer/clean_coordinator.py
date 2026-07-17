@@ -107,6 +107,18 @@ class CleanWorker(QRunnable):
             totalChars = 0
             chunkEmitAt = max(1, total // 20)  # 每 5% 报一次进度
 
+            # 是否在清洗阶段同时做 POS 标注(rule.posOnClean = True)
+            doPosOnClean = bool(getattr(self._rule, "posOnClean", False))
+            posTagFn = None
+            if doPosOnClean:
+                try:
+                    from app.view.widgets.freq_analyzer.freq_engine import posTagBatch
+
+                    posTagFn = posTagBatch
+                except Exception as e:
+                    logger.warning(f"[CleanWorker] 加载 posTagBatch 失败,跳过 POS: {e}")
+                    doPosOnClean = False
+
             for i, row in enumerate(rows):
                 if self._cancel:
                     logger.warning("[CleanWorker] 任务被取消")
@@ -117,7 +129,7 @@ class CleanWorker(QRunnable):
                 toCache.append((fileName, self._ruleHash, cleaned))
                 totalChars += len(cleaned)
                 if (i + 1) % chunkEmitAt == 0 or (i + 1) == total:
-                    pct = int(5 + (i + 1) / total * 90)
+                    pct = int(5 + (i + 1) / total * 80)
                     self.signals.progress.emit(pct, f"清洗中 ({i + 1}/{total})...")
 
             # 清理旧 hash 的 cache(避免脏数据堆积)
@@ -128,12 +140,17 @@ class CleanWorker(QRunnable):
                             "DELETE FROM clean_cache WHERE rule_hash = ?",
                             (self._oldRuleHash,),
                         )
+                        # 同时清理旧 hash 的 pos_cache
+                        self._store._conn.execute(
+                            "DELETE FROM pos_cache WHERE rule_hash = ?",
+                            (self._oldRuleHash,),
+                        )
                         self._store._conn.commit()
                 except Exception as e:
                     logger.warning(f"[CleanWorker] 清理旧 cache 失败: {e}")
 
             # 批量写回新 cache
-            self.signals.progress.emit(97, "写入缓存...")
+            self.signals.progress.emit(90, "写入缓存...")
             with self._store._lock:
                 self._store._conn.executemany(
                     """
@@ -146,6 +163,59 @@ class CleanWorker(QRunnable):
                     toCache,
                 )
                 self._store._conn.commit()
+
+            # 在清洗阶段同时做 POS 标注(若启用)
+            # 对清洗后的文本逐文件做词性标注,写入 pos_cache
+            if doPosOnClean and posTagFn is not None:
+                import json as _json
+
+                self.signals.progress.emit(92, "词性标注中...")
+                try:
+                    cleanedTexts = [text for _, _, text in toCache]
+                    fileNames = [name for name, _, _ in toCache]
+                    taggedBatch = posTagFn(cleanedTexts)
+                except Exception as e:
+                    logger.warning(f"[CleanWorker] POS 标注失败: {e}")
+                    taggedBatch = None
+
+                if taggedBatch:
+                    self.signals.progress.emit(95, "写入 POS 缓存...")
+                    try:
+                        with self._store._lock:
+                            self._store._conn.executemany(
+                                """
+                                INSERT INTO pos_cache(file_name, rule_hash, tagged_json)
+                                VALUES(?, ?, ?)
+                                ON CONFLICT(file_name, rule_hash) DO UPDATE SET
+                                    tagged_json = excluded.tagged_json,
+                                    updated_at = CURRENT_TIMESTAMP
+                                """,
+                                [
+                                    (
+                                        fn,
+                                        self._ruleHash,
+                                        _json.dumps(tagged, ensure_ascii=False),
+                                    )
+                                    for fn, tagged in zip(fileNames, taggedBatch)
+                                ],
+                            )
+                            self._store._conn.commit()
+                        logger.info(
+                            f"[CleanWorker] POS 标注完成: {len(taggedBatch)} 个文件"
+                        )
+                    except Exception as e:
+                        logger.warning(f"[CleanWorker] POS 缓存写入失败: {e}")
+            elif not doPosOnClean:
+                # 用户关闭了「清洗时同时标注」,清理当前 hash 的 pos_cache
+                try:
+                    with self._store._lock:
+                        self._store._conn.execute(
+                            "DELETE FROM pos_cache WHERE rule_hash = ?",
+                            (self._ruleHash,),
+                        )
+                        self._store._conn.commit()
+                except Exception as e:
+                    logger.warning(f"[CleanWorker] 清理 pos_cache 失败: {e}")
 
             elapsed = time.time() - start
             self.signals.progress.emit(100, f"清洗完成: {totalChars:,} 字符")
@@ -195,7 +265,14 @@ class CleanCoordinator(QObject):
         self._busy = False
         self._currentWorker: Optional[CleanWorker] = None
         self._currentHash: Optional[str] = None
+        # pending 队列:每次 scheduleClean 都入队,worker 完成后
+        # 取队尾(最后一次)作为最终目标,避免早期中间状态丢失。
         self._pendingRule: Optional[Tuple[Any, bool, str]] = None
+        # 重试 timer(单次):worker 期间若仍有 pending,完成后立即重试,
+        # 不再用周期性 singleShot 200ms 轮询(避免 CPU 占用与 timer 堆积)。
+        self._retryTimer = QTimer(self)
+        self._retryTimer.setSingleShot(True)
+        self._retryTimer.timeout.connect(self._flushPending)
 
         # 去抖 timer
         self._debounceTimer = QTimer(self)
@@ -222,6 +299,7 @@ class CleanCoordinator(QObject):
     def cancelPending(self):
         """取消正在等待去抖的请求(用于程序关闭等场景)"""
         self._debounceTimer.stop()
+        self._retryTimer.stop()
         self._pendingRule = None
 
     def isBusy(self) -> bool:
@@ -229,17 +307,25 @@ class CleanCoordinator(QObject):
 
     # ---------------- 内部 ----------------
     def _flushPending(self):
+        """提交 pending 规则到 worker(线程池)。
+
+        设计要点:
+            - 同一时刻只允许 1 个 worker 运行(_busy 互斥)
+            - 若当前 busy,把"还需要再 flush 一次"标记到 _retryTimer,
+              在 worker 完成/失败的回调里再触发,而非周期 singleShot 轮询
+            - pending 只有"最后一个",避免中间状态污染最终落盘规则
+        """
         if self._pendingRule is None:
             return
+        # 已经在跑:等当前 worker 完成后由 _onWorkerFinished / _onWorkerFailed 再次触发
+        if self._busy:
+            logger.debug("[CleanCoordinator] 正在清洗中,完成后会自动 flush")
+            return
+
         rule, enabled, ruleHash = self._pendingRule
         self._pendingRule = None
-
-        # 已经在跑:等待完成后再处理(避免并发任务互相覆盖)
-        if self._busy:
-            logger.debug("[CleanCoordinator] 上一次任务尚未完成,排队等待")
-            # 重新排队:再次 scheduleClean,但会再次进入 _flushPending
-            # 这里用一次性 200ms 轮询直到不 busy
-            QTimer.singleShot(200, self._flushPending)
+        # 二次防御:hash 已与当前一致(可能 flushPending 被多次触发)
+        if self._currentHash == ruleHash and enabled == self._store.cleanEnabled:
             return
 
         oldHash = self._currentHash
@@ -271,12 +357,13 @@ class CleanCoordinator(QObject):
         self._setBusy(False)
         self._currentWorker = None
 
-        # 取出最后一次 pending 的最终目标(防止 worker 期间多次 schedule 丢失)
+        # worker 期间用户可能再次 scheduleClean:
+        # - 有 pending:用最新的 pending 作为最终目标(用户停止输入 300ms 后的最后意图)
+        # - 无 pending:维持原规则
         target = self._pendingRule
         self._pendingRule = None
 
         try:
-            # 1) 通过 applyCleanRuleAsync 原子切换内存中的规则
             if target is not None:
                 finalRule, finalEnabled, finalHash = target
             else:
@@ -287,14 +374,14 @@ class CleanCoordinator(QObject):
 
             self._store.applyCleanRuleAsync(finalRule, finalEnabled, ruleHash=finalHash)
 
-            # 2) 持久化新规则 hash 与 enabled 标志
+            # 持久化新规则 hash 与 enabled 标志
             self._store._saveCleanRule(finalRule)
             self._store._saveCleanEnabled(finalEnabled)
 
-            # 3) 更新内部状态
+            # 更新内部状态
             self._currentHash = self._store._ruleHash(finalRule)
 
-            # 4) 通知所有订阅者
+            # 通知所有订阅者
             self._store.cleanRuleChanged.emit()
 
             logger.info(
@@ -307,9 +394,9 @@ class CleanCoordinator(QObject):
 
         self.cleanFinished.emit(elapsed, totalChars)
 
-        # 处理期间又有新规则进来(worker 期间多次 schedule)
+        # 期间又有新 schedule:用一次性 timer 短延迟后再次 flush(避免阻塞信号回调链)
         if self._pendingRule is not None:
-            self._flushPending()
+            self._retryTimer.start(0)
 
     def _onWorkerFailed(self, err: str):
         self._setBusy(False)
@@ -319,7 +406,7 @@ class CleanCoordinator(QObject):
 
         # 即使失败,也尝试处理 pending(用户已经停了)
         if self._pendingRule is not None:
-            self._flushPending()
+            self._retryTimer.start(0)
 
     def _setBusy(self, busy: bool):
         if busy != self._busy:

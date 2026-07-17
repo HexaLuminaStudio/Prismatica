@@ -132,6 +132,7 @@ class CleanRule:
         customRegexList: 用户自定义正则表达式列表（编译失败时跳过并告警）
         replaceMap: 自定义字符串替换字典 {from: to}
         lowercase: 是否在清洗阶段统一转为小写（与下游 caseSensitive 配合）
+        posOnClean: 是否在清洗阶段同时执行词性标注（写入 pos_cache 表）
     """
 
     removeEnglish: bool = False
@@ -143,6 +144,7 @@ class CleanRule:
     customRegexList: List[str] = field(default_factory=list)
     replaceMap: Dict[str, str] = field(default_factory=dict)
     lowercase: bool = False
+    posOnClean: bool = False  # 清洗时是否同时做 POS 标注
 
     def isEnabled(self) -> bool:
         """判断是否存在任意启用的清洗动作"""
@@ -157,6 +159,7 @@ class CleanRule:
                 bool(self.customRegexList),
                 bool(self.replaceMap),
                 self.lowercase,
+                self.posOnClean,
             ]
         )
 
@@ -561,11 +564,12 @@ class FrequencyAnalyzer:
         else:
             for text in texts:
                 tokens = self.segmenter.tokenize(text or "", useJieba=self.useJieba)
-                normalized = [
-                    self._normalize(t)
-                    for t in tokens
-                    if self._isValidToken(self._normalize(t))
-                ]
+                # P1-fix:每个 token 只计算一次 normalize,避免双 lower()
+                normalized: List[str] = []
+                for t in tokens:
+                    nt = self._normalize(t)
+                    if self._isValidToken(nt):
+                        normalized.append(nt)
                 tokenLists.append(normalized)
 
         # 2. 全局词频
@@ -609,14 +613,14 @@ class FrequencyAnalyzer:
             )
         df = pd.DataFrame(rows)
         if not df.empty:
-                # Zipf 律参考值(Rank × Freq):
-                #   严格 Zipf 律 freq ∝ 1/Rank^α(α≈1.0),即 log Freq ≈ C - α·log Rank;
-                #   若 α=1,则 Rank × Freq ≈ const(常数 C)。此处直接给出该乘积,
-                #   作为「是否符合 Zipf 律」的快速诊断指标 ——
-                #   若该列近似常数,说明语料接近理想 Zipf 分布。
-                #   严格的 α 估计需对 (log Rank, log Freq) 做线性回归,
-                #   见 computeZipf()。
-                df["Zipf"] = df["Freq"] * df["Rank"]
+            # Zipf 律参考值(Rank × Freq):
+            #   严格 Zipf 律 freq ∝ 1/Rank^α(α≈1.0),即 log Freq ≈ C - α·log Rank;
+            #   若 α=1,则 Rank × Freq ≈ const(常数 C)。此处直接给出该乘积,
+            #   作为「是否符合 Zipf 律」的快速诊断指标 ——
+            #   若该列近似常数,说明语料接近理想 Zipf 分布。
+            #   严格的 α 估计需对 (log Rank, log Freq) 做线性回归,
+            #   见 computeZipf()。
+            df["Zipf"] = df["Freq"] * df["Rank"]
         return df
 
     def analyzeCorpus(
@@ -639,62 +643,62 @@ class FrequencyAnalyzer:
         return self.analyzeTexts(texts, sources=fileNames, minFreq=minFreq)
 
     def computeZipf(self, df: pd.DataFrame) -> pd.DataFrame:
-            """计算 Zipf 律参考列
+        """计算 Zipf 律参考列
 
-            严格 Zipf 律(Zipf 1935 / 1949):
-                Freq ∝ Rank^(-α),即 log₁₀ Freq = log₁₀ C - α · log₁₀ Rank
-            其中 α≈1.0 为理想 Zipf 分布(英语/汉语语料经验值 0.9~1.2,
-            Powers 1998 "Applications and explanations of Zipf's law")。
+        严格 Zipf 律(Zipf 1935 / 1949):
+            Freq ∝ Rank^(-α),即 log₁₀ Freq = log₁₀ C - α · log₁₀ Rank
+        其中 α≈1.0 为理想 Zipf 分布(英语/汉语语料经验值 0.9~1.2,
+        Powers 1998 "Applications and explanations of Zipf's law")。
 
-            本方法输出:
-                LogRank: log₁₀(Rank)
-                LogFreq: log₁₀(Freq)
-                ZipfAlpha: 对 (LogRank, LogFreq) 做 OLS 线性回归的斜率取负
-                    —— 即 α 的最小二乘估计;若 |α-1| 较小则语料符合 Zipf 律
-                R2: 拟合优度(R²),越接近 1 表示越符合 Zipf 律
+        本方法输出:
+            LogRank: log₁₀(Rank)
+            LogFreq: log₁₀(Freq)
+            ZipfAlpha: 对 (LogRank, LogFreq) 做 OLS 线性回归的斜率取负
+                —— 即 α 的最小二乘估计;若 |α-1| 较小则语料符合 Zipf 律
+            R2: 拟合优度(R²),越接近 1 表示越符合 Zipf 律
 
-            Args:
-                df: analyzeCorpus 输出
+        Args:
+            df: analyzeCorpus 输出
 
-            Returns:
-                加上 LogRank / LogFreq / ZipfAlpha / R2 列的 DataFrame
-            """
-            if df.empty:
-                return df
-            df = df.copy()
-            df["LogRank"] = df["Rank"].apply(lambda r: math.log10(r) if r > 0 else 0)
-            df["LogFreq"] = df["Freq"].apply(lambda f: math.log10(f) if f > 0 else 0)
-            # OLS 拟合 log₁₀ Freq = b - α · log₁₀ Rank
-            try:
-                valid = df[(df["LogRank"] > 0) & (df["LogFreq"] > 0)]
-                if len(valid) >= 2:
-                    xs = valid["LogRank"].values
-                    ys = valid["LogFreq"].values
-                    n = len(xs)
-                    meanX = xs.mean()
-                    meanY = ys.mean()
-                    num = ((xs - meanX) * (ys - meanY)).sum()
-                    den = ((xs - meanX) ** 2).sum()
-                    if den > 0:
-                        slope = num / den  # 斜率 = -α
-                        alpha = -slope
-                        # R² = 1 - SS_res/SS_tot
-                        ssTot = ((ys - meanY) ** 2).sum()
-                        intercept = meanY - slope * meanX
-                        ssRes = ((ys - (slope * xs + intercept)) ** 2).sum()
-                        r2 = 1 - ssRes / ssTot if ssTot > 0 else 0.0
-                        df["ZipfAlpha"] = alpha
-                        df["ZipfR2"] = r2
-                    else:
-                        df["ZipfAlpha"] = float("nan")
-                        df["ZipfR2"] = float("nan")
+        Returns:
+            加上 LogRank / LogFreq / ZipfAlpha / R2 列的 DataFrame
+        """
+        if df.empty:
+            return df
+        df = df.copy()
+        df["LogRank"] = df["Rank"].apply(lambda r: math.log10(r) if r > 0 else 0)
+        df["LogFreq"] = df["Freq"].apply(lambda f: math.log10(f) if f > 0 else 0)
+        # OLS 拟合 log₁₀ Freq = b - α · log₁₀ Rank
+        try:
+            valid = df[(df["LogRank"] > 0) & (df["LogFreq"] > 0)]
+            if len(valid) >= 2:
+                xs = valid["LogRank"].values
+                ys = valid["LogFreq"].values
+                n = len(xs)
+                meanX = xs.mean()
+                meanY = ys.mean()
+                num = ((xs - meanX) * (ys - meanY)).sum()
+                den = ((xs - meanX) ** 2).sum()
+                if den > 0:
+                    slope = num / den  # 斜率 = -α
+                    alpha = -slope
+                    # R² = 1 - SS_res/SS_tot
+                    ssTot = ((ys - meanY) ** 2).sum()
+                    intercept = meanY - slope * meanX
+                    ssRes = ((ys - (slope * xs + intercept)) ** 2).sum()
+                    r2 = 1 - ssRes / ssTot if ssTot > 0 else 0.0
+                    df["ZipfAlpha"] = alpha
+                    df["ZipfR2"] = r2
                 else:
                     df["ZipfAlpha"] = float("nan")
                     df["ZipfR2"] = float("nan")
-            except Exception:
+            else:
                 df["ZipfAlpha"] = float("nan")
                 df["ZipfR2"] = float("nan")
-            return df
+        except Exception:
+            df["ZipfAlpha"] = float("nan")
+            df["ZipfR2"] = float("nan")
+        return df
 
     def generateNgrams(self, tokens: List[str], n: int = 2) -> List[Tuple[str, ...]]:
         """生成 N-gram
@@ -723,22 +727,55 @@ class FrequencyAnalyzer:
 
         Returns:
             DataFrame: Rank / Ngram / Freq / Range / Pct
+
+        Note:
+            P2-7 修复:启用词性过滤(self.posEnabled)时,N-gram 统计同步
+            应用该过滤(与 analyzeTexts 保持一致)。否则用户启用「仅保留
+            名词」后,unigram 表只显名词,但 bigram 表仍包含停用词 +
+            任意词性,出现频次不一致。
         """
         globalCounter: Counter = Counter()
         ngramToSources: Dict[Tuple[str, ...], set] = defaultdict(set)
 
         cleaned = self._precleanCorpus(fileToText)
-        for fileName, text in cleaned.items():
-            tokens = self.segmenter.tokenize(text or "", useJieba=self.useJieba)
-            normalized = [
-                self._normalize(t)
-                for t in tokens
-                if self._isValidToken(self._normalize(t))
-            ]
-            ngrams = self.generateNgrams(normalized, n=n)
-            globalCounter.update(ngrams)
-            for ng in set(ngrams):
-                ngramToSources[ng].add(fileName)
+
+        # P2-7 修复:词性过滤场景下,需要同时获取每个 token 的词性。
+        # 按文件批量调用 posTagBatch,避免逐文件重复 import。
+        # posTagBatch 与本类同模块,可直接引用。
+        usePosFilter = bool(self.posEnabled and self.posTags)
+
+        if usePosFilter:
+            # 走词性过滤路径
+            fileNames = list(cleaned.keys())
+            texts = [cleaned[name] or "" for name in fileNames]
+            posResults = posTagBatch(texts)
+            for fileName, tagged in zip(fileNames, posResults):
+                keptTokens: List[str] = []
+                for word, tag in tagged:
+                    if not word or not tag:
+                        continue
+                    if tag not in self.posTags:
+                        continue
+                    normalized = self._normalize(word)
+                    if self._isValidToken(normalized):
+                        keptTokens.append(normalized)
+                ngrams = self.generateNgrams(keptTokens, n=n)
+                globalCounter.update(ngrams)
+                for ng in set(ngrams):
+                    ngramToSources[ng].add(fileName)
+        else:
+            # 默认路径(无词性过滤)
+            for fileName, text in cleaned.items():
+                tokens = self.segmenter.tokenize(text or "", useJieba=self.useJieba)
+                normalized = [
+                    self._normalize(t)
+                    for t in tokens
+                    if self._isValidToken(self._normalize(t))
+                ]
+                ngrams = self.generateNgrams(normalized, n=n)
+                globalCounter.update(ngrams)
+                for ng in set(ngrams):
+                    ngramToSources[ng].add(fileName)
 
         total = sum(globalCounter.values())
         rows = []

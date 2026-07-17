@@ -255,6 +255,8 @@ class CollocationEngine:
         excludePunct: bool = True,
         significanceThreshold: float = 3.0,
         continuityCorrection: bool = False,
+        crossSentenceBoundary: bool = False,
+        sentenceBoundaryIndices: Optional[List[int]] = None,
     ) -> CollocationResult:
         """搭配分析
 
@@ -271,6 +273,12 @@ class CollocationEngine:
                 Church & Hanks 1990; 中文研究可调至 2.5~3.5)
             continuityCorrection: 是否启用 Yates 连续性修正
                 (仅对 O=0 或 E=O 等边界情况有意义,默认关闭)
+            crossSentenceBoundary: P1-2 修复 — 是否允许跨句边界取搭配词。
+                学术惯例默认 False:搭配关系应受句子边界约束
+                (Sinclair 1991, Stubbs 1995)。
+            sentenceBoundaryIndices: P1-2 修复 — 句子边界索引列表,
+                即「该位置的 token 之前有一个句子结束」。
+                若为 None 则按默认行为(全语料内统计,不切断)。
 
         Returns:
             CollocationResult
@@ -297,6 +305,10 @@ class CollocationEngine:
         if N == 0:
             logger.warning("[CollocationEngine] 语料为空,返回空结果")
             return CollocationResult(nodeWord=nodeWord, nodeKey=nodeKey)
+
+        # P1-2 修复:把句子边界索引转换成 set,O(1) 查询
+        # boundarySet[k] == True 表示「位置 k 之前存在句子边界」
+        boundarySet = set(sentenceBoundaryIndices) if sentenceBoundaryIndices else set()
 
         # 2) 全局频次统计
         totalFreq = Counter(normalizedTokens)
@@ -333,6 +345,9 @@ class CollocationEngine:
                 j = i - d
                 if j < 0:
                     break
+                # P1-2 修复:跨句切断。若该位置之前有句边界,不取该搭配。
+                if not crossSentenceBoundary and (j in boundarySet):
+                    break
                 w = normalizedTokens[j]
                 if excludePunct and self._isPunct(w):
                     continue
@@ -342,6 +357,10 @@ class CollocationEngine:
             for d in range(1, rightSpan + 1):
                 j = i + d
                 if j >= N:
+                    break
+                # P1-2 修复:跨句切断。节点词位置 i 处若存在句边界,
+                # 意味着 i 自身就是上一句的结束,不应向 i 右侧取。
+                if not crossSentenceBoundary and ((i + 1) in boundarySet):
                     break
                 w = normalizedTokens[j]
                 if excludePunct and self._isPunct(w):

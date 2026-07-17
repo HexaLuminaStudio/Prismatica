@@ -115,12 +115,13 @@ class TaskManager(QObject):
             return False
 
         # 连接信号
+        # finished 信号携带 (success, message, filePath),避免下游从 worker 属性读取
         worker.progress.connect(
             lambda progressInfo, tid=taskId: self.onTaskProgress(tid, progressInfo)
         )
         worker.finished.connect(
-            lambda success, message, tid=taskId: self.onTaskFinished(
-                tid, success, message
+            lambda success, message, filePath, tid=taskId: self.onTaskFinished(
+                tid, success, message, filePath or ""
             )
         )
         worker.failed.connect(lambda error, tid=taskId: self.onTaskFailed(tid, error))
@@ -165,7 +166,16 @@ class TaskManager(QObject):
             return True
 
     def stopTask(self, taskId: str) -> bool:
-        """停止任务"""
+        """停止任务。
+
+        P1-fix:不再持 RLock 调用 worker.wait(10000)。
+            持锁时 wait 最多 10s,期间跨线程反向持锁极易死锁,
+            且会冻结主线程 UI。改为:
+                1. 在锁内发出停止信号并摘出 worker 引用
+                2. 在锁外做短超时 wait(QThread.requestInterruption
+                   + isInterruptionRequested 由 worker run() 周期性检查)
+        """
+        # 阶段 1:在锁内完成取消标记与摘出 worker 引用
         with self.lock:
             # 检查是否在队列中
             if taskId in self.pendingQueue:
@@ -180,25 +190,55 @@ class TaskManager(QObject):
                 logger.warning(f"[TaskManager] 任务不在运行中: {taskId}")
                 return False
 
-            # 停止worker
-            worker = self.workers[taskId]
-            if worker:
-                worker.stop()
-                if not worker.wait(10000):
-                    logger.warning(f"[TaskManager] 任务停止超时: {taskId}")
+            worker = self.workers.pop(taskId)
+            self._requestStopLocked(worker)
+            cancelOk = True
 
-                if taskId in self.workers:
-                    del self.workers[taskId]
+        # 阶段 2:锁外做短超时 wait(不阻塞其他持锁者)
+        self._waitWorkerOutsideLock(worker, taskId, timeoutMs=2000)
 
-            # 更新数据库状态
+        # 阶段 3:更新数据库并通知(锁内做轻量操作)
+        with self.lock:
             taskControl.cancelTask(taskId)
             self.taskCancelled.emit(taskId)
             logger.info(f"[TaskManager] 停止任务: {taskId}")
-
-            # 处理队列中的下一个任务
             self.processQueue()
 
-            return True
+        return cancelOk
+
+    def _requestStopLocked(self, worker) -> None:
+        """在持锁状态下请求 worker 停止(不等待)。
+
+        优先调用 requestInterruption()(非阻塞、跨平台),
+        再调用 worker.stop()(项目内既有约定),两者皆为信号式通知。
+        """
+        try:
+            worker.requestInterruption()
+        except Exception:
+            pass
+        try:
+            if hasattr(worker, "stop"):
+                worker.stop()
+        except Exception:
+            pass
+
+    def _waitWorkerOutsideLock(
+        self, worker, taskId: str, timeoutMs: int = 2000
+    ) -> bool:
+        """在锁外等待 worker 停止,避免与 worker 内部持锁形成环路。
+
+        返回 True 表示已结束,False 表示超时。
+
+        设计:
+            - 用较短超时(默认 2s),大部分 stop() 后 worker 会快速响应
+            - 超时后仍发出 taskCancelled,worker.run() 完成后会通过
+              finished 信号回调 onTaskFinished 完成清理
+        """
+        try:
+            return bool(worker.wait(timeoutMs))
+        except Exception as e:
+            logger.warning(f"[TaskManager] wait worker 异常 {taskId}: {e}")
+            return False
 
     def pauseTask(self, taskId: str) -> bool:
         """暂停任务"""
@@ -266,24 +306,38 @@ class TaskManager(QObject):
             return result
 
     def stopAllTasks(self) -> int:
-        """停止所有任务"""
-        with self.lock:
-            stoppedCount = 0
+        """停止所有任务。
 
-            # 停止队列中的任务
+        P1-fix:不再在锁内调用 stopTask()(会导致嵌套持锁 + 嵌套 wait);
+            先在锁内批量收集 worker 引用与取消数据库记录,
+            再在锁外统一 wait。
+        """
+        # 阶段 1:锁内收集待取消的 worker 列表
+        workersToStop = []
+        with self.lock:
+            # 取消队列中的任务(不涉及 worker,直接做完)
             for taskId in self.pendingQueue.copy():
                 self.pendingQueue.remove(taskId)
                 taskControl.cancelTask(taskId)
                 self.taskCancelled.emit(taskId)
-                stoppedCount += 1
 
-            # 停止运行中的任务
-            for taskId in list(self.workers.keys()):
-                if self.stopTask(taskId):
-                    stoppedCount += 1
+            # 从 workers 字典中摘出所有 worker(用 pop 避免迭代时修改)
+            taskIds = list(self.workers.keys())
+            for taskId in taskIds:
+                worker = self.workers.pop(taskId)
+                workersToStop.append((taskId, worker))
 
+        stoppedCount = len(workersToStop)
+        # 阶段 2:锁外统一请求停止(不阻塞 UI)
+        for taskId, worker in workersToStop:
+            self._requestStopLocked(worker)
+        for taskId, worker in workersToStop:
+            self._waitWorkerOutsideLock(worker, taskId, timeoutMs=2000)
+
+        # 阶段 3:锁内做轻量收尾
+        with self.lock:
             logger.info(f"[TaskManager] 停止所有任务，共停止: {stoppedCount} 个")
-            return stoppedCount
+        return stoppedCount
 
     def shutdown(self):
         """关闭任务管理器"""
@@ -318,37 +372,60 @@ class TaskManager(QObject):
         taskControl.updateProgress(taskId, progress)
         self.taskProgress.emit(taskId, progressInfo)
 
-    def onTaskFinished(self, taskId: str, success: bool, message: str):
-        """处理任务完成"""
+    def onTaskFinished(
+        self, taskId: str, success: bool, message: str, filePath: str = ""
+    ):
+        """处理任务完成。
+
+        Args:
+            taskId: 任务 ID
+            success: 是否成功
+            message: 描述信息
+            filePath: 文件路径(来自 worker finished 信号参数,P1-fix)
+                     取代原先 `getattr(worker, 'filePath', None)` 的属性读取,
+                     避免 stop 后 worker 属性未设置的竞态。
+        """
+        # 阶段 1:锁内摘出 worker(轻量)
+        worker = None
         with self.lock:
-            worker = self.workers.get(taskId)
-            filePath = getattr(worker, 'filePath', None) if worker else None
+            worker = self.workers.pop(taskId, None)
 
-            if worker:
-                if not worker.wait(10000):
-                    logger.warning(f"[TaskManager] 任务线程停止超时: {taskId}")
-                del self.workers[taskId]
+        # 阶段 2:锁外做短超时 wait(finished 信号到达时 worker 通常已结束)
+        if worker is not None:
+            self._waitWorkerOutsideLock(worker, taskId, timeoutMs=200)
 
+        # 阶段 3:锁内做数据库与信号通知
+        with self.lock:
             if success:
-                taskControl.finishTask(taskId, {"message": message})
+                taskControl.finishTask(
+                    taskId, {"message": message, "filePath": filePath}
+                )
                 self.taskCompleted.emit(taskId, filePath or "")
                 logger.info(f"[TaskManager] 任务完成: {taskId}, filePath={filePath}")
             else:
                 taskControl.failTask(taskId, message)
                 self.taskFailed.emit(taskId, message)
-                logger.error(f"[TaskManager] 任务失败: {taskId}")
+                logger.error(f"[TaskManager] 任务失败: {taskId}, {message}")
 
             self.processQueue()
 
     def onTaskFailed(self, taskId: str, error: str):
-        """处理任务失败"""
-        with self.lock:
-            worker = self.workers.get(taskId)
-            if worker:
-                if not worker.wait(10000):
-                    logger.warning(f"[TaskManager] 任务线程停止超时: {taskId}")
-                del self.workers[taskId]
+        """处理任务失败。
 
+        P1-fix:不再持 RLock 调用 worker.wait(10000),
+        改为锁内摘出 → 锁外 wait(200ms) → 锁内通知。
+        """
+        # 阶段 1:锁内摘出 worker
+        worker = None
+        with self.lock:
+            worker = self.workers.pop(taskId, None)
+
+        # 阶段 2:锁外 wait(failed 信号到达时 worker 通常已结束)
+        if worker is not None:
+            self._waitWorkerOutsideLock(worker, taskId, timeoutMs=200)
+
+        # 阶段 3:锁内做数据库与信号通知
+        with self.lock:
             taskControl.failTask(taskId, error)
             self.taskFailed.emit(taskId, error)
             logger.error(f"[TaskManager] 任务失败: {taskId}, 错误: {error}")

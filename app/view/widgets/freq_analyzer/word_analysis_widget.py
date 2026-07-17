@@ -260,10 +260,96 @@ class WordAnalysisWidget(QWidget):
     # 语料库绑定
     # ------------------------------------------------------------------
     def setCorpusStore(self, store):
+        if self._corpusStore is store:
+            return
         self._corpusStore = store
         tokenCache = store.tokenCache() if store is not None else None
         self._segmenter = TextSegmenter(tokenCache=tokenCache)
+        # 切换语料库时清空旧分析结果,避免与新语料错配
+        self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
+
+    def _resetResultsForCorpusSwitch(self) -> None:
+        """切换语料库时清空所有分析结果与 UI(P0-fix)
+
+        设计依据:CorpusStore 是多语料库共享引用,切换时旧库结果不能
+        继续显示在新语料上(否则表格中的频次/TTR/MTLD 与新语料不一致)。
+        """
+        self._lastMetrics = None
+        # 清空表格
+        for tbl in (
+            getattr(self, "_highFreqTable", None),
+            getattr(self, "_distTable", None),
+        ):
+            if tbl is not None:
+                try:
+                    tbl.setRowCount(0)
+                except Exception:
+                    pass
+        # 清空 type-token 曲线
+        ax = getattr(self, "_ax", None)
+        canvas = getattr(self, "_canvas", None)
+        if ax is not None:
+            try:
+                ax.clear()
+                ax.set_title("词汇增长曲线 (Type-Token Curve)", fontsize=12)
+                ax.set_xlabel("Tokens")
+                ax.set_ylabel("Types")
+                ax.grid(True, linestyle="--", alpha=0.5)
+                ax.text(
+                    0.5,
+                    0.5,
+                    "已切换语料库,请重新分析",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=12,
+                    color="#888",
+                )
+            except Exception:
+                pass
+        if canvas is not None:
+            try:
+                canvas.draw_idle()
+            except Exception:
+                pass
+        # 取消正在运行的 worker
+        worker = getattr(self, "_worker", None)
+        if worker is not None and worker.isRunning():
+            try:
+                worker.cancel()
+                worker.wait(200)
+            except Exception:
+                pass
+            self._worker = None
+        # 摘要卡片复位
+        summary = getattr(self, "_summary", None)
+        if summary is not None:
+            try:
+                summary.clear()
+                summary.setPlaceholder("已切换语料库,请重新分析")
+            except Exception:
+                pass
+        mc = getattr(self, "_metricsCards", None)
+        if mc is not None:
+            try:
+                mc.clear()
+                mc.setPlaceholder("已切换语料库,请重新分析")
+            except Exception:
+                pass
+        # 高频词覆盖率标签复位
+        cov = getattr(self, "coverageLabel", None)
+        if cov is not None:
+            try:
+                cov.setText("")
+            except Exception:
+                pass
+        # 导出按钮复位
+        try:
+            if hasattr(self, "exportBtn"):
+                self.exportBtn.setEnabled(False)
+        except Exception:
+            pass
 
     def _bindCorpusStore(self, store):
         """订阅语料库变化信号"""

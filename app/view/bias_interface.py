@@ -49,12 +49,19 @@ from qfluentwidgets import (
     VerticalSeparator,
 )
 from qfluentwidgetspro import RoundTableWidget
+
+# matplotlib 必须使用 QtAgg(在 FigureCanvasQTAgg 导入前)
+# 用 force=True 确保即使 MPLBACKEND=Agg 也能切换
+import matplotlib
+
+matplotlib.use("QtAgg", force=True)
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 import pyperclip
 import re
+from typing import Dict, List, Tuple
 
 # 偏误类型定义
 CHARACTERS_TYPES = {
@@ -1780,6 +1787,120 @@ class AssociationRulesDialog(MessageBoxBase):
         )
 
 
+class MatchingWorker(QThread):
+    """偏误匹配后台线程（P1-fix）
+
+    设计要点：
+    - 正则在 __init__ 中一次性预编译，避免内层循环反复 re.compile
+    - 输入数据在主线程已转换为不可变 List/Tuple 基础类型，
+      工作线程无需触碰 pandas DataFrame，避免线程安全问题
+    - 通过 requestInterruption() 支持取消
+    """
+
+    progress = Signal(int, str)
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        rows: List[Tuple[str, int, str, str, str]],
+        compiledPatterns: List[Tuple[str, "re.Pattern[str]", bool]],
+        charInput: str,
+        wordInput: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        # rows: List[(fileName, excelRow, text, level, country)]
+        self._rows = rows
+        # compiledPatterns: List[(errorName, compiled_pattern, hasContent)]
+        self._patterns = compiledPatterns
+        self._charInput = charInput
+        self._wordInput = wordInput
+
+    def cancel(self) -> None:
+        self.requestInterruption()
+
+    def run(self) -> None:
+        try:
+            records: List[Tuple[str, int, str, str, str, str, str]] = []
+            typeCounts: Dict[str, int] = {}
+            heatmapData: Dict[
+                Tuple[str, str], List[Tuple[str, int, str, str, str, str]]
+            ] = {}
+            heatmapGroups: List[str] = []
+            seenGroup: set = set()
+
+            total = max(1, len(self._rows))
+            for i, (fileName, excelRow, text, rowLevel, rowCountry) in enumerate(
+                self._rows
+            ):
+                if self.isInterruptionRequested():
+                    return
+                if i % 200 == 0:
+                    self.progress.emit(int((i / total) * 100), f"匹配中 {i}/{total}")
+
+                for errorName, pattern, hasContent in self._patterns:
+                    for match in pattern.finditer(text):
+                        if hasContent:
+                            content = match.group(1) if match.lastindex else ""
+                            if not content:
+                                content = match.group()
+                        else:
+                            content = match.group()
+
+                        # 字符/词过滤
+                        if self._charInput and self._charInput not in content:
+                            continue
+                        if self._wordInput and self._wordInput not in content:
+                            continue
+
+                        typeCounts[errorName] = typeCounts.get(errorName, 0) + 1
+                        records.append(
+                            (
+                                fileName,
+                                excelRow,
+                                text,
+                                errorName,
+                                content,
+                                rowLevel,
+                                rowCountry,
+                            )
+                        )
+
+                        # 收集热力图分组数据
+                        for groupVal in (rowLevel, rowCountry):
+                            if groupVal == "未知":
+                                continue
+                            key = (errorName, groupVal)
+                            if key not in heatmapData:
+                                heatmapData[key] = []
+                            heatmapData[key].append(
+                                (
+                                    fileName,
+                                    excelRow,
+                                    text,
+                                    content,
+                                    rowLevel,
+                                    rowCountry,
+                                )
+                            )
+                            if groupVal not in seenGroup:
+                                seenGroup.add(groupVal)
+                                heatmapGroups.append(groupVal)
+
+            self.progress.emit(100, f"完成，共 {len(records)} 条命中")
+            payload = {
+                "records": records,
+                "typeCounts": typeCounts,
+                "heatmapData": heatmapData,
+                "heatmapGroups": heatmapGroups,
+            }
+            self.finished.emit(payload)
+        except Exception as e:
+            logger.exception("[MatchingWorker] 匹配异常")
+            self.failed.emit(str(e))
+
+
 class BiasInterface(QWidget):
     """HSK 偏误分析主界面"""
 
@@ -2268,7 +2389,14 @@ class BiasInterface(QWidget):
         self.columnCombobox.setEnabled(False)
 
     def _runMatching(self):
-        """执行匹配分析"""
+        """执行匹配分析（P1-fix）
+
+        重构：
+        - 正则在启动时一次性 re.compile，避免内层循环反复编译
+        - 把 100MB×25 类型×10 万行的匹配移到 MatchingWorker(QThread)，
+          防止主线程冻结
+        - 主线程仅负责数据收集 + UI 渲染
+        """
         if not self.dfs:
             InfoBar.warning(
                 "提示",
@@ -2311,6 +2439,19 @@ class BiasInterface(QWidget):
             )
             return
 
+        # P1-fix:启动前若已有 worker,先清理旧实例,避免线程泄漏
+        oldWorker = getattr(self, "_matchingWorker", None)
+        if oldWorker is not None:
+            try:
+                if hasattr(oldWorker, "cancel"):
+                    oldWorker.cancel()
+                if oldWorker.isRunning():
+                    oldWorker.wait(1000)
+                oldWorker.deleteLater()
+            except Exception:
+                pass
+            self._matchingWorker = None
+
         charInput = self.charLineEdit.text().strip()
         wordInput = self.wordLineEdit.text().strip()
 
@@ -2321,7 +2462,16 @@ class BiasInterface(QWidget):
         self.heatmapData = {}
         self.heatmapGroups = []
         self.tableWidget.setRowCount(0)
+        self.totalCounts = None
 
+        # P1-fix:预编译正则在主线程一次性完成,避免内层循环重复 re.compile
+        compiledPatterns: List[Tuple[str, "re.Pattern[str]", bool]] = []
+        for errorName in selectTypes:
+            patternStr, hasContent = ERROR_TYPES[errorName]
+            compiledPatterns.append((errorName, re.compile(patternStr), hasContent))
+
+        # 把 DataFrame 行转成不可变 tuple list,工作线程不触碰 pandas
+        rows: List[Tuple[str, int, str, str, str]] = []
         for filePath, df in self.dfs.items():
             if self.selectedColumn not in df.columns:
                 continue
@@ -2329,7 +2479,6 @@ class BiasInterface(QWidget):
             textSeries = df[self.selectedColumn].astype(str).fillna("")
             fileName = os.path.basename(filePath)
 
-            # 预提取等级与国籍列（按 idx 索引）
             levelSeries = (
                 df[self.levelColumn].astype(str).fillna("")
                 if self.levelColumn
@@ -2345,7 +2494,6 @@ class BiasInterface(QWidget):
                 if not text or text == "nan":
                     continue
 
-                # 当前行对应的等级/国籍（优先用于热力图分组）
                 rowLevel = levelSeries.iloc[idx] if levelSeries is not None else ""
                 rowCountry = (
                     countrySeries.iloc[idx] if countrySeries is not None else ""
@@ -2355,75 +2503,9 @@ class BiasInterface(QWidget):
                     rowCountry if rowCountry and rowCountry != "nan" else "未知"
                 )
 
-                for errorName in selectTypes:
-                    patternStr, hasContent = ERROR_TYPES[errorName]
-                    pattern = re.compile(patternStr)
+                rows.append((fileName, idx + 2, text, rowLevel, rowCountry))
 
-                    for match in re.finditer(pattern, text):
-                        if hasContent:
-                            content = match.group(1) if match.lastindex else ""
-                            if not content:
-                                content = match.group()
-                        else:
-                            content = match.group()
-
-                        # 过滤
-                        matchFilter = True
-                        if charInput and charInput not in content:
-                            matchFilter = False
-                        elif wordInput and wordInput not in content:
-                            matchFilter = False
-
-                        if matchFilter:
-                            self.typeCounts[errorName] += 1
-                            self.currentRecords.append(
-                                (
-                                    fileName,
-                                    idx + 2,
-                                    text,
-                                    errorName,
-                                    content,
-                                    rowLevel,
-                                    rowCountry,
-                                )
-                            )
-
-                            # 收集热力图分组数据（等级与国籍各自分组）
-                            for groupVal in (rowLevel, rowCountry):
-                                if groupVal == "未知":
-                                    continue
-                                key = (errorName, groupVal)
-                                if key not in self.heatmapData:
-                                    self.heatmapData[key] = []
-                                self.heatmapData[key].append(
-                                    (
-                                        fileName,
-                                        idx + 2,
-                                        text,
-                                        content,
-                                        rowLevel,
-                                        rowCountry,
-                                    )
-                                )
-                                if groupVal not in self.heatmapGroups:
-                                    self.heatmapGroups.append(groupVal)
-
-        # 填充表格
-        self.tableWidget.setRowCount(len(self.currentRecords))
-        for i, (fname, rowNum, sentence, errName, mark, level, country) in enumerate(
-            self.currentRecords
-        ):
-            self.tableWidget.setItem(i, 0, QTableWidgetItem(fname))
-            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(rowNum)))
-            self.tableWidget.setItem(i, 2, QTableWidgetItem(sentence))
-            self.tableWidget.setItem(i, 3, QTableWidgetItem(errName))
-            self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
-            self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
-            self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
-
-        self.totalCounts = {name: self.typeCounts[name] for name in selectTypes}
-
-        if not self.currentRecords:
+        if not rows:
             InfoBar.warning(
                 "提示",
                 "未匹配到任何偏误",
@@ -2433,6 +2515,81 @@ class BiasInterface(QWidget):
                 InfoBarPosition.TOP_RIGHT,
                 self,
             )
+            return
+
+        # 启动后台 worker
+        self.analyzeBtn.setEnabled(False)
+        worker = MatchingWorker(
+            rows=rows,
+            compiledPatterns=compiledPatterns,
+            charInput=charInput,
+            wordInput=wordInput,
+            parent=self,
+        )
+        worker.progress.connect(self._onMatchingProgress)
+        worker.finished.connect(self._onMatchingFinished)
+        worker.failed.connect(self._onMatchingFailed)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        self._matchingWorker = worker
+        self._matchingSelectTypes = list(selectTypes)
+        worker.start()
+
+    def _onMatchingProgress(self, pct: int, msg: str) -> None:
+        self.statusLabel.setText(f"[{pct}%] {msg}")
+
+    def _onMatchingFinished(self, payload: dict) -> None:
+        """后台匹配完成,主线程消费结果并刷新 UI"""
+        self.analyzeBtn.setEnabled(True)
+        records = payload["records"]
+        typeCounts = payload["typeCounts"]
+        self.currentRecords = records
+        self.heatmapData = payload["heatmapData"]
+        self.heatmapGroups = payload["heatmapGroups"]
+
+        # 同步 typeCounts（仅 update 已选类型）
+        for name, count in typeCounts.items():
+            self.typeCounts[name] = count
+
+        selectTypes = getattr(self, "_matchingSelectTypes", [])
+        self.totalCounts = {name: self.typeCounts[name] for name in selectTypes}
+
+        # 填充表格
+        self.tableWidget.setRowCount(len(records))
+        for i, (fname, rowNum, sentence, errName, mark, level, country) in enumerate(
+            records
+        ):
+            self.tableWidget.setItem(i, 0, QTableWidgetItem(fname))
+            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(rowNum)))
+            self.tableWidget.setItem(i, 2, QTableWidgetItem(sentence))
+            self.tableWidget.setItem(i, 3, QTableWidgetItem(errName))
+            self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
+            self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
+            self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
+
+        if not records:
+            InfoBar.warning(
+                "提示",
+                "未匹配到任何偏误",
+                Qt.Orientation.Horizontal,
+                True,
+                2000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+
+    def _onMatchingFailed(self, err: str) -> None:
+        self.analyzeBtn.setEnabled(True)
+        logger.error(f"[Bias] 匹配失败: {err}")
+        InfoBar.error(
+            "错误",
+            f"匹配失败: {err}",
+            Qt.Orientation.Horizontal,
+            True,
+            3000,
+            InfoBarPosition.TOP_RIGHT,
+            self,
+        )
 
     def _runCount(self):
         """显示计数结果"""

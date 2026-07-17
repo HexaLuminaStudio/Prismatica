@@ -209,11 +209,7 @@ class SentimentWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        # 语料状态卡(只读)
-        from app.view.widgets.freq_analyzer.concordance_widget import CorpusStatusCard
-
-        self._corpusStatusCard = CorpusStatusCard(self, corpusStore=self._corpusStore)
-        layout.addWidget(self._corpusStatusCard)
+        # 语料状态卡(只读)已移除
 
         # 参数 + 操作卡片
         layout.addWidget(self._buildActionCard())
@@ -232,7 +228,7 @@ class SentimentWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("1. 分析参数", card))
+        layout.addWidget(StrongBodyLabel("分析参数", card))
 
         row = QHBoxLayout()
         self.runBtn = PrimaryPushButton("开始分析", card)
@@ -291,7 +287,7 @@ class SentimentWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("3. 情感分布(FR-SNT-004)", card))
+        layout.addWidget(StrongBodyLabel("情感分布(FR-SNT-004)", card))
 
         # 创建一个 Figure,内含两个子图:饼图 + 柱状图
         self._figure = Figure(figsize=(10, 4), dpi=100, facecolor="#fafafa")
@@ -314,7 +310,7 @@ class SentimentWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("4. 逐句分析(选中文件查看)", card))
+        layout.addWidget(StrongBodyLabel("逐句分析(选中文件查看)", card))
 
         # 文件选择
         row = QHBoxLayout()

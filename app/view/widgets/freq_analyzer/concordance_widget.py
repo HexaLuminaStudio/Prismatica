@@ -147,9 +147,20 @@ class ConcordanceWorker(QThread):
         self._sampleLimit = sampleLimit
         self._sampleRandom = sampleRandom
 
+    def cancel(self) -> None:
+        """请求取消任务(由 UI 线程调用)"""
+        self.requestInterruption()
+
     def run(self):
         try:
-            self.progress.emit("正在检索节点词...")
+            # P2-8 修复:阶段回调,worker → UI signal
+            def _onProgress(stageMsg: str):
+                if self.isInterruptionRequested():
+                    return
+                self.progress.emit(stageMsg)
+
+            if self.isInterruptionRequested():
+                return
             result = self._engine.search(
                 fileToText=self._fileToText,
                 searchWord=self._searchWord,
@@ -161,7 +172,10 @@ class ConcordanceWorker(QThread):
                 secondaryRegex=self._secondaryRegex,
                 sampleLimit=self._sampleLimit,
                 sampleRandom=self._sampleRandom,
+                progressCallback=_onProgress,
             )
+            if self.isInterruptionRequested():
+                return
             self.progress.emit(f"完成：共 {result.totalMatches} 条命中")
             self.finished.emit(result)
         except Exception as e:
@@ -269,9 +283,7 @@ class CorpusStatusCard(CardWidget):
         # 清洗状态徽章(新建)
         self._cleanBadge = CaptionLabel("", self)
         self._cleanBadge.setWordWrap(True)
-        self._cleanBadge.setStyleSheet(
-            "color: #888; font-size: 11px; padding: 2px 0;"
-        )
+        self._cleanBadge.setStyleSheet("color: #888; font-size: 11px; padding: 2px 0;")
         layout.addWidget(self._cleanBadge)
 
         self._hintLabel = CaptionLabel(
@@ -374,9 +386,19 @@ class CorpusStatusCard(CardWidget):
 
         if enabled:
             if eff is None:
-                # enabled=True 但无规则:不会发生,但兜底
-                text = "🟢 清洗已启用"
-                color = "#2c8a4a"
+                # 缓存尚未预热(后台清洗进行中)或无规则
+                coverage = status.get("cacheCoverage")
+                if (
+                    coverage is not None
+                    and coverage.get("total", 0) > 0
+                    and coverage.get("coverage", 1.0) < 1.0
+                ):
+                    pct = int(coverage["coverage"] * 100)
+                    text = f"⏳ 清洗后台预热中…  {coverage['cached']}/{coverage['total']} 文件已就绪 ({pct}%)"
+                    color = "#1677ff"
+                else:
+                    text = "🟢 清洗已启用"
+                    color = "#2c8a4a"
             else:
                 saved = raw - eff
                 if saved > 0:
@@ -385,9 +407,7 @@ class CorpusStatusCard(CardWidget):
                         f"（节省 {saved:,} 字符 / {raw:,}）"
                     )
                 else:
-                    text = (
-                        f"🟢 清洗已启用 → {eff:,} 字符（与原文相同）"
-                    )
+                    text = f"🟢 清洗已启用 → {eff:,} 字符（与原文相同）"
                 color = "#2c8a4a"
         elif hasRule:
             # ⚠️ 关键状态:有规则但开关关着 — 容易被忽视
@@ -443,9 +463,6 @@ class ConcordanceWidget(QWidget):
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
-        # 把 store 同步给语料状态卡
-        if hasattr(self, "_corpusStatusCard") and self._corpusStatusCard is not None:
-            self._corpusStatusCard.setStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store) -> None:
@@ -492,19 +509,9 @@ class ConcordanceWidget(QWidget):
         scrollLayout.setContentsMargins(0, 0, 0, 0)
         scrollLayout.setSpacing(12)
 
-        scrollLayout.addWidget(self._buildCorpusCard())
         scrollLayout.addWidget(self._buildSearchCard())
         scrollLayout.addWidget(self._buildResultCard())
         scrollLayout.addStretch(1)
-
-    def _buildCorpusCard(self) -> "CorpusStatusCard":
-        """语料状态卡（只读）
-
-        使用共享的 CorpusStatusCard，统一展示风格与「词频分析」页面的语料来源卡一致。
-        """
-        card = CorpusStatusCard(self, corpusStore=self._corpusStore)
-        self._corpusStatusCard = card  # 保留引用，setCorpusStore 时调用 setStore
-        return card
 
     def _buildSearchCard(self) -> CardWidget:
         """检索参数卡片"""
@@ -513,7 +520,7 @@ class ConcordanceWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("2. 检索参数", card))
+        layout.addWidget(StrongBodyLabel("检索参数", card))
 
         # 节点词
         row1 = QHBoxLayout()
@@ -638,7 +645,7 @@ class ConcordanceWidget(QWidget):
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("3. 检索结果", card))
+        layout.addWidget(StrongBodyLabel("检索结果", card))
 
         # 统计栏(FR-KWC-007,使用统一 ResultSummary 大指标卡)
         from app.view.widgets.freq_analyzer.result_summary import (
@@ -735,12 +742,22 @@ class ConcordanceWidget(QWidget):
         self._resetSecondary(silent=True)
 
     def closeEvent(self, event) -> None:
-        """关闭前取消后台任务，避免线程悬挂"""
-        for w in (self._worker,):
-            if w is not None and w.isRunning():
-                if hasattr(w, "cancel"):
-                    w.cancel()
-                w.wait(2000)
+        """关闭前取消后台任务,避免线程悬挂或泄漏(P0-fix)
+
+        关键修复:wait() 之后必须调用 deleteLater(),让 Qt 在事件循环中
+        安全释放 QThread 资源,避免旧 worker 对象泄漏。
+        """
+        worker = self._worker
+        if worker is not None:
+            try:
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+                if worker.isRunning():
+                    worker.wait(2000)
+            except Exception:
+                pass
+            worker.deleteLater()
+            self._worker = None
         super().closeEvent(event)
 
     # ------------------------------------------------------------------

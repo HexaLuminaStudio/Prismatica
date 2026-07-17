@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS clean_cache (
     PRIMARY KEY (file_name, rule_hash)
 );
 
+-- 词性标注缓存(按 file_name + rule_hash 缓存清洗后文本的 POS 标注)
+-- 存储为 JSON 字符串:[(word, tag), (word, tag), ...]
+CREATE TABLE IF NOT EXISTS pos_cache (
+    file_name    TEXT NOT NULL,
+    rule_hash    TEXT NOT NULL,
+    tagged_json  TEXT NOT NULL,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (file_name, rule_hash)
+);
+
 -- 分词结果缓存(按 text_hash + backend + model_version 缓存 token 列表)
 -- 用于加速重复分词:同一文本只分词一次
 CREATE TABLE IF NOT EXISTS token_cache (
@@ -231,6 +241,13 @@ class CorpusStore(QObject):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        # P2-fix:大库查询性能 PRAGMA,避免反复访问磁盘
+        # - cache_size=-65536 ≈ 64MB 页缓存
+        # - temp_store=MEMORY 把临时表/索引放内存
+        # - mmap_size=256MB 启用内存映射读,适合大文件顺序扫描
+        conn.execute("PRAGMA cache_size=-65536")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")
         return conn
 
     def _initSchema(self) -> None:
@@ -239,7 +256,26 @@ class CorpusStore(QObject):
             self._conn.commit()
 
     def close(self) -> None:
-        """关闭数据库连接(应用退出时调用)。"""
+        """关闭数据库连接(应用退出时调用)。
+
+        关闭流程:
+            1. flush TokenCache 待写入队列(避免 token 落盘丢失)
+            2. 清空 TokenCache L1(释放进程内缓存,防止 OOM 残留)
+            3. 关闭 SQLite 连接
+        """
+        # 1) 先刷 token cache 待写入数据,确保已分词的 token 不丢失
+        try:
+            self.flushTokenCache(maxWait=1.0)
+        except Exception as e:
+            logger.warning(f"[CorpusStore] flushTokenCache 失败: {e}")
+        # 2) 清空 L1 进程内缓存,释放内存(P0-fix:防止 OOM)
+        cache = getattr(self, "_tokenCache", None)
+        if cache is not None:
+            try:
+                cache.clear()
+            except Exception as e:
+                logger.warning(f"[CorpusStore] TokenCache.clear 失败: {e}")
+        # 3) 关闭 SQLite 连接
         with self._lock:
             try:
                 self._conn.close()
@@ -560,6 +596,11 @@ class CorpusStore(QObject):
         """根据当前清洗规则返回最终文本,带按规则指纹的缓存。
 
         性能:首次访问会清洗全部文本;之后只要规则不变,直接从缓存读取。
+
+        注意:此方法可能在主线程被调用(P0-2 修复)。若 cache 完全缺失,
+        大批量语料会导致卡顿;对实时性要求高的场景请改用
+        `effectiveTextsFromCacheOnly()` + 后台 `scheduleClean(...)`
+        预热缓存,或调用方用 `effectiveTextsAsync()` 异步刷新。
         """
         if not self._cleanEnabled:
             return self.rawTexts
@@ -611,6 +652,62 @@ class CorpusStore(QObject):
                 self._conn.commit()
         return result
 
+    def effectiveTextsFromCacheOnly(self) -> Dict[str, str]:
+        """仅从 clean_cache 读取清洗后文本;缺失的文件不返回。
+
+        UI 层可在缓存尚未预热时调用此方法,避免主线程现场清洗导致卡顿。
+        cache 完全就绪后,行为与 effectiveTexts() 一致。
+        """
+        if not self._cleanEnabled:
+            return self.rawTexts
+
+        ruleHash = self._ruleHash(self._cleanRule)
+        result: Dict[str, str] = {}
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                SELECT d.file_name, c.cleaned_text
+                FROM documents d
+                LEFT JOIN clean_cache c
+                  ON c.file_name = d.file_name AND c.rule_hash = ?
+                ORDER BY d.file_name
+                """,
+                (ruleHash,),
+            )
+            for row in cur.fetchall():
+                if row["cleaned_text"] is not None:
+                    result[row["file_name"]] = row["cleaned_text"]
+        return result
+
+    def cacheCoverage(self) -> Dict[str, float]:
+        """返回当前规则下 cache 覆盖率(供 UI 提示「数据准备中」)。
+
+        Returns:
+            {"total": int, "cached": int, "coverage": float ∈ [0,1]}
+        """
+        if not self._cleanEnabled:
+            total = self.fileCount()
+            return {"total": total, "cached": total, "coverage": 1.0}
+
+        ruleHash = self._ruleHash(self._cleanRule)
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN c.cleaned_text IS NOT NULL THEN 1 ELSE 0 END) AS cached
+                FROM documents d
+                LEFT JOIN clean_cache c
+                  ON c.file_name = d.file_name AND c.rule_hash = ?
+                """,
+                (ruleHash,),
+            )
+            row = cur.fetchone()
+            total = int(row["total"] or 0)
+            cached = int(row["cached"] or 0)
+        cov = cached / total if total > 0 else 1.0
+        return {"total": total, "cached": cached, "coverage": cov}
+
     def fileCount(self) -> int:
         with self._lock:
             cur = self._conn.execute("SELECT COUNT(*) AS n FROM documents")
@@ -629,23 +726,21 @@ class CorpusStore(QObject):
         - 当 clean_enabled=False:返回 None(此时有效文本 = 原文)
         - 当 clean_enabled=True 且 clean_cache 中已有当前规则的 cache:
           直接 SUM(cleaned_text 长度) — 极快
-        - 否则:现场清洗所有 raw — 可能较慢,通常只在首次/规则变更时调用
+        - 否则:缓存覆盖不足,降级使用原文长度作为近似值(避免主线程现场清洗卡顿)
+        - 返回 None 表示「清洗未启用」
 
         Returns:
             - None 表示「清洗未启用」
-            - int 表示「清洗后将生效的字符数」
+            - int 表示「清洗后将生效的字符数」(缓存覆盖完全时为精确值)
         """
         if not self._cleanEnabled:
             return None
         ruleHash = self._ruleHash(self._cleanRule)
-        cleaner = self._cleanerInstance()
-        if cleaner.rule is not self._cleanRule:
-            cleaner.setRule(self._cleanRule)
 
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT d.file_name, d.raw_text, c.cleaned_text
+                SELECT d.raw_text, c.cleaned_text
                 FROM documents d
                 LEFT JOIN clean_cache c
                   ON c.file_name = d.file_name AND c.rule_hash = ?
@@ -654,13 +749,19 @@ class CorpusStore(QObject):
             ).fetchall()
 
         total = 0
+        allCached = True
         for row in rows:
-            raw = row["raw_text"]
             cached = row["cleaned_text"]
             if cached is not None:
                 total += len(cached)
             else:
-                total += len(cleaner.clean(raw))
+                # 缓存缺失:避免主线程清洗,降级用 raw_text 长度作为近似。
+                # 用户应等待 CleanCoordinator 后台完成预热。
+                total += len(row["raw_text"] or "")
+                allCached = False
+        # 缓存未完全就绪时返回 None(供 UI 显示「准备中」徽章)
+        if not allCached and rows:
+            return None
         return total
 
     def cleaningStatus(self) -> dict:
@@ -671,16 +772,23 @@ class CorpusStore(QObject):
             hasRule:        bool - 是否配置了任何清洗规则
             ruleHash:       str  - 当前规则 hash(前缀 8 位)
             rawChars:       int  - 原文总字符数
-            effectiveChars: Optional[int] - 清洗后总字符数(None = 未启用)
+            effectiveChars: Optional[int] - 清洗后总字符数(None = 未启用或缓存未就绪)
+            cacheCoverage:  Optional[dict] - 缓存覆盖度 {total, cached, coverage}
         """
         raw = self.totalChars()
         eff = self.effectiveChars()
+        coverage = None
+        try:
+            coverage = self.cacheCoverage()
+        except Exception:
+            coverage = None
         return {
             "enabled": bool(self._cleanEnabled),
             "hasRule": bool(self._cleanRule.isEnabled()),
             "ruleHash": self._ruleHash(self._cleanRule)[:8],
             "rawChars": raw,
             "effectiveChars": eff,
+            "cacheCoverage": coverage,
         }
 
     # ---------------- Token 缓存接口 ----------------
@@ -696,6 +804,179 @@ class CorpusStore(QObject):
         cache = self.tokenCache()
         if cache is not None:
             cache.flush(maxWait=maxWait)
+
+    # ---------------- POS 标注缓存 ----------------
+    def upsertPosCache(
+        self,
+        fileName: str,
+        ruleHash: str,
+        taggedJson: str,
+    ) -> None:
+        """写入单文件的 POS 标注结果(JSON 字符串)"""
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO pos_cache(file_name, rule_hash, tagged_json)
+                VALUES(?, ?, ?)
+                ON CONFLICT(file_name, rule_hash) DO UPDATE SET
+                    tagged_json = excluded.tagged_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (fileName, ruleHash, taggedJson),
+            )
+            self._conn.commit()
+
+    def clearPosCache(self, ruleHash: Optional[str] = None) -> None:
+        """清理 POS 缓存;ruleHash 为空时清空全部"""
+        with self._lock:
+            if ruleHash:
+                self._conn.execute(
+                    "DELETE FROM pos_cache WHERE rule_hash = ?",
+                    (ruleHash,),
+                )
+            else:
+                self._conn.execute("DELETE FROM pos_cache")
+            self._conn.commit()
+
+    def getPosCache(
+        self,
+        ruleHash: Optional[str] = None,
+    ) -> Dict[str, List[Tuple[str, str]]]:
+        """读取所有文件的 POS 标注缓存。
+
+        Args:
+            ruleHash: 仅返回该规则 hash 的缓存;None 时按文件取最新一行。
+
+        Returns:
+            {file_name: [(word, tag), ...]}
+        """
+        result: Dict[str, List[Tuple[str, str]]] = {}
+        import json as _json
+
+        with self._lock:
+            if ruleHash:
+                rows = self._conn.execute(
+                    """
+                    SELECT file_name, tagged_json
+                    FROM pos_cache
+                    WHERE rule_hash = ?
+                    """,
+                    (ruleHash,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT file_name, tagged_json
+                    FROM pos_cache
+                    """,
+                ).fetchall()
+        for row in rows:
+            try:
+                tagged = _json.loads(row["tagged_json"])
+                if isinstance(tagged, list):
+                    result[row["file_name"]] = [
+                        (str(w), str(t)) for w, t in tagged if w and t
+                    ]
+            except Exception as e:
+                logger.warning(
+                    f"[CorpusStore] pos_cache JSON 解析失败({row['file_name']}): {e}"
+                )
+        return result
+
+    def posCacheCoverage(self, ruleHash: str) -> Dict[str, float]:
+        """返回当前 rule_hash 下 pos_cache 覆盖率,供 UI 提示。"""
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN c.tagged_json IS NOT NULL THEN 1 ELSE 0 END) AS cached
+                FROM documents d
+                LEFT JOIN pos_cache c
+                  ON c.file_name = d.file_name AND c.rule_hash = ?
+                """,
+                (ruleHash,),
+            )
+            row = cur.fetchone()
+            total = int(row["total"] or 0)
+            cached = int(row["cached"] or 0)
+        cov = cached / total if total > 0 else 1.0
+        return {"total": total, "cached": cached, "coverage": cov}
+
+    # ---------------- POS 语料导出 ----------------
+    def exportPosCorpus(
+        self,
+        exportPath: str,
+        ruleHash: Optional[str] = None,
+        format: str = "conll",
+    ) -> Dict[str, int]:
+        """导出当前 POS 标注缓存为语料文件。
+
+        Args:
+            exportPath: 目标文件路径
+            ruleHash:  使用的清洗规则 hash(用于定位 pos_cache 行);
+                       None 时按每文件「最新一行」选取
+            format:    "conll" - 每个 token 一行 word/tag + 空行分句
+                       "tsv"   - 每个 token 一行 word\\ttag
+                       "jsonl" - 每行 {"word":..., "tag":...}
+
+        Returns:
+            {"files": int, "tokens": int}
+        """
+        import json as _json
+
+        cache = self.getPosCache(ruleHash=ruleHash)
+        if not cache:
+            return {"files": 0, "tokens": 0}
+
+        lines: List[str] = []
+        totalTokens = 0
+        for fileName, tagged in cache.items():
+            if not tagged:
+                continue
+            totalTokens += len(tagged)
+            if format == "jsonl":
+                # JSON Lines:每行一个对象
+                lines.append(f"# FILE: {fileName}")
+                for word, tag in tagged:
+                    lines.append(
+                        _json.dumps(
+                            {"word": word, "tag": tag},
+                            ensure_ascii=False,
+                        )
+                    )
+                lines.append("")  # 文件间空行
+            elif format == "tsv":
+                lines.append(f"# FILE\t{fileName}")
+                for word, tag in tagged:
+                    # 用 tab 分隔,escape 换行/制表符
+                    safeWord = (
+                        word.replace("\\", "\\\\")
+                        .replace("\t", "\\t")
+                        .replace("\n", "\\n")
+                    )
+                    lines.append(f"{safeWord}\t{tag}")
+                lines.append("")
+            else:
+                # CoNLL-U 风格:每个 token 一行,文件间空行
+                lines.append(f"# FILE: {fileName}")
+                idx = 0
+                for word, tag in tagged:
+                    idx += 1
+                    lines.append(f"{idx}\t{word}\t_\t{tag}\t_\t_\t_\t_\t_")
+                lines.append("")
+
+        try:
+            from pathlib import Path as _Path
+
+            p = _Path(exportPath)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            return {"files": len(cache), "tokens": totalTokens}
+        except Exception as e:
+            logger.exception(f"[CorpusStore] POS 导出失败: {e}")
+            raise
 
     # ---------------- FTS5 加速接口 ----------------
     def kwicCandidates(self, searchWord: str) -> List[str]:

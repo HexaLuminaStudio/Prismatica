@@ -610,7 +610,7 @@ class WordAnalysisEngine:
         return (forward + backward) / 2.0
 
     def _mtldOneDirection(self, tokens: List[str], threshold: float) -> float:
-        """单向 MTLD 计算(辅助方法)"""
+        """单向 MTLD 计算(辅助方法,P1-6 修复)"""
         n = len(tokens)
         if n == 0:
             return 0.0
@@ -632,15 +632,26 @@ class WordAnalysisEngine:
                 typeSet.clear()
                 tokenCount = 0
 
-        # 处理尾部不足一因子的部分:按比例计入
+        # 处理尾部不足一因子的部分:按比例计入(P1-6 修复)
         if tokenCount > 0:
             tailTtr = len(typeSet) / tokenCount
             tailDrop = 1.0 - tailTtr
-            # 不足一因子,按 tailDrop / targetDrop 比例折算
+            # P1-6 修复:
+            # - 极端情况下 tokenCount == 1,此时 tailTtr == 1.0,
+            #   tailDrop == 0,折算为 0,导致 factors 仅由正向完成因子构成。
+            #   在样本极短时(< 1 因子),MTLD 会退化为 n(几乎总是 n)
+            #   而不可解释。此处用 min(1.0, ...) 限制尾因子最大为 1 个,
+            #   保证短文本也能产出有意义的因子计数。
             if targetDrop > 0:
-                factors += tailDrop / targetDrop
+                # 尾因子折算比例:tailDrop / targetDrop,
+                # 限制在 [0, 1] 区间,避免极少数情况下出现 > 1 的折算
+                partialFactor = min(1.0, max(0.0, tailDrop / targetDrop))
+                factors += partialFactor
 
-        return n / factors if factors > 0 else float(n)
+        # P1-6 修复:避免 factors = 0 导致返回 n(极短语料时无意义)
+        if factors <= 0:
+            return float(n)
+        return n / factors
 
     # ============================================================
     # Type-Token 曲线

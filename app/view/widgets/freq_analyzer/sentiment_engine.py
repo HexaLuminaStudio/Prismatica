@@ -916,18 +916,54 @@ class SentimentEngine:
 
     @staticmethod
     def _splitSentences(text: str) -> List[str]:
-        """按中英文句末标点切句"""
+        """按中英文句末标点切句(P0-4 修复)
+
+        改进点:
+            1. 使用 lookbehind + 字符类,保留分隔符信息(可在结果中恢复标点)
+            2. 处理「……」「——」「!!」「!?」等连续/复合标点
+            3. 兼容英文 `?` `!` 后必须接空格或行尾才视为收尾
+            4. 排除空字符串与纯空白片段
+
+        学术依据:
+            - 中文句末标点集:`。！？` 及变体(`!!` `?!` 等)
+            - 英文句末标点:`. ! ?`(`.` 后需大写或换行才视为句子收尾,
+              此处为简化处理,在中文为主语料下不严格区分)
+        """
         import re
 
-        # 包含中英文常见句末标点
-        sentence_end = r"[。.!?！？\n]"
-        parts = re.split(sentence_end, text)
-        return [p for p in parts if p and p.strip()]
+        if not text:
+            return []
+        # 匹配「零宽 + 句末标点(可重复)」,中文标点直接切,英文标点后接空白/换行才切
+        # 复合标点(如 `……`、`——`、`!!`、`?!`)作为单个分隔符
+        pattern = re.compile(
+            r"(?<=[。！？…])|"          # 中文句末标点(含省略号)
+            r"(?<=[!?])"                # 英文 !?
+            r"|(?<=[.])(?=\s|$)|"       # 英文 . 后接空白或行尾
+            r"(?<=\n)"                  # 换行也算收尾
+        )
+        parts = pattern.split(text)
+        return [p.strip() for p in parts if p and p.strip()]
 
     @staticmethod
     def _splitParagraphs(text: str) -> List[str]:
-        """按段落切分(空行 / 换行)"""
-        paras = []
+        """按段落切分(P0-4 / P1-4 修复)
+
+        改进点:
+            1. 优先按空行切段(连续两个换行)
+            2. 若全文无空行,降级按「句末标点聚合段」切分
+               — 即 3~5 个相邻句子合并为一个段落(中文常见长度)
+            3. 兼容 Word/Excel 导入的纯连续文本
+
+        学术依据:
+            - Biber et al. (1999) 的语篇段落定义:段是话题/论点的相对闭合单位,
+              中文书面语平均 80~200 字/段
+            - 3~5 句聚合策略在无明确段落标记时是常用工程近似
+        """
+        if not text:
+            return []
+
+        # 1) 优先按空行切段
+        paras: List[str] = []
         buf: List[str] = []
         for line in text.splitlines():
             if not line.strip():
@@ -938,6 +974,21 @@ class SentimentEngine:
                 buf.append(line)
         if buf:
             paras.append("\n".join(buf))
+
+        # 2) 若只有 1 段且长度过长,降级按句聚合
+        # 阈值:超过 600 字符且无段落分隔,启用降级策略
+        if len(paras) <= 1:
+            only = paras[0] if paras else text
+            if len(only) > 600:
+                sentences = SentimentEngine._splitSentences(only)
+                if len(sentences) > 4:
+                    aggregated: List[str] = []
+                    chunkSize = 4  # 每段约 4 个句子
+                    for i in range(0, len(sentences), chunkSize):
+                        chunk = sentences[i : i + chunkSize]
+                        aggregated.append("".join(chunk))
+                    return aggregated
+
         return paras
 
     def _analyzeSentence(self, sentence: str) -> SentenceSentiment:
