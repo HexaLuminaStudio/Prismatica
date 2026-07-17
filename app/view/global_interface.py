@@ -161,6 +161,7 @@ class GlobalInterface(QWidget):
             if w.exec():
                 # 用户确认，创建下载任务
                 from app.core.services import taskManager
+
                 taskId = taskManager.createTask("globalDownload", infoDict)
                 logger.info(f"[Global] 创建下载任务成功, taskId={taskId}")
 
@@ -197,14 +198,21 @@ class GlobalInterface(QWidget):
             # 字符串一般检索、词语搭配检索、按词性检索
             if not baseDict.get("keystr"):
                 return (False, "keyword")
-        elif "shou" in baseDict or "kaishi" in baseDict or "jieshu" in baseDict or "wei" in baseDict:
+        elif (
+            "shou" in baseDict
+            or "kaishi" in baseDict
+            or "jieshu" in baseDict
+            or "wei" in baseDict
+        ):
             # 特定条件检索：至少需要填写一个条件
-            hasCondition = any([
-                baseDict.get("shou"),
-                baseDict.get("kaishi"),
-                baseDict.get("jieshu"),
-                baseDict.get("wei"),
-            ])
+            hasCondition = any(
+                [
+                    baseDict.get("shou"),
+                    baseDict.get("kaishi"),
+                    baseDict.get("jieshu"),
+                    baseDict.get("wei"),
+                ]
+            )
             if not hasCondition:
                 return (False, "condition")
         return (True, None)
@@ -212,7 +220,9 @@ class GlobalInterface(QWidget):
     def _showInputError(self, errorType: str, currentWidget):
         """显示输入错误提示"""
         if errorType == "keyword":
-            target = getattr(currentWidget, "keyWord", None) or getattr(currentWidget, "speechPartLineEdit", None)
+            target = getattr(currentWidget, "keyWord", None) or getattr(
+                currentWidget, "speechPartLineEdit", None
+            )
             content = "请输入关键字"
         elif errorType == "condition":
             target = (

@@ -1,10 +1,12 @@
 """词频分析模块的弹窗组件集合
 
 包含:
-    - ZipfDialog:           Zipf 曲线图弹窗
-    - NgramDialog:          N-gram 频率统计弹窗
-    - SelectColumnDialog:   Excel 列名选择对话框
-    - CleanPreviewDialog:   清洗前后对比预览对话框
+    - ZipfDialog:               Zipf 曲线图弹窗
+    - NgramDialog:              N-gram 频率统计弹窗
+    - SelectColumnDialog:       Excel 列名选择对话框
+    - CleanPreviewDialog:       清洗前后对比预览对话框
+    - AdvancedSettingsDialog:   词频分析高级参数弹窗（主词频最低频次 / N-gram 阶数 / N-gram 最低频次）
+    - StopwordsDialog:          停用词导入与编辑弹窗
 """
 
 from typing import Dict, List, Optional
@@ -25,9 +27,13 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    FluentIcon,
     MessageBoxBase,
     PlainTextEdit,
     PushButton,
+    RadioButton,
+    SpinBox,
+    StrongBodyLabel,
 )
 from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 
@@ -37,6 +43,12 @@ from .ui_helpers import (
     _makeScrollArea,
     _setupDialogClose,
     _showInfoBar,
+)
+from .freq_engine import (
+    defaultStopwords,
+    loadStopwordsFromFile,
+    parseStopwordsFromText,
+    saveStopwordsToFile,
 )
 
 
@@ -466,3 +478,463 @@ class CleanPreviewDialog(MessageBoxBase):
         edit.setFixedHeight(180)
         v.addWidget(edit, 1)
         return wrap
+
+
+class AdvancedSettingsDialog(MessageBoxBase):
+    """词频分析高级参数设置弹窗
+
+    收纳从主页参数行移出的"次要"选项，避免主页参数行拥挤：
+        - 主词频最低频次（unigramMinFreq）
+        - N-gram 阶数      （ngramN）
+        - N-gram 最低频次  （ngramMinFreq）
+
+    弹窗行为：
+        - 点「确定」→ 调用 self.accept()，外部读取 _getSettings() 同步到主页控件
+        - 点「取消」→ 调用 self.reject()，外部不读取，保留原值
+        - 点关闭按钮 → 同「取消」
+
+    API:
+        settings = AdvancedSettingsDialog.getSettings(
+            unigramMinFreq, ngramN, ngramMinFreq, parent
+        )
+        # 返回 dict 或 None（取消时）
+    """
+
+    def __init__(
+        self,
+        unigramMinFreq: int = 1,
+        ngramN: int = 2,
+        ngramMinFreq: int = 2,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._initial = {
+            "unigramMinFreq": int(unigramMinFreq),
+            "ngramN": int(ngramN),
+            "ngramMinFreq": int(ngramMinFreq),
+        }
+
+        # 顶部标题
+        _makeDialogHeader(self, ":app/icons/Setting.svg", "高级设置", self.reject)
+
+        # ----- 主词频最低频次 -----
+        unigramTitle = StrongBodyLabel("主词频筛选", self)
+        unigramHint = CaptionLabel(
+            "仅显示出现次数 ≥ 该阈值的词；设为 1 不过滤（显示所有词）", self
+        )
+        unigramHint.setStyleSheet("color: #666; font-size: 11px;")
+
+        unigramRow = QHBoxLayout()
+        unigramLabel = BodyLabel("主词频最低频次:", self)
+        unigramLabel.setFixedWidth(150)
+        self.unigramMinFreqSpin = SpinBox(self)
+        self.unigramMinFreqSpin.setRange(1, 1000)
+        self.unigramMinFreqSpin.setValue(self._initial["unigramMinFreq"])
+        unigramRow.addWidget(unigramLabel)
+        unigramRow.addWidget(self.unigramMinFreqSpin)
+        unigramRow.addStretch(1)
+
+        # ----- N-gram 设置 -----
+        ngramTitle = StrongBodyLabel("N-gram 设置", self)
+        ngramHint = CaptionLabel(
+            "Bigram / Trigram 等 N 元组频次的阶数与最低频次过滤", self
+        )
+        ngramHint.setStyleSheet("color: #666; font-size: 11px;")
+
+        ngramNRow = QHBoxLayout()
+        ngramNLabel = BodyLabel("N-gram 阶数:", self)
+        ngramNLabel.setFixedWidth(150)
+        self.ngramNSpin = SpinBox(self)
+        self.ngramNSpin.setRange(2, 5)
+        self.ngramNSpin.setValue(self._initial["ngramN"])
+        ngramNRow.addWidget(ngramNLabel)
+        ngramNRow.addWidget(self.ngramNSpin)
+        ngramNRow.addStretch(1)
+
+        ngramFreqRow = QHBoxLayout()
+        ngramFreqLabel = BodyLabel("N-gram 最低频次:", self)
+        ngramFreqLabel.setFixedWidth(150)
+        self.ngramMinFreqSpin = SpinBox(self)
+        self.ngramMinFreqSpin.setRange(1, 1000)
+        self.ngramMinFreqSpin.setValue(self._initial["ngramMinFreq"])
+        ngramFreqRow.addWidget(ngramFreqLabel)
+        ngramFreqRow.addWidget(self.ngramMinFreqSpin)
+        ngramFreqRow.addStretch(1)
+
+        # ----- 整体布局 -----
+        self.viewLayout.setContentsMargins(20, 16, 20, 12)
+        self.viewLayout.setSpacing(8)
+
+        self.viewLayout.addWidget(unigramTitle)
+        self.viewLayout.addWidget(unigramHint)
+        self.viewLayout.addLayout(unigramRow)
+        self.viewLayout.addSpacing(8)
+
+        self.viewLayout.addWidget(ngramTitle)
+        self.viewLayout.addWidget(ngramHint)
+        self.viewLayout.addLayout(ngramNRow)
+        self.viewLayout.addLayout(ngramFreqRow)
+        self.viewLayout.addStretch(1)
+
+        # 底部：取消 + 确定（替换 qfluentwidgets 默认 buttonGroup）
+        okBtn = PushButton("确定", self)
+        okBtn.setFixedWidth(96)
+        okBtn.clicked.connect(self.accept)
+        cancelBtn = PushButton("取消", self)
+        cancelBtn.setFixedWidth(96)
+        cancelBtn.clicked.connect(self.reject)
+
+        self.buttonGroup.hide()
+        self.buttonLayout.addStretch(1)
+        self.buttonLayout.addWidget(cancelBtn)
+        self.buttonLayout.addSpacing(8)
+        self.buttonLayout.addWidget(okBtn)
+        self.widget.setFixedWidth(460)
+        self.widget.setFixedHeight(360)
+
+    def _getSettings(self) -> Dict[str, int]:
+        """读取当前弹窗内的设置（仅在 accept() 之后由外部调用）。"""
+        return {
+            "unigramMinFreq": int(self.unigramMinFreqSpin.value()),
+            "ngramN": int(self.ngramNSpin.value()),
+            "ngramMinFreq": int(self.ngramMinFreqSpin.value()),
+        }
+
+    @staticmethod
+    def getSettings(
+        unigramMinFreq: int,
+        ngramN: int,
+        ngramMinFreq: int,
+        parent=None,
+    ) -> Optional[Dict[str, int]]:
+        """静态便捷方法：弹出对话框并返回用户确定的设置；取消则返回 None。
+
+        Args:
+            unigramMinFreq: 当前主词频最低频次（用作弹窗初始值）
+            ngramN:         当前 N-gram 阶数（用作弹窗初始值）
+            ngramMinFreq:   当前 N-gram 最低频次（用作弹窗初始值）
+            parent:         父窗口
+        Returns:
+            字典 {'unigramMinFreq': int, 'ngramN': int, 'ngramMinFreq': int}，或 None（取消）
+        """
+        dlg = AdvancedSettingsDialog(
+            unigramMinFreq=unigramMinFreq,
+            ngramN=ngramN,
+            ngramMinFreq=ngramMinFreq,
+            parent=parent,
+        )
+        if dlg.exec():
+            return dlg._getSettings()
+        return None
+
+
+class StopwordsDialog(MessageBoxBase):
+    """停用词导入与编辑弹窗
+
+    核心功能:
+        1. 查看当前停用词列表（只读浏览,实时统计总数）
+        2. 直接在弹窗内编辑（每行一个词;支持 # 开头注释行）
+        3. 导入 TXT 文件:
+            - 选择"追加"模式:在当前列表末尾追加文件中读出的词（自动去重）
+            - 选择"替换"模式:完全使用文件内容替换当前列表
+        4. 一键恢复默认中英文停用词表
+        5. 导出当前列表到 TXT 文件
+
+    弹窗行为:
+        - 点「保存」→ 返回新的停用词列表(已去重);外部用 setStopwords 替换
+        - 点「取消」→ 返回 None,外部保留原值
+        - 点关闭按钮 → 同「取消」
+
+    静态便捷方法:
+        result = StopwordsDialog.edit(currentWords, parent)
+        # 返回 List[str] 或 None
+    """
+
+    def __init__(
+        self,
+        currentWords: Optional[List[str]] = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        # 当前停用词 → 字符串列表
+        self._initial: List[str] = (
+            list(currentWords) if currentWords else defaultStopwords()
+        )
+
+        # 顶部标题
+        _makeDialogHeader(self, ":app/icons/Dictionary.svg", "停用词管理", self.reject)
+
+        # ----- 顶部摘要 + 操作按钮 -----
+        topRow = QHBoxLayout()
+        self.summaryLabel = CaptionLabel(
+            self._makeSummaryText(len(self._initial)), self
+        )
+        self.summaryLabel.setStyleSheet("color: #666; font-size: 11px;")
+        topRow.addWidget(self.summaryLabel)
+        topRow.addStretch(1)
+
+        importBtn = PushButton("导入 TXT…", self)
+        importBtn.setIcon(FluentIcon.DOWNLOAD)
+        importBtn.clicked.connect(self._onImportClicked)
+        topRow.addWidget(importBtn)
+
+        exportBtn = PushButton("导出 TXT", self)
+        exportBtn.setIcon(FluentIcon.SAVE)
+        exportBtn.clicked.connect(self._onExportClicked)
+        topRow.addWidget(exportBtn)
+
+        resetBtn = PushButton("恢复默认", self)
+        resetBtn.setIcon(FluentIcon.RETURN)
+        resetBtn.clicked.connect(self._onResetClicked)
+        topRow.addWidget(resetBtn)
+
+        # ----- 导入模式选择 -----
+        modeRow = QHBoxLayout()
+        modeLabel = BodyLabel("导入模式:", self)
+        modeLabel.setFixedWidth(80)
+        self.appendRadio = RadioButton("追加到当前列表", self)
+        self.appendRadio.setChecked(True)
+        self.replaceRadio = RadioButton("完全替换当前列表", self)
+        modeRow.addWidget(modeLabel)
+        modeRow.addWidget(self.appendRadio)
+        modeRow.addWidget(self.replaceRadio)
+        modeRow.addStretch(1)
+
+        # ----- 可编辑文本框 -----
+        hintLabel = CaptionLabel(
+            "每行一个停用词；以 # 开头的行视为注释。可直接编辑后点「保存」生效。",
+            self,
+        )
+        hintLabel.setStyleSheet("color: #888; font-size: 11px;")
+        hintLabel.setWordWrap(True)
+
+        self.editor = PlainTextEdit(self)
+        self.editor.setPlainText("\n".join(self._initial))
+        self.editor.setStyleSheet(
+            "font-family: Consolas, 'Courier New', monospace; font-size: 12px;"
+        )
+        self.editor.setMinimumHeight(280)
+        # 实时同步统计
+        self.editor.textChanged.connect(self._onTextChanged)
+
+        # ----- 整体布局 -----
+        self.viewLayout.setContentsMargins(20, 16, 20, 12)
+        self.viewLayout.setSpacing(8)
+        self.viewLayout.addLayout(topRow)
+        self.viewLayout.addLayout(modeRow)
+        self.viewLayout.addWidget(hintLabel)
+        self.viewLayout.addWidget(self.editor, 1)
+
+        # 底部按钮: 取消 + 保存
+        okBtn = PushButton("保存", self)
+        okBtn.setFixedWidth(96)
+        okBtn.clicked.connect(self.accept)
+        cancelBtn = PushButton("取消", self)
+        cancelBtn.setFixedWidth(96)
+        cancelBtn.clicked.connect(self.reject)
+
+        self.buttonGroup.hide()
+        self.buttonLayout.addStretch(1)
+        self.buttonLayout.addWidget(cancelBtn)
+        self.buttonLayout.addSpacing(8)
+        self.buttonLayout.addWidget(okBtn)
+        self.widget.setFixedWidth(640)
+        self.widget.setFixedHeight(560)
+
+    # ------------------------------------------------------------------
+    # 摘要 / 状态
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _makeSummaryText(count: int) -> str:
+        return f"当前停用词共 {count} 个"
+
+    def _refreshSummary(self) -> None:
+        words = parseStopwordsFromText(self.editor.toPlainText())
+        self.summaryLabel.setText(self._makeSummaryText(len(words)))
+
+    def _onTextChanged(self) -> None:
+        """编辑器内容变化时实时更新摘要计数。"""
+        self._refreshSummary()
+
+    # ------------------------------------------------------------------
+    # 按钮回调
+    # ------------------------------------------------------------------
+    def _onImportClicked(self) -> None:
+        """从 TXT 文件导入停用词;按选定模式合并到编辑器。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择停用词文件",
+            "",
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            newWords = loadStopwordsFromFile(path)
+        except FileNotFoundError as e:
+            _showInfoBar("error", "导入失败", str(e), self, duration=2500)
+            return
+        except Exception as e:
+            _showInfoBar(
+                "error", "导入失败", f"读取停用词文件失败: {e}", self, duration=2500
+            )
+            return
+
+        if not newWords:
+            _showInfoBar(
+                "warning",
+                "导入为空",
+                "文件中未找到有效停用词（可能全为空行或注释）",
+                self,
+                duration=2500,
+            )
+            return
+
+        if self.replaceRadio.isChecked():
+            # 完全替换:保留导入的词 + 头部注释行
+            self.editor.setPlainText("\n".join(newWords))
+            modeText = "已替换"
+        else:
+            # 追加模式:合并到当前文本末尾
+            current = parseStopwordsFromText(self.editor.toPlainText())
+            currentSet = set(current)
+            added: List[str] = []
+            for w in newWords:
+                if w not in currentSet:
+                    added.append(w)
+                    currentSet.add(w)
+            # 在文本末尾追加新行（若已有内容,加换行符）
+            existingText = self.editor.toPlainText()
+            addition = (
+                "\n" if existingText and not existingText.endswith("\n") else ""
+            ) + "\n".join(added)
+            self.editor.setPlainText(existingText + addition)
+            modeText = f"已追加 {len(added)} 个"
+
+        self._refreshSummary()
+        _showInfoBar(
+            "success",
+            "导入成功",
+            f"从文件导入 {len(newWords)} 个词,{modeText}",
+            self,
+            duration=2200,
+        )
+
+    def _onExportClicked(self) -> None:
+        """把当前编辑器内容（去除空行）导出为 TXT。"""
+        words = parseStopwordsFromText(self.editor.toPlainText())
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出停用词",
+            "stopwords.txt",
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            saveStopwordsToFile(path, words)
+        except Exception as e:
+            _showInfoBar("error", "导出失败", f"写入文件失败: {e}", self, duration=2500)
+            return
+        _showInfoBar(
+            "success",
+            "导出成功",
+            f"已保存 {len(words)} 个停用词到 {path}",
+            self,
+            duration=2200,
+        )
+
+    def _onResetClicked(self) -> None:
+        """恢复为默认中英文停用词表（确认后覆盖）。"""
+        words = defaultStopwords()
+        self.editor.setPlainText("\n".join(words))
+        self._refreshSummary()
+        _showInfoBar(
+            "info",
+            "已恢复默认",
+            f"已填充 {len(words)} 个默认停用词（点击「保存」后生效）",
+            self,
+            duration=2200,
+        )
+
+    # ------------------------------------------------------------------
+    # 取值（仅在 accept() 后由外部读取）
+    # ------------------------------------------------------------------
+    def getWords(self) -> List[str]:
+        """从编辑器中解析出停用词列表(已去重、跳过空行/注释)。"""
+        return parseStopwordsFromText(self.editor.toPlainText())
+
+    @staticmethod
+    def edit(
+        currentWords: Optional[List[str]] = None,
+        parent=None,
+    ) -> Optional[List[str]]:
+        """静态便捷方法:弹出对话框,返回用户确认的停用词列表;取消则返回 None。"""
+        dlg = StopwordsDialog(currentWords=currentWords, parent=parent)
+        if dlg.exec():
+            return dlg.getWords()
+        return None
+
+
+class PosPreviewDialog(MessageBoxBase):
+    """POS 标注预览弹窗(只读,带「复制到剪贴板」)。
+
+    设计目标:
+        - 接收已格式化的多行文本(由 caller 构造)
+        - 使用等宽字体显示,行号靠左
+        - 提供「复制全部」按钮(方便粘到外部编辑器/文档)
+    """
+
+    def __init__(
+        self,
+        text: str,
+        title: str = "POS 预览",
+        parent=None,
+    ):
+        super().__init__(parent)
+        _makeDialogHeader(self, ":app/icons/Information.svg", title, self.reject)
+
+        self.viewLayout.setContentsMargins(20, 16, 20, 12)
+        self.viewLayout.setSpacing(8)
+
+        self.editor = PlainTextEdit(self)
+        self.editor.setPlainText(text or "")
+        self.editor.setReadOnly(True)
+        # self.editor.setStyleSheet(
+        #     "font-family: Consolas, 'Courier New', monospace; font-size: 12px;"
+        # )
+        self.editor.setMinimumHeight(360)
+        self.viewLayout.addWidget(self.editor, 1)
+
+        copyBtn = PushButton("复制全部", self)
+        copyBtn.clicked.connect(self._copyAll)
+        okBtn = PushButton("关闭", self)
+        okBtn.clicked.connect(self.accept)
+
+        self.buttonGroup.hide()
+        self.buttonLayout.addWidget(copyBtn)
+        self.buttonLayout.addStretch(1)
+        self.buttonLayout.addWidget(okBtn)
+        self.widget.setFixedWidth(560)
+        self.widget.setFixedHeight(500)
+
+    def _copyAll(self) -> None:
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            QGuiApplication.clipboard().setText(self.editor.toPlainText())
+            _showInfoBar(
+                "success", "已复制", "预览内容已复制到剪贴板", self, duration=1800
+            )
+        except Exception as e:
+            _showInfoBar("error", "复制失败", str(e), self, duration=2200)
+
+    @staticmethod
+    def showPreview(
+        text: str,
+        title: str = "POS 预览",
+        parent=None,
+    ) -> None:
+        """静态便捷方法:弹出只读预览弹窗。"""
+        dlg = PosPreviewDialog(text=text, title=title, parent=parent)
+        dlg.exec()

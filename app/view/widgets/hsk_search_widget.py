@@ -188,7 +188,7 @@ class WordCombinationSearchWidget(GroupHeaderCardWidget):
             self.keyWord,
         )
         self.addGroup(
-            QIcon(":app/icons/Font.svg"),
+            QIcon(":app/icons/Write.svg"),
             "句法结构",
             "选择句法结构",
             self.relationshipCombobox,

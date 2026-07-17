@@ -62,6 +62,7 @@ from app.view.widgets.freq_analyzer.concordance_engine import (
     KwicHit,
     SortMode,
 )
+from app.view.widgets.freq_analyzer.result_summary import MetricColor
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +332,13 @@ class ConcordanceWidget(QWidget):
         self._worker: Optional[ConcordanceWorker] = None
         self._currentResult: Optional[ConcordanceResult] = None
         self._secondaryStack: List[Dict] = []  # 嵌套二次检索历史
-        self._engine = ConcordanceEngine(useJieba=True, caseSensitive=False)
+        # 注入 token cache(加速重复分词)
+        tokenCache = (
+            self._corpusStore.tokenCache() if self._corpusStore is not None else None
+        )
+        self._engine = ConcordanceEngine(
+            useJieba=True, caseSensitive=False, tokenCache=tokenCache
+        )
 
         self._initUi()
 
@@ -363,13 +370,13 @@ class ConcordanceWidget(QWidget):
         self._currentResult = None
         if hasattr(self, "resultTable"):
             self.resultTable.setRowCount(0)
-        if hasattr(self, "summaryLabel"):
-            self.summaryLabel.setText("语料已变更，请重新检索")
+        if hasattr(self, "_resultSummary"):
+            self._resultSummary.setPlaceholder("语料已变更，请重新检索")
         if hasattr(self, "statusLabel"):
             self.statusLabel.setText("就绪")
         self._secondaryStack = []
-        if hasattr(self, "_updateFileCount"):
-            self._updateFileCount()
+        # _updateFileCount 已废弃：原用于更新页面底部 fileCountLabel，
+        # 该 UI 元素已被顶部 CorpusStatusCard 替代。
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -543,10 +550,18 @@ class ConcordanceWidget(QWidget):
 
         layout.addWidget(StrongBodyLabel("3. 检索结果", card))
 
-        # 统计栏（FR-KWC-007，L3：结果摘要）
-        self.summaryLabel = CaptionLabel("", card)
-        self.summaryLabel.setStyleSheet("color: #444; font-size: 11px;")
-        layout.addWidget(self.summaryLabel)
+        # 统计栏(FR-KWC-007,使用统一 ResultSummary 大指标卡)
+        from app.view.widgets.freq_analyzer.result_summary import (
+            MetricColor,
+            ResultSummary,
+        )
+
+        self._resultSummary = ResultSummary(self)
+        self._resultSummary.setTitle("检索摘要")
+        self._resultSummary.setPlaceholder("请输入检索词并点击「开始检索」")
+        layout.addWidget(self._resultSummary)
+        # 兼容旧代码:summaryLabel 仍指向 detailLabel,避免外部代码报错
+        self.summaryLabel = self._resultSummary._detailLabel
 
         # 双击行 → 展开详情
         self.resultTable = ProRoundTableWidget(card)
@@ -614,7 +629,6 @@ class ConcordanceWidget(QWidget):
                     self,
                     duration=3000,
                 )
-        self._updateFileCount()
 
     def _clearAll(self):
         if self._corpusStore is not None:
@@ -623,9 +637,11 @@ class ConcordanceWidget(QWidget):
         self.fileToText = {}
         self._currentResult = None
         self.resultTable.setRowCount(0)
-        self.summaryLabel.setText("")
+        if hasattr(self, "_resultSummary"):
+            self._resultSummary.setPlaceholder("已清空 — 请重新检索")
         self.statusLabel.setText("已清空")
-        self._updateFileCount()
+        # 顶部 CorpusStatusCard 会通过 corpusStore 信号自动刷新；
+        # 旧版本此处调用 _updateFileCount() 更新 fileCountLabel，UI 已移除。
         self._resetSecondary(silent=True)
 
     def closeEvent(self, event) -> None:
@@ -636,14 +652,6 @@ class ConcordanceWidget(QWidget):
                     w.cancel()
                 w.wait(2000)
         super().closeEvent(event)
-
-    def _updateFileCount(self):
-        n = len(self.fileToText)
-        total = sum(len(t) for t in self.fileToText.values())
-        if n == 0:
-            self.fileCountLabel.setText("未加载语料")
-        else:
-            self.fileCountLabel.setText(f"已加载 {n} 个文件，{total:,} 字符")
 
     # ------------------------------------------------------------------
     # 二次检索管理
@@ -780,13 +788,29 @@ class ConcordanceWidget(QWidget):
         )
 
     def _refreshTableFromResult(self, result: ConcordanceResult):
-        # 摘要（FR-KWC-007）
-        self.summaryLabel.setText(
-            f"检索词：{result.searchWord}    "
-            f"命中：{result.totalMatches:,}    "
-            f"当前展示：{len(result.hits):,}    "
-            f"语料库：{result.corpusName}    "
-            f"语境宽度：L{self.leftSpin.value()}/R{self.rightSpin.value()}"
+        # 摘要(FR-KWC-007,使用统一大指标卡)
+        coverage = 0.0
+        try:
+            totalChars = self._corpusStore.totalChars() if self._corpusStore else 0
+            coverage = min(100.0, result.totalMatches * 50 / max(1, totalChars) * 100)
+        except Exception:
+            pass
+        leftW = self.leftSpin.value()
+        rightW = self.rightSpin.value()
+
+        self._resultSummary.clear()
+        self._resultSummary.setMetrics(
+            [
+                ("检索词", result.searchWord, MetricColor.PRIMARY),
+                ("命中数", f"{result.totalMatches:,}", MetricColor.SUCCESS),
+                ("当前展示", f"{len(result.hits):,}", MetricColor.ACCENT),
+                ("覆盖度", f"{coverage:.1f}%", MetricColor.NEUTRAL),
+            ]
+        )
+        self._resultSummary.setDetail(
+            f"🔍 语料库 <b>{result.corpusName}</b> &nbsp;|&nbsp; "
+            f"语境宽度 <b>L{leftW}/R{rightW}</b> &nbsp;|&nbsp; "
+            f"双击行可展开 <b>±100 词</b> 详情"
         )
         self.statusLabel.setText(f"双击索引行可查看上下文扩展（前后各 100 词）")
 

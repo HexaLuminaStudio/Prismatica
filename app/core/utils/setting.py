@@ -35,10 +35,12 @@ CONFIG_FOLDER = INSTALL_DIR / "config"
 CONFIG_FILE = CONFIG_FOLDER / "config.json"
 DOWNLOAD_FOLDER = INSTALL_DIR / "download"
 LOG_FOLDER = INSTALL_DIR / "logs"
+DATA_FOLDER = INSTALL_DIR / "datas"  # 统一数据根目录(语料库/注册表/导出)
 
 # 确保目录存在
 CONFIG_FOLDER.mkdir(parents=True, exist_ok=True)
 DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 LOG_FOLDER.mkdir(parents=True, exist_ok=True)
+DATA_FOLDER.mkdir(parents=True, exist_ok=True)
 
 MODE: Literal["DEV", "TEST", "RES"] = "DEV"

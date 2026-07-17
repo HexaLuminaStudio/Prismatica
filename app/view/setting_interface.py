@@ -7,6 +7,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from typing import List, Tuple
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -523,6 +524,79 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         )
 
 
+class SponsorSettingWidget(GroupHeaderCardWidget):
+    """赞助名单组件
+
+    展示本项目所有赞助人的昵称与邮箱。
+    数据为内部写死（开发者后续可手动更新 _SPONSORS 列表），
+    以"昵称<邮箱>"格式每行展示一位赞助人。
+
+    静态占位数据：
+        - 使用示例昵称与示例邮箱，方便开发者按相同格式直接替换为真实数据
+    """
+
+    _SPONSORS: List[Tuple[str, str]] = [
+        ("示例赞助者 A", "sponsor_a@example.com"),
+        ("示例赞助者 B", "sponsor_b@example.com"),
+        ("示例赞助者 C", "sponsor_c@example.com"),
+        ("示例赞助者 D", "sponsor_d@example.com"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("赞助名单")
+        logger.info(
+            f"[Setting] SponsorSettingWidget 初始化,共 {len(self._sponsors())} 位赞助人"
+        )
+
+        # 列表显示控件:多行只读文本,展示「昵称<邮箱>」
+        self.sponsorListLabel = BodyLabel(self._formatSponsorList(), self)
+        self.sponsorListLabel.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.sponsorListLabel.setStyleSheet(
+            "font-family: Consolas, 'Courier New', monospace; font-size: 13px;"
+            "line-height: 1.7;"
+        )
+        self.sponsorListLabel.setWordWrap(True)
+
+        # 添加设置组
+        self._addSettingGroups()
+
+    def _formatSponsorList(self) -> str:
+        """格式化赞助人列表为多行文本「昵称<邮箱>」。"""
+        sponsors = self._sponsors()
+        if not sponsors:
+            return "（暂无赞助记录）"
+        lines = []
+        for nickname, email in sponsors:
+            # 行内使用全角尖括号以视觉上更友好,且避免与邮箱中的 @/特殊字符冲突
+            lines.append(f"{nickname} <{email}>")
+        return "\n".join(lines)
+
+    @classmethod
+    def _sponsors(cls) -> List[Tuple[str, str]]:
+        """获取赞助人列表(子类可重写此方法自定义数据源)。"""
+        return cls._SPONSORS
+
+    def _addSettingGroups(self):
+        """添加设置组"""
+        # 顶部说明
+        self.addGroup(
+            ":app/icons/Advance.svg",
+            "感谢以下赞助者",
+            "本软件由以下用户慷慨赞助支持",
+            QWidget(),
+        )
+        # 列表组
+        self.addGroup(
+            ":app/icons/Contact.svg",
+            f"赞助人名单（共 {len(self._sponsors())} 位）",
+            "点击文本可复制单行内容",
+            self.sponsorListLabel,
+        )
+
+
 class AboutSettingWidget(GroupHeaderCardWidget):
     """关于软件设置组件"""
 
@@ -684,6 +758,9 @@ class SettingInterface(ScrollArea):
         # 关于设置组件
         self.aboutSettingWidget = AboutSettingWidget(self.scrollWidget)
 
+        # 赞助名单组件（页面下部分）
+        self.sponsorSettingWidget = SponsorSettingWidget(self.scrollWidget)
+
         # 用户协议组件
         self.agreementLabelWidget = AgreementLabelWidget(self.scrollWidget)
 
@@ -724,6 +801,10 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addSpacing(20)
         self.expandLayout.addWidget(
             self.aboutSettingWidget, 0, Qt.AlignmentFlag.AlignTop
+        )
+        self.expandLayout.addSpacing(20)
+        self.expandLayout.addWidget(
+            self.sponsorSettingWidget, 0, Qt.AlignmentFlag.AlignTop
         )
         self.expandLayout.addWidget(
             self.agreementLabelWidget, 1, Qt.AlignmentFlag.AlignBottom

@@ -97,14 +97,16 @@ class ConcordanceEngine:
         self,
         useJieba: bool = True,
         caseSensitive: bool = False,
+        tokenCache=None,
     ):
         """Args:
         useJieba: 是否使用 jieba 中文分词（False 时按汉字单字切分）
         caseSensitive: 是否区分大小写
+        tokenCache: 可选 TokenCache 实例,加速重复分词
         """
         self.useJieba = useJieba
         self.caseSensitive = caseSensitive
-        self.segmenter = TextSegmenter()
+        self.segmenter = TextSegmenter(tokenCache=tokenCache)
 
     # ------------------------------------------------------------------
     # 公共 API

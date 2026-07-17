@@ -1,8 +1,8 @@
 # coding: utf-8
 """
-词频分析插件（对标 AntConc 词频统计）
+词频分析模块（对标 AntConc 词频统计）
 
-主入口：定义 Plugin 类与主界面 FreqAnalyzerWidget
+主入口：FreqAnalyzerInterface 与内置面板 FreqAnalyzerWidget
 
 组件拆分：
     - UI 工具 (helpers)  : app.view.widgets.freq_analyzer.ui_helpers
@@ -10,10 +10,16 @@
     - 语境分析 (KWIC)    : app.view.widgets.freq_analyzer.concordance_widget
     - 语料导入与清洗     : app.view.widgets.freq_analyzer.corpus_import_widget
     - 词频分析主面板     : app.view.widgets.freq_analyzer.freq_analyzer_widget
+    - 词语分析面板       : app.view.widgets.freq_analyzer.word_analysis_widget
+                           (含词汇指标 / 高频词 / 词汇分布 / 词汇增长曲线)
+    - 搭配分析面板       : app.view.widgets.freq_analyzer.collocation_widget
+                           (MI / MI3 / T / LogDice / Z / Delta-P, FR-CLB-001~011)
+    - 词语云图面板       : app.view.widgets.freq_analyzer.word_cloud_widget
+                           (纯 matplotlib, FR-WDC-001~005)
 
 本文件保留:
     - 业务核心: CorpusStore、ExcelLoadWorker、FreqWorkerThread
-    - 顶层路由: FreqAnalyzerInterface (在 3 个面板之间切换)
+    - 顶层路由: FreqAnalyzerInterface (在 8 个面板之间切换)
 """
 
 import json
@@ -78,11 +84,14 @@ from qfluentwidgets import (
     TransparentToggleToolButton,
 )
 from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib import pyplot as plt
+import matplotlib  # noqa: E402
 
-# 内置模块: 不再依赖插件 PluginBase
+matplotlib.use("QtAgg", force=False)
+from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.backends.backend_qtagg import (
+    FigureCanvasQTAgg as FigureCanvas,
+)  # noqa: E402
+from matplotlib import pyplot as plt  # noqa: E402
 
 # 从 app.view.widgets.freq_analyzer 包内导入核心
 from app.view.widgets.freq_analyzer.freq_engine import (
@@ -114,86 +123,9 @@ plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode M
 plt.rcParams["axes.unicode_minus"] = False
 
 
-class CorpusStore(QObject):
-    """词频分析与 KWIC 共享的语料状态。
-
-    设计目的：
-        用户只需"导入一次语料 + 配置一次清洗"，
-        即可在「词频分析」与「语境分析 (KWIC)」两个面板同时使用。
-    字段：
-        rawTexts:   {filename: raw text}        — 原始文本（只读视图）
-        cleanRule:  CleanRule                   — 清洗规则
-        cleanEnabled: bool                      — 是否启用清洗
-    派生：
-        effectiveTexts: 依据 cleanEnabled 与 cleanRule 派生每文件的"最终文本"
-                        词频分析与 KWIC 共享该 dict
-    信号：
-        textsChanged:        任何文本/导入/清空变更都触发
-        cleanRuleChanged:    清洗规则或启用状态变更时触发
-    """
-
-    textsChanged = Signal()
-    cleanRuleChanged = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.rawTexts: Dict[str, str] = {}
-        self.cleanRule: CleanRule = CleanRule()
-        self.cleanEnabled: bool = False
-        # 持有 TextCleaner 实例（避免每次清洗重建）
-        self._cleaner: Optional[TextCleaner] = None
-
-    # ---------------- 文本变更 ----------------
-    def addRawText(self, fileName: str, text: str) -> None:
-        self.rawTexts[fileName] = text
-        self.textsChanged.emit()
-
-    def removeRawText(self, fileName: str) -> None:
-        if fileName in self.rawTexts:
-            del self.rawTexts[fileName]
-            self.textsChanged.emit()
-
-    def clearAll(self) -> None:
-        if self.rawTexts:
-            self.rawTexts.clear()
-            self.textsChanged.emit()
-
-    # ---------------- 清洗规则 ----------------
-    def setCleanEnabled(self, enabled: bool) -> None:
-        if enabled == self.cleanEnabled:
-            return
-        self.cleanEnabled = enabled
-        self.cleanRuleChanged.emit()
-
-    def setCleanRule(self, rule: CleanRule) -> None:
-        self.cleanRule = rule
-        self.cleanRuleChanged.emit()
-
-    # ---------------- 派生数据 ----------------
-    def _cleanerInstance(self) -> TextCleaner:
-        if self._cleaner is None:
-            self._cleaner = TextCleaner()
-        return self._cleaner
-
-    def effectiveTexts(self) -> Dict[str, str]:
-        """根据当前 cleanEnabled/cleanRule 计算每个文件的最终文本。
-
-        - 未启用 → 直接返回原文
-        - 启用   → 走 TextCleaner.clean()
-        """
-        if not self.cleanEnabled or not self.rawTexts:
-            return dict(self.rawTexts)
-        cleaner = self._cleanerInstance()
-        # TextCleaner 在构造时绑定 rule；切换 rule 后需调用 setRule 重新编译正则
-        if cleaner.rule is not self.cleanRule:
-            cleaner.setRule(self.cleanRule)
-        return {name: cleaner.clean(raw) for name, raw in self.rawTexts.items()}
-
-    def totalChars(self) -> int:
-        return sum(len(t) for t in self.rawTexts.values())
-
-    def fileCount(self) -> int:
-        return len(self.rawTexts)
+# CorpusStore 已在 app.view.widgets.freq_analyzer.corpus_store 中实现(SQLite + FTS5)。
+# 这里 re-export 以保持向后兼容的导入路径。
+from app.view.widgets.freq_analyzer.corpus_store import CorpusStore  # noqa: E402,F401
 
 
 class ExcelLoadWorker(QThread):
@@ -240,6 +172,11 @@ class FreqWorkerThread(QThread):
         ngramN: int = 2,
         ngramMinFreq: int = 2,
         cleanRule: Optional[CleanRule] = None,
+        unigramMinFreq: int = 1,
+        stopwords: Optional[set] = None,
+        posTags: Optional[set] = None,
+        posEnabled: bool = False,
+        tokenCache=None,
     ):
         super().__init__()
         self.fileToText = fileToText
@@ -251,6 +188,11 @@ class FreqWorkerThread(QThread):
         self.useJieba = useJieba
         self.ngramN = max(2, int(ngramN))  # N-gram 阶数，至少为 2
         self.ngramMinFreq = max(1, int(ngramMinFreq))  # 过滤最低频次
+        self.unigramMinFreq = max(1, int(unigramMinFreq))  # 主词频最低频次
+        self.stopwords = set(stopwords) if stopwords else None  # None=默认
+        self.posTags = set(posTags) if posTags else None
+        self.posEnabled = bool(posEnabled and posTags)
+        self.tokenCache = tokenCache  # 分词缓存(加速重复分词)
         self.cleanRule = cleanRule or CleanRule()
         self._isCanceled = False
 
@@ -272,13 +214,19 @@ class FreqWorkerThread(QThread):
                 useStopwords=self.useStopwords,
                 useJieba=self.useJieba and JIEBA_AVAILABLE,
                 cleanRule=self.cleanRule,
+                stopwords=self.stopwords,
+                posTags=self.posTags,
+                posEnabled=self.posEnabled,
+                tokenCache=self.tokenCache,
             )
 
             self.progress.emit(30, "正在分词与统计...")
             if self._isCanceled:
                 return
 
-            unigramDf = analyzer.analyzeCorpus(self.fileToText)
+            unigramDf = analyzer.analyzeCorpus(
+                self.fileToText, minFreq=self.unigramMinFreq
+            )
 
             if self._isCanceled:
                 return
@@ -317,23 +265,65 @@ from app.view.widgets.freq_analyzer.dialogs import (  # noqa: F401
 from app.view.widgets.freq_analyzer.corpus_import_widget import CorpusImportWidget
 from app.view.widgets.freq_analyzer.freq_analyzer_widget import FreqAnalyzerWidget
 from app.view.widgets.freq_analyzer.concordance_widget import ConcordanceWidget
+from app.view.widgets.freq_analyzer.network_widget import NetworkWidget
+from app.view.widgets.freq_analyzer.sentiment_widget import SentimentWidget
+from app.view.widgets.freq_analyzer.word_analysis_widget import WordAnalysisWidget
+from app.view.widgets.freq_analyzer.collocation_widget import CollocationWidget
+from app.view.widgets.freq_analyzer.word_cloud_widget import WordCloudWidget
 
 
 class FreqAnalyzerInterface(QWidget):
     """词频分析 / KWIC 内置界面（对标 AntConc）
 
     集成:
+        - 语料库切换 (CorpusManager + CorpusSwitcherWidget)
         - 词频分析（FreqAnalyzerWidget）
+        - 词语分析（WordAnalysisWidget：词汇指标 / 高频词 / 词汇分布）
         - 语境分析 KWIC（ConcordanceWidget）
+        - 共现网络图（NetworkWidget）
 
-    通过 SegmentedWidget 在两个面板之间切换。
+    通过 SegmentedWidget 在面板之间切换。
+
+    多语料库支持:
+        - self.corpusManager: 全局 CorpusManager(单例,QObject)
+        - self.corpusStore:   当前活动语料库对应的 CorpusStore
+        - 当 CorpusManager.activeCorpusChanged 触发时:
+            1. 销毁旧 CorpusStore
+            2. 基于新 dbPath 创建新 CorpusStore
+            3. 重新绑定到所有子面板
     """
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName("freqAnalyzerInterface")
-        # 词频分析与 KWIC 共享同一语料与清洗状态
-        self.corpusStore = CorpusStore(self)
+
+        # 1) 语料库管理器(全局单例)
+        from app.view.widgets.freq_analyzer.corpus_manager import CorpusManager
+
+        self.corpusManager = CorpusManager(parent=self)
+
+        # 2) 当前活动语料库的 CorpusStore(根据 manager 初始化)
+        active = self.corpusManager.activeCorpus()
+        if active is None:
+            # 极端兜底:理论上 CorpusManager 已 ensureDefaultCorpus
+            raise RuntimeError("[FreqAnalyzerInterface] 没有任何可用语料库")
+        self.corpusStore = CorpusStore(dbPath=active.dbPath, parent=self)
+        # 通知 manager 同步统计
+        self.corpusManager.updateStats(
+            active.id, self.corpusStore.fileCount(), self.corpusStore.totalChars()
+        )
+
+        # 1.4) TokenCache 已经在 CorpusStore 内部创建,这里转发给 panel
+
+        # 1.5) 清洗协调器(异步后台执行清洗,避免 UI 卡顿)
+        from app.view.widgets.freq_analyzer.clean_coordinator import CleanCoordinator
+
+        self.cleanCoordinator = CleanCoordinator(self.corpusStore, parent=self)
+
+        # 监听切换信号:重新创建 store + 重新分发到子面板
+        self.corpusManager.activeCorpusChanged.connect(self._onActiveCorpusChanged)
+        self.corpusManager.registryChanged.connect(self._onRegistryChanged)
+
         self._buildUi()
 
     def _buildUi(self) -> None:
@@ -351,17 +341,29 @@ class FreqAnalyzerInterface(QWidget):
         self._panelLayout.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(panelContainer, 1)
 
-        # 实例化三个子面板，全部注入共享 CorpusStore
+        # 实例化六个子面板，全部注入共享 CorpusStore
         self._panels = {
             "corpusImport": CorpusImportWidget(
-                panelContainer, corpusStore=self.corpusStore
+                panelContainer,
+                corpusStore=self.corpusStore,
+                corpusManager=self.corpusManager,
+                cleanCoordinator=self.cleanCoordinator,
             ),
             "freqAnalyzer": FreqAnalyzerWidget(
+                panelContainer, corpusStore=self.corpusStore
+            ),
+            "wordAnalysis": WordAnalysisWidget(
                 panelContainer, corpusStore=self.corpusStore
             ),
             "concordance": ConcordanceWidget(
                 panelContainer, corpusStore=self.corpusStore
             ),
+            "sentiment": SentimentWidget(panelContainer, corpusStore=self.corpusStore),
+            "network": NetworkWidget(panelContainer, corpusStore=self.corpusStore),
+            "collocation": CollocationWidget(
+                panelContainer, corpusStore=self.corpusStore
+            ),
+            "wordCloud": WordCloudWidget(panelContainer, corpusStore=self.corpusStore),
         }
         for key, widget in self._panels.items():
             widget.setObjectName(key)
@@ -370,7 +372,12 @@ class FreqAnalyzerInterface(QWidget):
 
         self.segmented.addItem("corpusImport", "语料导入与清洗")
         self.segmented.addItem("freqAnalyzer", "词频分析")
+        self.segmented.addItem("wordAnalysis", "词语分析")
         self.segmented.addItem("concordance", "语境分析")
+        self.segmented.addItem("sentiment", "情感分析")
+        self.segmented.addItem("collocation", "搭配分析")
+        self.segmented.addItem("wordCloud", "词语云图")
+        self.segmented.addItem("network", "共现网络图")
         self.segmented.setCurrentItem("corpusImport")
         self._panels["corpusImport"].show()
 
@@ -380,5 +387,85 @@ class FreqAnalyzerInterface(QWidget):
         for key, panel in self._panels.items():
             if key == routeKey:
                 panel.show()
+                # 当切换到情感分析面板时,刷新模型状态显示
+                if hasattr(panel, "_refreshModelStatus"):
+                    panel._refreshModelStatus()
+                # 当切换到词频分析面板时,刷新后端下拉框(可能新后端已加载完成)
+                if hasattr(panel, "_refreshBackendCombo"):
+                    panel._refreshBackendCombo()
             else:
                 panel.hide()
+
+    # ------------------------------------------------------------------
+    # 多语料库:活动语料库切换处理
+    # ------------------------------------------------------------------
+    def _onActiveCorpusChanged(self, newId: int):
+        """活动语料库变更时,重建 CorpusStore 并重新分发到所有面板"""
+        logger.info(
+            f"[FreqAnalyzerInterface] 切换语料库: id={newId}, "
+            f"旧 store = {self.corpusStore.dbPath}"
+        )
+        newActive = self.corpusManager.activeCorpus()
+        if newActive is None:
+            return
+
+        # 0) 取消在途的清洗任务(防止脏数据跨语料库)
+        try:
+            if hasattr(self, "cleanCoordinator"):
+                self.cleanCoordinator.cancelPending()
+                self.cleanCoordinator._currentWorker = None
+        except Exception:
+            pass
+
+        # 1) 关闭旧 store
+        try:
+            self.corpusStore.close()
+        except Exception as e:
+            logger.warning(f"[_onActiveCorpusChanged] 关闭旧 store 失败: {e}")
+
+        # 2) 创建新 store
+        self.corpusStore = CorpusStore(dbPath=newActive.dbPath, parent=self)
+
+        # 2.5) 重建清洗协调器,指向新 store
+        try:
+            self.cleanCoordinator.cancelPending()
+            # 直接给 _store 重新赋值(Coordinator 是 QObject,引用更新即可)
+            self.cleanCoordinator._store = self.corpusStore
+            self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
+                self.corpusStore._cleanRule
+            )
+        except Exception as e:
+            logger.warning(f"[_onActiveCorpusChanged] 重置 coordinator 失败: {e}")
+
+        # 3) 重新分发到所有子面板(子面板的 _bindCorpusStore 已实现)
+        for panel in self._panels.values():
+            if hasattr(panel, "setCorpusStore"):
+                try:
+                    panel.setCorpusStore(self.corpusStore)
+                except Exception as e:
+                    logger.error(
+                        f"[_onActiveCorpusChanged] 重绑 {type(panel).__name__} 失败: {e}"
+                    )
+
+        # 4) 通知 manager 统计已变更(用于 UI 列表展示)
+        self.corpusManager.updateStats(
+            newActive.id,
+            self.corpusStore.fileCount(),
+            self.corpusStore.totalChars(),
+        )
+
+        logger.info(
+            f"[FreqAnalyzerInterface] 已切换到语料库「{newActive.name}」, "
+            f"db={newActive.dbPath}"
+        )
+
+    def _onRegistryChanged(self):
+        """注册表变化(新建/删除/重命名) - 各面板无需重建,switcher UI 自动刷新"""
+        pass  # CorpusSwitcherWidget 已订阅 registryChanged
+
+    def closeEvent(self, event):  # noqa: D401
+        try:
+            self.corpusStore.close()
+        except Exception:
+            pass
+        super().closeEvent(event)

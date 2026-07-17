@@ -1,6 +1,14 @@
 # coding:utf-8
 import os
 import sys
+import warnings
+
+# 静默 torch.cuda 内部的 pynvml deprecation 警告(由 PyTorch 触发,非本项目问题)
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module=r"torch\.cuda",
+)
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImageReader

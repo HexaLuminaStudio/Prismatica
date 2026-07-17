@@ -282,17 +282,19 @@ class GlobalAdvancedSettingCardWidget(GroupHeaderCardWidget):
 
         self.hskGrade = ComboBox(self)
         self.hskGrade.setFixedWidth(200)
-        self.hskGrade.addItems([
-            "不限",
-            "未参加",
-            "未得证书",
-            "一级",
-            "二级",
-            "三级",
-            "四级",
-            "五级",
-            "六级",
-        ])
+        self.hskGrade.addItems(
+            [
+                "不限",
+                "未参加",
+                "未得证书",
+                "一级",
+                "二级",
+                "三级",
+                "四级",
+                "五级",
+                "六级",
+            ]
+        )
 
         self.chineseLevel = ComboBox(self)
         self.chineseLevel.setFixedWidth(200)

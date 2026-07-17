@@ -157,6 +157,7 @@ class HskInterface(QWidget):
             if w.exec():
                 # 用户确认，创建下载任务
                 from app.core.services import taskManager
+
                 taskId = taskManager.createTask("hskDownload", infoDict)
                 logger.info(f"[HSK] 创建下载任务成功, taskId={taskId}")
 

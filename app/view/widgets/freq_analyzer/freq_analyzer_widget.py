@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QVBoxLayout,
     QWidget,
+    QTableWidgetItem,
 )
 from qfluentwidgets import (
     BodyLabel,
@@ -40,9 +41,19 @@ from qfluentwidgets import (
 )
 from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 
+from app.view.widgets.freq_analyzer.result_summary import (
+    MetricColor,
+    ResultSummary,
+)
+
 from app.view.widgets.freq_analyzer.concordance_widget import CorpusStatusCard
-from app.view.widgets.freq_analyzer.dialogs import NgramDialog, ZipfDialog
-from app.view.widgets.freq_analyzer.freq_engine import CleanRule
+from app.view.widgets.freq_analyzer.dialogs import (
+    AdvancedSettingsDialog,
+    NgramDialog,
+    StopwordsDialog,
+    ZipfDialog,
+)
+from app.view.widgets.freq_analyzer.freq_engine import CleanRule, defaultStopwords
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeAlignedItem,
     _makeSwitchButton,
@@ -70,7 +81,11 @@ class FreqAnalyzerWidget(QWidget):
         self.rawTexts: Dict[str, str] = {}
         self.unigramDf = None
         self.ngramDf = None
-        self.ngramN = 2  # 当前 N-gram 阶数
+        self.ngramN = 2  # 当前 N-gram 阶数（与 AdvancedSettingsDialog 共享）
+        self.unigramMinFreq: int = 1  # 主词频最低频次（弹窗中设置）
+        self.ngramMinFreq: int = 2  # N-gram 最低频次（弹窗中设置）
+        # 自定义停用词列表（由 StopwordsDialog 维护;None 表示使用 freq_engine 默认表）
+        self.stopwords: List[str] = defaultStopwords()
         self._worker = None
 
         self._initUi()
@@ -110,8 +125,11 @@ class FreqAnalyzerWidget(QWidget):
             self.rawTexts = dict(self._corpusStore.rawTexts)
         # 语料/清洗规则变更后清空当前分析结果（避免与新语料不匹配）
         self._resetAnalysisResults()
-        self._updateFileCount()
-        self._refreshCleanSummary()
+        if hasattr(self, "_updateFileCount"):
+            self._updateFileCount()
+        # _refreshCleanSummary 已废弃：原用于更新清洗规则摘要 UI 标签，
+        # 当前页面已移除该 UI 元素，对应方法不再存在。如未来重新引入
+        # 清洗摘要展示，请在此处调用新方法。
 
     def _resetAnalysisResults(self) -> None:
         self.unigramDf = None
@@ -126,6 +144,8 @@ class FreqAnalyzerWidget(QWidget):
             self.exportBtn.setEnabled(False)
         if hasattr(self, "statusLabel"):
             self.statusLabel.setText("语料已变更，请重新分析")
+        if hasattr(self, "_resultSummary"):
+            self._resultSummary.setPlaceholder("请加载语料并点击「开始分析」")
         self._currentFileNames: List[str] = []
 
     def _initUi(self):
@@ -178,24 +198,22 @@ class FreqAnalyzerWidget(QWidget):
         self.maxSpin.setValue(50)
         # self.maxSpin.setFixedWidth(70)
 
-        ngramNLabel = BodyLabel("N-gram 阶数:", self)
-        self.ngramNSpin = SpinBox(self)
-        self.ngramNSpin.setRange(2, 5)
-        self.ngramNSpin.setValue(2)
-
-        ngramMinFreqLabel = BodyLabel("N-gram 最低频次:", self)
-        self.ngramMinFreqSpin = SpinBox(self)
-        self.ngramMinFreqSpin.setRange(1, 1000)
-        self.ngramMinFreqSpin.setValue(2)
+        # 「次要」参数（主词频最低频次 / N-gram 阶数 / N-gram 最低频次）
+        # 统一收纳到「高级设置」弹窗中，避免主页参数行拥挤。
+        self.advancedBtn = PushButton("高级设置…", self)
+        self.advancedBtn.setIcon(FluentIcon.SETTING)
+        self.advancedBtn.setFixedWidth(140)
+        self.advancedBtn.clicked.connect(self._showAdvancedSettings)
+        # 状态指示：显示当前生效的频次筛选摘要
+        self.advancedHint = CaptionLabel(self._advancedHintText(), self)
+        self.advancedHint.setStyleSheet("color: #666; font-size: 11px;")
 
         paramRow1.addWidget(minLabel)
         paramRow1.addWidget(self.minSpin)
         paramRow1.addWidget(maxLabel)
         paramRow1.addWidget(self.maxSpin)
-        paramRow1.addWidget(ngramNLabel)
-        paramRow1.addWidget(self.ngramNSpin)
-        paramRow1.addWidget(ngramMinFreqLabel)
-        paramRow1.addWidget(self.ngramMinFreqSpin)
+        paramRow1.addWidget(self.advancedBtn)
+        paramRow1.addWidget(self.advancedHint)
         paramRow1.addStretch(1)
         paramLayout.addLayout(paramRow1)
 
@@ -205,20 +223,22 @@ class FreqAnalyzerWidget(QWidget):
         self.caseSwitch = _makeSwitchButton("区分大小写", self)
         self.caseSwitch.setChecked(False)
 
-        self.jiebaSwitch = _makeSwitchButton(f"中文 jieba 分词", self)
-        self.jiebaSwitch.setChecked(JIEBA_AVAILABLE)
-        if not JIEBA_AVAILABLE:
-            self.jiebaSwitch.setEnabled(False)
-
         self.stopSwitch = _makeSwitchButton("过滤停用词", self)
         self.stopSwitch.setChecked(False)
+
+        # 停用词管理按钮（导入 / 查看）
+        self.stopwordsViewBtn = PushButton("查看", self)
+        self.stopwordsViewBtn.setIcon(":app/icons/Dictionary.svg")
+        self.stopwordsViewBtn.setFixedWidth(90)
+        self.stopwordsViewBtn.setToolTip("查看/编辑当前停用词列表")
+        self.stopwordsViewBtn.clicked.connect(self._showStopwordsDialog)
 
         self.numberSwitch = _makeSwitchButton("排除纯数字", self)
         self.numberSwitch.setChecked(True)
 
         paramRow2.addWidget(self.caseSwitch)
-        paramRow2.addWidget(self.jiebaSwitch)
         paramRow2.addWidget(self.stopSwitch)
+        paramRow2.addWidget(self.stopwordsViewBtn)
         paramRow2.addWidget(self.numberSwitch)
         paramRow2.addStretch(1)
         paramLayout.addLayout(paramRow2)
@@ -239,8 +259,8 @@ class FreqAnalyzerWidget(QWidget):
         self.ngramBtn.clicked.connect(self._showNgram)
         self.ngramBtn.setEnabled(False)
 
-        # 阶数变化时同步按钮标题，让用户看到当前会分析的 N-gram 类型
-        self.ngramNSpin.valueChanged.connect(self._onNgramNChanged)
+        # 阶数变化由「高级设置」弹窗触发,在 _showAdvancedSettings 中同步按钮标题
+        # (ngramNSpin 已移除,不再监听 valueChanged)
 
         self.exportBtn = PushButton("导出 CSV", self)
         self.exportBtn.setIcon(FluentIcon.SAVE)
@@ -261,6 +281,12 @@ class FreqAnalyzerWidget(QWidget):
 
         scrollLayout.addWidget(infoCard)
         scrollLayout.addWidget(paramCard)
+
+        # ===== 结果摘要卡(优化:大指标卡显示) =====
+        self._resultSummary = ResultSummary(self)
+        self._resultSummary.setTitle("分析结果")
+        self._resultSummary.setPlaceholder("请加载语料并点击「开始分析」")
+        scrollLayout.addWidget(self._resultSummary)
 
         # ===== 词频表 =====
         tableCard = CardWidget(self)
@@ -312,6 +338,76 @@ class FreqAnalyzerWidget(QWidget):
         """阶数变化时即时更新按钮标题（用户感知当前会分析的 N）"""
         self.ngramBtn.setText(self._ngramButtonText(value))
 
+    # ------------------------------------------------------------------
+    # 高级设置弹窗（收纳主页参数行中的次要选项）
+    # ------------------------------------------------------------------
+    def _advancedHintText(self) -> str:
+        """生成主页上参数摘要文案，让用户在不打开弹窗时也能看到当前设置。"""
+        unigramPart = (
+            "主词频无过滤"
+            if self.unigramMinFreq <= 1
+            else f"主词频 ≥ {self.unigramMinFreq}"
+        )
+        return f"当前：{unigramPart} · N-gram 阶数={self.ngramN} · N-gram 最低频次={self.ngramMinFreq}"
+
+    def _showAdvancedSettings(self) -> None:
+        """弹出高级设置弹窗；用户在弹窗内修改后点「确定」才同步到 widget。"""
+        result = AdvancedSettingsDialog.getSettings(
+            unigramMinFreq=self.unigramMinFreq,
+            ngramN=self.ngramN,
+            ngramMinFreq=self.ngramMinFreq,
+            parent=self.window(),
+        )
+        if result is None:
+            # 用户取消,保留原值
+            return
+        # 用户点「确定」,同步到 widget 实例属性
+        self.unigramMinFreq = int(result["unigramMinFreq"])
+        self.ngramN = int(result["ngramN"])
+        self.ngramMinFreq = int(result["ngramMinFreq"])
+        # 同步按钮标题与摘要文案
+        self.ngramBtn.setText(self._ngramButtonText(self.ngramN))
+        if hasattr(self, "advancedHint") and self.advancedHint is not None:
+            self.advancedHint.setText(self._advancedHintText())
+        _showInfoBar(
+            "success",
+            "设置已更新",
+            "高级参数已生效；下次点击「开始分析」时使用最新值",
+            self,
+            duration=1800,
+        )
+
+    # ------------------------------------------------------------------
+    # 停用词弹窗（导入 / 查看 / 编辑 / 恢复默认 / 导出）
+    # ------------------------------------------------------------------
+    def _showStopwordsDialog(self) -> None:
+        """弹出停用词管理弹窗；用户点「保存」后才会真正修改 self.stopwords。
+
+        弹窗内可:
+            - 查看/编辑当前列表
+            - 从 TXT 导入(支持「追加」与「完全替换」两种模式)
+            - 恢复默认中英文停用词表
+            - 导出当前列表为 TXT
+        """
+        result = StopwordsDialog.edit(
+            currentWords=self.stopwords,
+            parent=self.window(),
+        )
+        if result is None:
+            # 用户取消,保留原值
+            return
+        # 保存:替换 widget 的 stopwords(若用户清空则使用空列表)
+        self.stopwords = list(result)
+        # 自动打开「过滤停用词」开关,让用户感知改动已生效
+        self.stopSwitch.setChecked(True)
+        _showInfoBar(
+            "success",
+            "停用词已更新",
+            f"当前停用词共 {len(self.stopwords)} 个;已自动启用「过滤停用词」开关",
+            self,
+            duration=2200,
+        )
+
     def _updateFileCount(self):
         # 委托给 CorpusStatusCard；_refresh 会从 store 重新读取最新数据
         if hasattr(self, "_corpusStatusCard") and self._corpusStatusCard is not None:
@@ -325,7 +421,8 @@ class FreqAnalyzerWidget(QWidget):
         if self._worker and self._worker.isRunning():
             return
 
-        self.ngramN = self.ngramNSpin.value()
+        # ngramN / unigramMinFreq / ngramMinFreq 已在 __init__ 初始化默认值,
+        # 之后由「高级设置」弹窗通过 _showAdvancedSettings 修改。
         # 清洗规则来自 CorpusImportWidget，已通过 CorpusStore 共享给 KWIC
         if self._corpusStore is not None:
             rule = self._corpusStore.cleanRule
@@ -351,14 +448,31 @@ class FreqAnalyzerWidget(QWidget):
             caseSensitive=self.caseSwitch.isChecked(),
             excludeNumbers=self.numberSwitch.isChecked(),
             useStopwords=self.stopSwitch.isChecked(),
-            useJieba=self.jiebaSwitch.isChecked(),
+            useJieba=True,
             ngramN=self.ngramN,
-            ngramMinFreq=self.ngramMinFreqSpin.value(),
+            ngramMinFreq=self.ngramMinFreq,
             cleanRule=rule,
+            unigramMinFreq=self.unigramMinFreq,
+            stopwords=set(self.stopwords) if self.stopwords else None,
+            posTags=(
+                self._corpusStore.posTags
+                if (self._corpusStore is not None and self._corpusStore.posEnabled)
+                else None
+            ),
+            posEnabled=(self._corpusStore is not None and self._corpusStore.posEnabled),
+            tokenCache=(
+                self._corpusStore.tokenCache()
+                if self._corpusStore is not None
+                else None
+            ),
         )
         self._worker.progress.connect(self._onProgress)
         self._worker.finished.connect(self._onFinished)
         self._worker.failed.connect(self._onFailed)
+        # 记录开始时间,用于计算耗时
+        import time as _time
+
+        self._analysisStartedAt = _time.time()
         self._worker.start()
 
     def _onProgress(self, pct: int, status: str):
@@ -373,6 +487,12 @@ class FreqAnalyzerWidget(QWidget):
         self.analyzeBtn.setEnabled(True)
         self.unigramDf = unigramDf
         self.ngramDf = ngramDf
+
+        # 计算耗时(若未记录开始时间则默认 0)
+        import time as _time
+
+        startedAt = getattr(self, "_analysisStartedAt", None)
+        elapsed = _time.time() - startedAt if startedAt is not None else 0.0
 
         # 同步按钮标题为本次分析使用的阶数
         self.ngramBtn.setText(self._ngramButtonText(self.ngramN))
@@ -394,6 +514,29 @@ class FreqAnalyzerWidget(QWidget):
         ngramLabel = "Bigram" if self.ngramN == 2 else f"{self.ngramN}-gram"
         self.statusLabel.setText(
             f"分析完成：{nTypes} 个不同词，{totalTokens:,} token；{ngramCount} 个 {ngramLabel}"
+        )
+
+        # ===== 更新结果摘要 =====
+        top1Word = "—"
+        top1Freq = 0
+        if unigramDf is not None and not unigramDf.empty:
+            topRow = unigramDf.iloc[0]
+            top1Word = str(topRow["Word"])
+            top1Freq = int(topRow["Freq"])
+
+        self._resultSummary.clear()
+        self._resultSummary.setMetrics(
+            [
+                ("词种数", f"{nTypes:,}", MetricColor.PRIMARY),
+                ("Token 总数", f"{totalTokens:,}", MetricColor.SUCCESS),
+                (f"{ngramLabel} 数", f"{ngramCount:,}", MetricColor.ACCENT),
+                ("Top 词", top1Word, MetricColor.NEUTRAL),
+            ]
+        )
+        self._resultSummary.setDetail(
+            f"📊 分析完成 &nbsp;|&nbsp; "
+            f"最高频词 <b>{top1Word}</b> 出现 <b>{top1Freq:,}</b> 次 &nbsp;|&nbsp; "
+            f"耗时 <b>{elapsed:.2f}s</b>"
         )
         logger.info(
             f"[FreqAnalyzerWidget] 分析完成：{nTypes} 个不同词，{totalTokens:,} tokens, "
