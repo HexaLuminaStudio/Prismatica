@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 import pandas as pd
-from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -90,6 +90,16 @@ class CorpusImportWidget(QWidget):
         self.rawTexts: Dict[str, str] = {}
         self._excelLoader = None  # ExcelLoadWorker 引用，防止被 GC
         self._textLoader = None  # TextLoadWorker 引用，防止被 GC
+
+        # P3-fix:同步状态推送去抖 timer(150ms)。在用户连续修改清洗规则时,
+        # 把多次 _pushCleanToStore 调用合并,避免每次都触发下游
+        # effectiveTexts() → 大量 SQL 查询 / 现场清洗。
+        self._syncPushTimer = QTimer(self)
+        self._syncPushTimer.setSingleShot(True)
+        self._syncPushTimer.setInterval(150)
+        self._syncPushTimer.timeout.connect(self._doSyncPushClean)
+        self._pendingSyncRule: Optional[CleanRule] = None
+        self._pendingSyncEnabled: Optional[bool] = None
 
         self._initUi()
 
@@ -578,14 +588,17 @@ class CorpusImportWidget(QWidget):
         switchRow.addWidget(self.cleanLowerSwitch)
 
         # 清洗时是否同步执行词性标注(写入 pos_cache)
+        # P3-fix:依赖「启用清洗」总开关,自身不独立工作。
         self.posOnCleanSwitch = _makeSwitchButton("清洗时同时词性标注", self)
         self.posOnCleanSwitch.setChecked(False)
         self.posOnCleanSwitch.setToolTip(
             "启用后,每次清洗完成的瞬间会同步对该文件做 jieba 词性标注,"
             "并将结果写入 pos_cache 表。可随后在「词性标记」卡片点"
-            "「导出 POS 语料」获取可复用的标注文件。"
+            "「导出 POS 语料」获取可复用的标注文件。\n"
+            "依赖「启用清洗」总开关:未启用清洗时此选项无效。"
         )
-        self.posOnCleanSwitch.checkedChanged.connect(self._onCleanEnableChanged)
+        # P3-fix:勾选变更也要推送到 store,并触发联动校验
+        self.posOnCleanSwitch.checkedChanged.connect(self._onPosOnCleanChanged)
         switchRow.addWidget(self.posOnCleanSwitch)
 
         switchRow.addStretch(1)
@@ -705,6 +718,11 @@ class CorpusImportWidget(QWidget):
         return card
 
     def _onCleanEnableChanged(self, checked: bool) -> None:
+        """启用清洗总开关变化时:
+        - 灰化/恢复所有清洗子规则(用户无法在「未启用清洗」下配置规则)
+        - P3-fix:同时灰化 posOnCleanSwitch(其依赖总开关),且在关闭时自动回滚,
+          避免下次启用清洗时残留 stale 的 POS-ON 状态导致突然重洗。
+        """
         for w in (
             self.cleanEnglishSwitch,
             self.cleanDigitSwitch,
@@ -716,6 +734,43 @@ class CorpusImportWidget(QWidget):
             self.cleanReplaceEdit,
         ):
             w.setEnabled(checked)
+
+        # P3-fix:posOnCleanSwitch 也加入禁用组,关闭总开关时强制回滚
+        if hasattr(self, "posOnCleanSwitch"):
+            self.posOnCleanSwitch.setEnabled(checked)
+            if not checked and self.posOnCleanSwitch.isChecked():
+                # 关闭清洗时,把"同步 POS"也关掉,避免下次启用时残留状态
+                self.posOnCleanSwitch.blockSignals(True)
+                self.posOnCleanSwitch.setChecked(False)
+                self.posOnCleanSwitch.blockSignals(False)
+
+    def _onPosOnCleanChanged(self, checked: bool) -> None:
+        """P3-fix:posOnCleanSwitch 勾选变化时的联动处理。
+
+        冲突点:
+        - 该开关只在「启用清洗」时才有意义;若总开关关闭,自动开启它并提示用户
+        - 切换后必须立即把新 CleanRule 推送到 store(否则要等别的开关触发)
+        """
+        # 场景 A:用户在「未启用清洗」下勾选此开关 → 自动开启清洗总开关
+        if checked and not self.cleanEnableSwitch.isChecked():
+            _showInfoBar(
+                "info",
+                "提示",
+                "「清洗时同时词性标注」依赖「启用清洗」总开关,已自动开启清洗。",
+                self,
+                duration=2500,
+            )
+            self.cleanEnableSwitch.blockSignals(True)
+            self.cleanEnableSwitch.setChecked(True)
+            self.cleanEnableSwitch.blockSignals(False)
+            # setChecked 会触发 _onCleanEnableChanged 灰化逻辑,但这里我们
+            # 手动刷新一下,确保 UI 状态一致
+            self._onCleanEnableChanged(True)
+
+        # 场景 B:用户主动关闭此开关 → 不联动总开关(允许「清洗但不同步 POS」)
+        # 直接推送到 store,让新规则立即生效
+        self._pushCleanToStore()
+        self._refreshCleanSummary()
 
     def _refreshCleanSummary(self) -> None:
         rule = self._collectCleanRule()
@@ -1068,6 +1123,14 @@ class CorpusImportWidget(QWidget):
             - 后台线程清洗 + 写 cache
             - 完成后原子切换规则 + emit 信号
 
+        P3-fix:除了异步预热 cache,还必须**同步**把 enabled / rule 立即同步到
+        CorpusStore。否则在 worker 完成前的窗口期内,下游 effectiveTexts()
+        会因 _cleanEnabled=False 返回 rawTexts(未清洗),造成「分析用的都是
+        没有清洗的语料」的体验 bug。
+
+        为避免高频输入时下游频繁刷新,同步推送也走 150ms 去抖。
+        最终的 setCleanEnabled/setCleanRule 调用在 _doSyncPushClean。
+
         若未注入 coordinator,则降级为同步路径(保持向后兼容)。
         """
         if self._corpusStore is None:
@@ -1075,16 +1138,58 @@ class CorpusImportWidget(QWidget):
         rule = self._collectCleanRule()
         enabled = self.cleanEnableSwitch.isChecked()
 
+        # P3-fix:把同步状态推送到 store 的工作去抖化(150ms),
+        # 与异步 cache 预热的 300ms 去抖解耦。
+        self._pendingSyncRule = rule
+        self._pendingSyncEnabled = enabled
+        self._syncPushTimer.start()  # 重置/启动去抖
+
         if self._cleanCoordinator is not None:
-            # 异步路径(默认)
+            # 异步路径(默认)—— 预热 cache + 后台重洗
             self._cleanCoordinator.scheduleClean(rule, enabled)
         else:
-            # 降级路径(同步,会阻塞 UI)
+            # 降级路径(同步,会阻塞 UI):直接同步推,不走去抖
             logger.warning(
                 "[CorpusImportWidget] CleanCoordinator 未注入,使用同步路径(可能卡顿)"
             )
-            self._corpusStore.setCleanRule(rule)
-            self._corpusStore.setCleanEnabled(enabled)
+            try:
+                self._corpusStore.setCleanRule(rule)
+                self._corpusStore.setCleanEnabled(enabled)
+            except Exception as e:
+                logger.warning(f"[CorpusImportWidget] 降级同步推送失败: {e}")
+
+    def _doSyncPushClean(self) -> None:
+        """同步推送清洗状态到 CorpusStore(P3-fix)
+
+        关键点:必须在 UI 线程同步执行,因为:
+        1. setCleanEnabled / setCleanRule 会 emit cleanRuleChanged,
+           下游订阅者(concordance/network/sentiment/...)会在同一个信号回调
+           链中读取 effectiveTexts。如果此时 _cleanEnabled 还是旧值,
+           它们就会拿到原始语料。
+        2. 同步推送让「总开关 ON」之后,所有下游立刻看到清洗后的语料。
+        """
+        if (
+            self._corpusStore is None
+            or self._pendingSyncRule is None
+            or self._pendingSyncEnabled is None
+        ):
+            return
+        rule = self._pendingSyncRule
+        enabled = self._pendingSyncEnabled
+        self._pendingSyncRule = None
+        self._pendingSyncEnabled = None
+
+        try:
+            # 1) enabled 同步翻转(让 effectiveTexts 立即走清洗分支)
+            if self._corpusStore.cleanEnabled != enabled:
+                self._corpusStore.setCleanEnabled(enabled)
+            # 2) 规则同步更新(让 on-the-fly fallback 用最新规则现场清洗)
+            if self._corpusStore._ruleHash(rule) != self._corpusStore._ruleHash(
+                self._corpusStore._cleanRule
+            ):
+                self._corpusStore.setCleanRule(rule)
+        except Exception as e:
+            logger.warning(f"[CorpusImportWidget] 同步推送清洗状态失败: {e}")
 
     # ------------------------------------------------------------------
     # 清洗进度回调(供 Coordinator → UI 显示状态)
