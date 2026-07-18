@@ -8,6 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame
 
+from loguru import logger
+
 from qfluentwidgets import (
     CardWidget,
     BodyLabel,
@@ -190,7 +192,7 @@ class DownloadCard(CardWidget):
             layout = buttonWidget.layout()
             if layout:
                 # 如果删除按钮已存在，在其之前插入；否则添加到末尾
-                if hasattr(self, 'deleteButton'):
+                if hasattr(self, "deleteButton"):
                     deleteIndex = layout.indexOf(self.deleteButton)
                     if deleteIndex >= 0:
                         layout.insertWidget(deleteIndex, self.redownloadButton)
@@ -353,8 +355,16 @@ class DownloadCard(CardWidget):
             self.deleteLater()
 
     def _onDeleteClicked(self):
-        """删除按钮点击"""
+        """删除按钮点击
+
+        P0-fix:统一走 TaskManager.removeTask,它会:
+        1. 删除数据库中的任务记录
+        2. emit taskDeleted 信号
+        DownloadedScrollArea 监听 taskDeleted 即可同步移除卡片
+        (不再依赖卡片自己的 deleteLater + 字典清理)。
+        """
         from qfluentwidgets import MessageBox
+        from app.core.services import taskManager
 
         confirmDialog = MessageBox(
             "确认删除", "确定要删除这条下载记录吗？", self.window()
@@ -363,12 +373,18 @@ class DownloadCard(CardWidget):
         confirmDialog.cancelButton.setText("取消")
 
         if confirmDialog.exec():
-            from app.core.api import taskControl
-
+            # 通过 TaskManager 统一删除 + 通知 UI
             try:
-                taskControl.deleteTask(self.taskId)
-            except Exception:
-                pass
+                taskManager.removeTask(self.taskId)
+            except Exception as e:
+                # 降级路径:直接调底层 API
+                from app.core.api import taskControl
+
+                logger.error(f"[DownloadCard] 删除任务失败,降级路径: {e}")
+                try:
+                    taskControl.deleteTask(self.taskId)
+                except Exception:
+                    pass
 
             try:
                 if hasattr(self, "pauseButton"):
@@ -424,12 +440,19 @@ class DownloadCard(CardWidget):
 
             if msgBox.exec():
                 # 用户选择删除记录
-                from app.core.api import taskControl
+                # P0-fix:统一走 TaskManager.removeTask,触发 taskDeleted 信号
+                from app.core.services import taskManager
 
                 try:
-                    taskControl.deleteTask(self.taskId)
-                except Exception:
-                    pass
+                    taskManager.removeTask(self.taskId)
+                except Exception as e:
+                    from app.core.api import taskControl
+
+                    logger.error(f"[DownloadCard] 删除任务记录失败,降级路径: {e}")
+                    try:
+                        taskControl.deleteTask(self.taskId)
+                    except Exception:
+                        pass
 
                 try:
                     if hasattr(self, "pauseButton"):

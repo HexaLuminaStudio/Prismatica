@@ -33,7 +33,7 @@ class HSKDownloadWorker(QThread):
 
     def __init__(self, payload: Dict[str, Any]):
         super().__init__()
-        self.isRunning = True
+        self._isRunning = True
         self.isPaused = False
         self.token = qconfig.get(Config.HSKLoginToken)
         self.outputDir = qconfig.get(Config.DownloadSavePath)
@@ -65,7 +65,7 @@ class HSKDownloadWorker(QThread):
     def stop(self):
         """停止下载"""
         logger.info(f"[HSK] 收到停止信号, taskId={self.taskId}")
-        self.isRunning = False
+        self._isRunning = False
 
     def pause(self):
         """暂停下载"""
@@ -155,14 +155,14 @@ class HSKDownloadWorker(QThread):
     def _makeRequest(self, page: int) -> Optional[Dict]:
         """发送请求，带有重试机制和防429策略"""
         for attempt in range(self.maxRetries):
-            if not self.isRunning:
+            if not self._isRunning:
                 return None
 
             delay = self._calculateDelay()
             if delay > 0:
                 sleepChunks = int(delay * 10)
                 for _ in range(sleepChunks):
-                    if not self.isRunning:
+                    if not self._isRunning:
                         return None
                     time.sleep(0.1)
 
@@ -190,7 +190,7 @@ class HSKDownloadWorker(QThread):
                 # 处理429错误
                 if response.status_code == 429:
                     waitTime = 10 * (attempt + 1)
-                    if self.isRunning:
+                    if self._isRunning:
                         self.progress.emit(
                             {
                                 "progress": self._calculateProgressInfo()["progress"],
@@ -203,7 +203,7 @@ class HSKDownloadWorker(QThread):
                         )
                         sleepChunks = int(waitTime * 10)
                         for _ in range(sleepChunks):
-                            if not self.isRunning:
+                            if not self._isRunning:
                                 return None
                             time.sleep(0.1)
                     continue
@@ -224,11 +224,11 @@ class HSKDownloadWorker(QThread):
                     continue
 
             except requests.exceptions.Timeout:
-                if not self.isRunning or attempt == self.maxRetries - 1:
+                if not self._isRunning or attempt == self.maxRetries - 1:
                     return None
                 continue
             except Exception:
-                if not self.isRunning or attempt == self.maxRetries - 1:
+                if not self._isRunning or attempt == self.maxRetries - 1:
                     return None
                 continue
 
@@ -236,7 +236,7 @@ class HSKDownloadWorker(QThread):
 
     def downloadPage(self, page: int) -> Optional[Dict]:
         """下载单页数据"""
-        if not self.isRunning:
+        if not self._isRunning:
             return None
 
         result = self._makeRequest(page)
@@ -309,11 +309,11 @@ class HSKDownloadWorker(QThread):
             # 第二步：顺序下载剩余页面
             pausedShown = False
             for page in range(2, self.totalPages + 1):
-                if not self.isRunning:
+                if not self._isRunning:
                     break
 
                 # 检查是否暂停
-                while self.isPaused and self.isRunning:
+                while self.isPaused and self._isRunning:
                     time.sleep(0.5)
                     # 暂停时只发送一次状态
                     if not pausedShown:
@@ -321,7 +321,7 @@ class HSKDownloadWorker(QThread):
                         pausedShown = True
 
                 pausedShown = False
-                if not self.isRunning:
+                if not self._isRunning:
                     break
 
                 pageData = self.downloadPage(page)
@@ -332,7 +332,7 @@ class HSKDownloadWorker(QThread):
                 if page % 5 == 0 or page == self.totalPages:
                     self._emitProgress(f"已处理 {page}/{self.totalPages} 页")
 
-            if not self.isRunning:
+            if not self._isRunning:
                 errorMsg = "下载已取消"
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")

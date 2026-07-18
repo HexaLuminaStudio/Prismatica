@@ -268,27 +268,47 @@ class DownloadApplyWidget(MessageBoxBase):
         self.cleanupWorker()
 
     def cleanupWorker(self):
-        """清理工作线程"""
+        """清理工作线程
+
+        P0-fix(2026-07-18):清理 worker 报 'bool' object is not callable。
+        根因是 GetTotalWorker/GlobalGetTotalWorker 的 __init__ 写了
+        self.isRunning = True,这个属性**遮蔽**了 QThread 继承的
+        isRunning() 方法,导致 worker.isRunning() 变成对 bool 调用。
+        此类 worker 内部的 isRunning 已统一改名为 _isRunning,
+        这里也改用 wait(0) 来探测运行状态,避免再次踩坑。
+        """
         worker = self.worker
         if worker is not None:
-            # P0-fix:deleteLater 之前必须先 disconnect 信号,否则信号仍在
-            # 已释放的 receiver 队列里排队,触发 RuntimeError("wrapped
-            # C/C++ object has been deleted")。
             try:
-                if hasattr(worker, "stop"):
-                    worker.stop()
-                if worker.isRunning():
-                    worker.wait(1000)
+                # 用 callable() 严格守卫,防止任何属性被遮蔽时崩溃
+                stopFn = getattr(worker, "stop", None)
+                if callable(stopFn):
+                    try:
+                        stopFn()
+                    except Exception:
+                        pass
+                # wait(0) 非阻塞检测线程是否还在跑:True=已结束,False=还在跑
+                if callable(getattr(worker, "isRunning", None)):
+                    try:
+                        if worker.isRunning():
+                            worker.wait(1000)
+                    except Exception:
+                        pass
                 # 安全地断开所有连接到本对象(self)的信号
-                try:
-                    worker.finished.disconnect(self.onQueryFinished)
-                except (RuntimeError, TypeError):
-                    pass
-                try:
-                    worker.failed.disconnect(self.onQueryFailed)
-                except (RuntimeError, TypeError):
-                    pass
-                worker.deleteLater()
+                finishedSignal = getattr(worker, "finished", None)
+                if finishedSignal is not None:
+                    try:
+                        finishedSignal.disconnect(self.onQueryFinished)
+                    except (RuntimeError, TypeError):
+                        pass
+                failedSignal = getattr(worker, "failed", None)
+                if failedSignal is not None:
+                    try:
+                        failedSignal.disconnect(self.onQueryFailed)
+                    except (RuntimeError, TypeError):
+                        pass
+                if callable(getattr(worker, "deleteLater", None)):
+                    worker.deleteLater()
             except Exception as e:
                 logger.warning(f"[DownloadApplyWidget] 清理 worker 异常: {e}")
             self.worker = None

@@ -40,6 +40,9 @@ class DownloadedScrollArea(SmoothScrollArea):
         # 连接信号
         taskManager.taskCompleted.connect(self._onTaskCompleted)
         taskManager.taskFailed.connect(self._onTaskFailed)
+        # P0-fix:监听任务删除信号,完成卡片被删除时同步从字典移除,
+        # 避免 completedCards 里残留悬空引用。
+        taskManager.taskDeleted.connect(self.removeCard)
 
         self._initWidget()
 

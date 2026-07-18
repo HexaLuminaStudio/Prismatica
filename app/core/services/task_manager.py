@@ -24,6 +24,11 @@ class TaskManager(QObject):
     taskCancelled = Signal(str)  # 任务取消信号
     taskPaused = Signal(str)  # 任务暂停信号
     taskResumed = Signal(str)  # 任务恢复信号
+    # P0-fix:新增删除信号,UI 监听后可同步移除卡片。
+    # 原 download_card 直接调 taskControl.deleteTask() 后只 deleteLater
+    # 自己,DownloadedScrollArea.completedCards 字典里的引用泄漏,
+    # 切到其他语料 / 重建滚动区域时会出现悬空卡片。
+    taskDeleted = Signal(str)  # 任务删除信号 (taskId)
 
     def __init__(self, maxConcurrentTasks: int = 3):
         super().__init__()
@@ -291,7 +296,12 @@ class TaskManager(QObject):
             return self.pendingQueue.copy()
 
     def removeTask(self, taskId: str) -> bool:
-        """移除任务"""
+        """移除任务
+
+        P0-fix:成功删除数据库记录后,emit taskDeleted 信号。
+        下游 DownloadedScrollArea / 已完成面板监听此信号后可
+        同步移除卡片,避免 completedCards 字典里残留悬空引用。
+        """
         with self.lock:
             if taskId in self.workers:
                 self.stopTask(taskId)
@@ -303,7 +313,11 @@ class TaskManager(QObject):
             if result:
                 logger.info(f"[TaskManager] 移除任务: {taskId}")
 
-            return result
+        # 在锁外 emit,避免下游回调重入 TaskManager 锁
+        if result:
+            self.taskDeleted.emit(taskId)
+
+        return result
 
     def stopAllTasks(self) -> int:
         """停止所有任务。

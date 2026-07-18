@@ -39,7 +39,7 @@ class GlobalDownloadWorker(QThread):
         self.perPage = qconfig.get(cfg.NumberPerDownloads)
 
         # 状态控制
-        self.isRunning = True
+        self._isRunning = True
         self.isPaused = False
 
         # 进度计算
@@ -62,7 +62,7 @@ class GlobalDownloadWorker(QThread):
     def stop(self):
         """停止下载"""
         logger.info(f"[Global] 收到停止信号, taskId={self.taskId}")
-        self.isRunning = False
+        self._isRunning = False
 
     def pause(self):
         """暂停下载"""
@@ -144,7 +144,7 @@ class GlobalDownloadWorker(QThread):
     def _makeRequest(self, page: int) -> Optional[Dict]:
         """发送请求，带有重试机制"""
         for attempt in range(self.maxRetries):
-            if not self.isRunning:
+            if not self._isRunning:
                 return None
 
             headers = {
@@ -264,18 +264,18 @@ class GlobalDownloadWorker(QThread):
             # 第二步：顺序下载剩余页面
             pausedShown = False
             for page in range(2, self.totalPages + 1):
-                if not self.isRunning:
+                if not self._isRunning:
                     break
 
                 # 检查是否暂停
-                while self.isPaused and self.isRunning:
+                while self.isPaused and self._isRunning:
                     time.sleep(0.5)
                     if not pausedShown:
                         self._emitProgress("已暂停")
                         pausedShown = True
 
                 pausedShown = False
-                if not self.isRunning:
+                if not self._isRunning:
                     break
 
                 # 每5页检查一次目标文件夹
@@ -299,7 +299,7 @@ class GlobalDownloadWorker(QThread):
                 if page % 5 == 0 or page == self.totalPages:
                     self._emitProgress(f"已处理 {page}/{self.totalPages} 页")
 
-            if not self.isRunning:
+            if not self._isRunning:
                 errorMsg = "下载已取消"
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
@@ -399,7 +399,7 @@ class GlobalDownloadWorker(QThread):
 
     def _downloadPage(self, page: int) -> Optional[Dict]:
         """下载单页数据"""
-        if not self.isRunning:
+        if not self._isRunning:
             return None
 
         result = self._makeRequest(page)
@@ -418,7 +418,7 @@ class GlobalGetTotalWorker(QThread):
 
     def __init__(self, taskInfo: Dict[str, Any]):
         super().__init__()
-        self.isRunning = True
+        self._isRunning = True
         self.token = qconfig.get(cfg.GlobalLoginToken)
         self.maxRetries = 3
 
@@ -429,12 +429,12 @@ class GlobalGetTotalWorker(QThread):
 
     def stop(self):
         """停止线程"""
-        self.isRunning = False
+        self._isRunning = False
 
     def _makeRequest(self) -> Optional[Dict]:
         """发送请求"""
         for attempt in range(self.maxRetries):
-            if not self.isRunning:
+            if not self._isRunning:
                 return None
 
             headers = {
@@ -449,7 +449,7 @@ class GlobalGetTotalWorker(QThread):
             currentPayload["currpage"] = 1
 
             try:
-                if not self.isRunning:
+                if not self._isRunning:
                     return None
                 response = requests.post(
                     self.url,

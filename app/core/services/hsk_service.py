@@ -73,7 +73,7 @@ class GetTotalWorker(QThread):
 
     def __init__(self, payload):
         super().__init__()
-        self.isRunning = True
+        self._isRunning = True
         self.token = None
         self.maxRetries = 3
 
@@ -89,7 +89,7 @@ class GetTotalWorker(QThread):
         self.maxRetries = qconfig.get(Config.MaximumAttempts)
 
     def stop(self):
-        self.isRunning = False
+        self._isRunning = False
 
     def run(self):
         if not self.token:
@@ -99,7 +99,7 @@ class GetTotalWorker(QThread):
         self.msleep(500)
 
         for attempt in range(self.maxRetries):
-            if not self.isRunning:
+            if not self._isRunning:
                 return
 
             headers = {
@@ -120,7 +120,7 @@ class GetTotalWorker(QThread):
                     timeout=60,
                 )
 
-                if not self.isRunning:
+                if not self._isRunning:
                     return
 
                 data = response.json()
