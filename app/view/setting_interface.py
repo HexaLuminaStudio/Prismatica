@@ -304,7 +304,16 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
 
 
 class LicenseSettingWidget(GroupHeaderCardWidget):
-    """激活码设置组件"""
+    """激活码设置组件
+
+    P1-fix 2026-07-18:内测版(IS_BETA=True)下:
+        - 隐藏「激活码」输入组(避免内测用户误以为需要激活)
+        - 新增「内测版功能列表」组(让用户清楚当前可用的功能)
+        - 状态标签显示内测期信息(从 LicenseManager._isBetaActiveOrExpired 读取)
+    正式版(IS_BETA=False)下:
+        - 保留原有完整激活码流程
+        - 激活成功后自动隐藏激活输入框
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -316,7 +325,17 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         self._addSettingGroups()
 
     def _initComponents(self):
-        """初始化组件"""
+        """初始化组件
+
+        P1-fix 2026-07-18:内测版(IS_BETA=True)下不创建激活码输入框/按钮。
+        这能避免用户看到「激活」按钮后误以为必须激活才能用 — 实际内测版
+        全部功能可免费使用,激活会被 LicenseManager.activate() 直接拒绝。
+        """
+        # P1-fix 2026-07-18:在组件创建前判断内测 / 正式版分支
+        from app.core.utils.setting import IS_BETA
+
+        self._isBeta = IS_BETA
+
         # 设备码显示标签
         self.deviceIdLabel = BodyLabel("正在获取设备码...", self)
         self.deviceIdLabel.setMinimumWidth(400)
@@ -326,17 +345,23 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         self.copyDeviceIdButton.setIcon(":app/icons/Copy.svg")
         self.copyDeviceIdButton.clicked.connect(self._copyDeviceId)
 
-        # 激活码输入框
-        self.activationCodeLineEdit = LineEdit(self)
-        self.activationCodeLineEdit.setMinimumWidth(400)
-        self.activationCodeLineEdit.setPlaceholderText("请输入激活码")
-        self.activationCodeLineEdit.textChanged.connect(self._onActivationCodeChanged)
+        # 激活码输入框 / 激活按钮:仅在正式版下创建
+        if not self._isBeta:
+            self.activationCodeLineEdit = LineEdit(self)
+            self.activationCodeLineEdit.setMinimumWidth(400)
+            self.activationCodeLineEdit.setPlaceholderText("请输入激活码")
+            self.activationCodeLineEdit.textChanged.connect(
+                self._onActivationCodeChanged
+            )
 
-        # 激活按钮
-        self.activateButton = PushButton("激活", self)
-        self.activateButton.setIcon(":app/icons/Check.svg")
-        self.activateButton.clicked.connect(self._activateLicense)
-        self.activateButton.setEnabled(False)
+            self.activateButton = PushButton("激活", self)
+            self.activateButton.setIcon(":app/icons/Check.svg")
+            self.activateButton.clicked.connect(self._activateLicense)
+            self.activateButton.setEnabled(False)
+        else:
+            # 内测版:不创建激活相关组件,_activateLicense 永远不会被调用
+            self.activationCodeLineEdit = None
+            self.activateButton = None
 
         # 激活状态标签
         self.statusLabel = BodyLabel("", self)
@@ -346,8 +371,12 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         self._updateActivationStatus()
 
     def _addSettingGroups(self):
-        """添加设置组"""
-        # 设备信息组
+        """添加设置组
+
+        P1-fix 2026-07-18:内测版下不添加「激活码输入组」,
+        改为新增「内测版功能列表」组,让用户清楚当前可用的功能。
+        """
+        # 设备信息组(两种模式都有)
         deviceIdLayout = QHBoxLayout()
         deviceIdLayout.addWidget(self.deviceIdLabel, 1)
         deviceIdLayout.addWidget(self.copyDeviceIdButton)
@@ -362,27 +391,76 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
             deviceIdWidget,
         )
 
-        # 激活码输入组
-        activationLayout = QHBoxLayout()
-        activationLayout.addWidget(self.activationCodeLineEdit, 1)
-        activationLayout.addWidget(self.activateButton)
+        if not self._isBeta:
+            # 正式版:激活码输入组
+            activationLayout = QHBoxLayout()
+            activationLayout.addWidget(self.activationCodeLineEdit, 1)
+            activationLayout.addWidget(self.activateButton)
 
-        activationWidget = QWidget()
-        activationWidget.setLayout(activationLayout)
+            activationWidget = QWidget()
+            activationWidget.setLayout(activationLayout)
 
-        self.addGroup(
-            ":app/icons/Advance.svg",
-            "激活码",
-            "输入激活码以解锁高级功能",
-            activationWidget,
-        )
+            self.addGroup(
+                ":app/icons/Advance.svg",
+                "激活码",
+                "输入激活码以解锁高级功能",
+                activationWidget,
+            )
+        else:
+            # 内测版:展示内测版独享功能列表(替代激活码输入)
+            self._addBetaFeaturesGroup()
 
-        # 激活状态组
+        # 激活状态组(两种模式都有)
         self.addGroup(
             ":app/icons/Status.svg",
-            "激活状态",
-            "未激活",
+            "激活状态" if not self._isBeta else "当前模式",
+            "未激活" if not self._isBeta else "内测版",
             self.statusLabel,
+        )
+
+    def _addBetaFeaturesGroup(self):
+        """添加内测版独享功能列表
+
+        把 setting.BETA_FEATURES 渲染为一组「图标 + 标题 + 说明」,
+        让内测用户清楚知道当前版本能干什么、什么时候需要激活。
+        """
+        from app.core.utils.setting import BETA_FEATURES
+
+        # 用 VBoxLayout 把所有 feature 排成一列
+        featureContainer = QWidget(self)
+        featureLayout = QVBoxLayout(featureContainer)
+        featureLayout.setContentsMargins(0, 4, 0, 4)
+        featureLayout.setSpacing(8)
+
+        for iconKey, title, desc in BETA_FEATURES:
+            row = QHBoxLayout()
+            row.setSpacing(12)
+
+            # 小图标(直接用 SVG widget,大小 20x20)
+            iconWidget = QSvgWidget(f":app/icons/{iconKey}", featureContainer)
+            iconWidget.setFixedSize(20, 20)
+            row.addWidget(iconWidget, 0, Qt.AlignmentFlag.AlignVCenter)
+
+            # 标题 + 说明(垂直)
+            textCol = QVBoxLayout()
+            textCol.setSpacing(0)
+            titleLabel = BodyLabel(title, featureContainer)
+            titleLabel.setStyleSheet("font-weight: 600; color: #0078D4;")
+            descLabel = CaptionLabel(desc, featureContainer)
+            descLabel.setStyleSheet("color: #888; font-size: 11px;")
+            descLabel.setWordWrap(True)
+            textCol.addWidget(titleLabel)
+            textCol.addWidget(descLabel)
+
+            row.addLayout(textCol, 1)
+            featureLayout.addLayout(row)
+
+        featureContainer.setLayout(featureLayout)
+        self.addGroup(
+            ":app/icons/Advance.svg",
+            "内测版功能",
+            "内测期间所有功能均可使用,无需激活码",
+            featureContainer,
         )
 
     def _loadDeviceId(self):
@@ -417,14 +495,19 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
         self.activateButton.setEnabled(isValid)
 
     def _activateLicense(self):
-        """激活许可证"""
+        """激活许可证
+
+        P1-fix(2026-07-18):license.activate() 返回值改为 dict,这里根据
+        result["success"] 与 result["message"] 给出准确提示,避免笼统的
+        「数据保存失败」掩盖了真实原因(磁盘权限、加密失败等)。
+        """
         activationCode = self.activationCodeLineEdit.text().strip()
 
         if not activationCode:
             self._showErrorMessage("激活失败", "请输入激活码")
             return
 
-        logger.info(f"[Setting] 尝试激活，激活码: {activationCode[:8]}...")
+        logger.info(f"[Setting] 尝试激活,激活码: {activationCode[:8]}...")
 
         # 获取设备码
         deviceId = self.deviceIdLabel.text().replace("-", "")
@@ -434,7 +517,7 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
 
         licenseManager = getLicenseManager()
 
-        # 验证激活码
+        # 验证激活码(只校验,不入库)
         result = licenseManager.verifyActivationCode(activationCode, deviceId)
 
         if not result["success"]:
@@ -442,26 +525,72 @@ class LicenseSettingWidget(GroupHeaderCardWidget):
             self._showErrorMessage("激活失败", result["message"])
             return
 
-        # 执行激活
-        if licenseManager.activate(activationCode, deviceId):
-            logger.info("[Setting] 激活成功")
-            self._showSuccessMessage("O(∩_∩)O 激活成功", "高级功能已解锁")
-            self._updateActivationStatus()
+        # 执行激活(落盘 + 加密)。新 API 返回 dict 含详细错误信息
+        activateResult = licenseManager.activate(activationCode, deviceId)
+        if not activateResult.get("success"):
+            # P1-fix:把具体原因透传给用户,而不仅是「数据保存失败」
+            logger.error(
+                f"[Setting] 激活失败: {activateResult.get('message', '未知错误')}"
+            )
+            self._showErrorMessage(
+                "激活失败",
+                activateResult.get("message", "数据保存失败，请重试"),
+            )
+            return
 
-            # 发送激活状态变更信号
-            signalBus.activationStatusChanged.emit(True)
+        logger.info("[Setting] 激活成功")
+        self._showSuccessMessage("O(∩_∩)O 激活成功", "高级功能已解锁")
+        self._updateActivationStatus()
 
-            self.activationCodeLineEdit.clear()
-        else:
-            logger.error("[Setting] 激活数据保存失败")
-            self._showErrorMessage("激活失败", "数据保存失败，请重试")
+        # 发送激活状态变更信号
+        signalBus.activationStatusChanged.emit(True)
+
+        self.activationCodeLineEdit.clear()
 
     def _updateActivationStatus(self):
-        """更新激活状态显示"""
+        """更新激活状态显示
+
+        P1-fix 2026-07-18:内测版下完全跳过激活按钮的状态切换逻辑,
+        因为 activateButton / activationCodeLineEdit 在该模式下根本不存在
+        (被置为 None)。改为从 LicenseManager._isBetaActiveOrExpired 读取
+        内测期信息,显示「内测期 / 剩余 N 天 / 截止日期」。
+        """
         from app.core.utils.license import getLicenseManager
 
         licenseManager = getLicenseManager()
 
+        if self._isBeta:
+            # 内测版:显示内测期信息
+            status = licenseManager.ensureBetaTimelock()
+            daysRemaining = status.get("daysRemaining", -1)
+            deadline = status.get("deadline", "")
+            startDate = status.get("startDate")
+
+            if status.get("status") == "activated":
+                # 已经激活(理论不会发生在内测版,但保持兼容)
+                statusText = "正式版已激活"
+            elif daysRemaining < 0:
+                # 首次启动,还没记录 startDate
+                statusText = "内测版 | 首次启动,所有功能可免费使用"
+            elif daysRemaining == 0:
+                # 已过期
+                statusText = f"内测期已结束(截止 {deadline})"
+            else:
+                # 正常期内
+                statusText = f"内测版 | 剩余 {daysRemaining} 天 | 截止 {deadline}"
+
+            self.statusLabel.setText(statusText)
+            if len(self.groupWidgets) >= 3:
+                cardWidget = self.groupWidgets[2]
+                for i in range(cardWidget.viewLayout.count()):
+                    widget = cardWidget.viewLayout.itemAt(i).widget()
+                    if isinstance(widget, BodyLabel):
+                        widget.setText(statusText)
+                        break
+            logger.info(f"[Setting] 当前状态(内测): {statusText}")
+            return
+
+        # 正式版:原有激活流程
         if licenseManager.isActivated():
             # 已激活
             userType = licenseManager.getUserType()

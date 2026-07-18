@@ -87,6 +87,9 @@ app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 from app.core.utils.license import getLicenseManager
 
 _betaStatus = getLicenseManager().ensureBetaTimelock()
+# P0-fix:用于在过期时持有非模态弹窗的强引用,防止 Python GC 回收。
+# 模块级全局变量,生命周期等同进程。
+_betaExpiredDialog = None
 logger.info(
     f"[BetaTimelock] status={_betaStatus.get('status')}, "
     f"daysRemaining={_betaStatus.get('daysRemaining')}, "
@@ -94,15 +97,20 @@ logger.info(
 )
 
 if _betaStatus.get("status") in ("expired_hard", "expired_30d"):
-    # 内测已过期:显示遮罩界面阻止使用
-    from app.view.widgets.beta_expired_dialog import showBetaExpiredDialog
+    # P0-fix 2026-07-18:内测已过期时**仅显示提示弹窗**,不显示主窗口。
+    # - 弹窗用 modal 模式阻塞主事件循环(直到用户激活成功 / 退出程序)
+    # - 不创建 MainWindow,避免用户绕过弹窗进入主程序
+    # - 用户必须做出选择(激活码 / 退出)
+    from app.view.widgets.beta_expired_dialog import showBetaExpiredWarning
 
-    logger.warning(f"[BetaTimelock] 已阻止启动: {_betaStatus.get('reason')}")
-    showBetaExpiredDialog(_betaStatus)
-    sys.exit(0)
-
-mainWindow = MainWindow()
-mainWindow.show()
+    logger.warning(
+        f"[BetaTimelock] 内测已过期,显示提示弹窗: {_betaStatus.get('reason')}"
+    )
+    # 暂存到模块级变量,避免弹窗被 GC
+    _betaExpiredDialog = showBetaExpiredWarning(_betaStatus, parent=None, modal=True)
+else:
+    mainWindow = MainWindow()
+    mainWindow.show()
 
 # 应用程序退出处理
 result = app.exec()

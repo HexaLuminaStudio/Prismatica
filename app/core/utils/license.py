@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # 内测时间锁常量
 # ============================================================================
 # 内测截止日(绝对硬上限,任何内测用户均受此日期约束)
-BETA_HARD_DEADLINE = "2026-07-30"
+BETA_HARD_DEADLINE = "2026-07-19"
 # 内测模式最大有效期(天):从首次启动算起,防止无限延期
 BETA_MAX_VALID_DAYS = 30
 # 内测模式启动时记录的密钥标识(派生自设备特征,防止复制 license.dat 到另一台机器)
@@ -321,30 +321,101 @@ class LicenseManager:
             json.dumps(payload, ensure_ascii=False).encode("utf-8")
         ).decode("ascii")
 
-    def activate(self, activationCode: str, deviceCode: str) -> bool:
+    def activate(self, activationCode: str, deviceCode: str) -> dict:
+        """激活软件
+
+        P1-fix(2026-07-18):返回值改为 dict,保留失败原因给上层 UI 展示。
+        旧的 bool 返回会让上层吞掉所有异常,用户只看到「数据保存失败」,
+        客服难以定位问题。
+
+        P1-fix(2026-07-18,二次):内测版(IS_BETA=True)下**不允许激活**,
+        即便用户输入了正确的激活码,也直接拒绝并返回明确错误。
+        内测用户走 beta_timelock 机制(30 天 / 2026-07-30 截止日),无需激活码。
+        这是 setting.IS_BETA = True 决定的硬开关,在 publish 正式版时改为 False。
+
+        Args:
+            activationCode: 激活码
+            deviceCode: 设备码
+
+        Returns:
+            {
+                "success": bool,
+                "message": str,
+                "data": Optional[dict],   # 成功时为激活数据
+            }
         """
-        激活软件
+        # 1) 内测版硬开关:不允许激活
+        try:
+            from app.core.utils.setting import IS_BETA
 
-        :param activationCode: 激活码
-        :param deviceCode: 设备码
-        :return: 是否激活成功
-        """
-        # 先验证
-        result = self.verifyActivationCode(activationCode, deviceCode)
+            if IS_BETA:
+                logger.warning(
+                    "[License] 内测版拒绝激活请求 "
+                    f"(activationCode={activationCode[:8]}...)"
+                )
+                return {
+                    "success": False,
+                    "message": (
+                        "当前为内测版本,不支持激活码激活。"
+                        "内测期间所有功能可免费使用,"
+                        "正式版发布后再使用激活码。"
+                    ),
+                    "data": None,
+                }
+        except Exception as e:
+            # 设置模块加载失败不应阻断主流程(其它地方已捕获),但这里至少打日志
+            logger.warning(f"[License] 检查 IS_BETA 失败: {e}")
 
-        if not result["success"]:
-            return False
+        # 2) 先做 HMAC 验签 + 设备码匹配 + 有效期校验
+        try:
+            result = self.verifyActivationCode(activationCode, deviceCode)
+        except Exception as e:
+            # 不让任何异常逃逸到 UI 层 → 用 loguru 记录 + 返回明确消息
+            logger.exception(f"[License] 校验激活码异常: {e}")
+            return {
+                "success": False,
+                "message": f"校验激活码失败:{type(e).__name__}: {e}",
+                "data": None,
+            }
 
-        # 保存激活数据
-        self.activationData = result["data"]
-        self.activationData["activatedAt"] = datetime.now().strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-        self.activationData["activationCode"] = (
-            activationCode[:8] + "..."
-        )  # 只保存激活码前8位
+        if not result.get("success"):
+            # 透传 verifyActivationCode 给出的具体原因
+            return {
+                "success": False,
+                "message": result.get("message", "激活码无效"),
+                "data": None,
+            }
 
-        return self._saveActivationData()
+        # 3) 通过校验 → 保存激活数据(落盘 + 加密)
+        try:
+            self.activationData = result["data"]
+            self.activationData["activatedAt"] = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            self.activationData["activationCode"] = (
+                activationCode[:8] + "..."
+            )  # 只保存激活码前8位
+
+            if not self._saveActivationData():
+                return {
+                    "success": False,
+                    "message": "激活数据保存失败,请检查磁盘权限或重新尝试",
+                    "data": None,
+                }
+        except Exception as e:
+            logger.exception(f"[License] 保存激活数据异常: {e}")
+            return {
+                "success": False,
+                "message": f"保存激活数据失败:{type(e).__name__}: {e}",
+                "data": None,
+            }
+
+        logger.info(f"[License] 激活成功: deviceCode={deviceCode[:16]}...")
+        return {
+            "success": True,
+            "message": "激活成功",
+            "data": self.activationData,
+        }
 
     def getUserType(self) -> str:
         """获取用户类型"""

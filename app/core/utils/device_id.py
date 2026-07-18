@@ -9,7 +9,17 @@ import platform
 import uuid
 from pathlib import Path
 
+from loguru import logger
+
 from .encryption import AESCipherGCM, deriveKey, hash256
+
+
+# P1-fix 2026-07-18:设备特征采集的安全阈值。
+# 采集到的非空特征数量必须达到这个最小值,否则视为环境异常
+# (例如 Windows 沙箱禁止 wmic、Linux 容器缺少 /proc 等)。
+# 此时生成的设备码碰撞概率会显著升高,直接抛错比继续返回
+# 「看似合法」的设备码更安全。
+_MIN_REQUIRED_FEATURES = 3
 
 
 class DeviceIdentifier:
@@ -147,6 +157,11 @@ class DeviceIdentifier:
         采集设备特征信息
 
         :return: 设备特征字典
+
+        P1-fix 2026-07-18:采集后校验非空特征数。少于 _MIN_REQUIRED_FEATURES
+        时抛 RuntimeError,避免在 sandbox / 受限环境(如 wmic 被禁用、
+        /proc 不可读)中生成「特征过少、设备码碰撞率高」的伪合法设备码,
+        后续激活会被错误地批量匹配到同一设备,客服侧难以定位。
         """
         features = {
             "mac": self._collectMacAddress(),
@@ -160,6 +175,26 @@ class DeviceIdentifier:
 
         # 过滤空值
         self.deviceFeatures = {k: v for k, v in features.items() if v}
+
+        # 校验特征数量
+        featureCount = len(self.deviceFeatures)
+        if featureCount < _MIN_REQUIRED_FEATURES:
+            missingKeys = [k for k, v in features.items() if not v]
+            msg = (
+                f"设备特征采集不足:仅 {featureCount}/{len(features)} 项,"
+                f"缺少:{', '.join(missingKeys)}。"
+                f"低于安全阈值 {_MIN_REQUIRED_FEATURES},无法生成可靠的设备码。"
+            )
+            logger.error(f"[DeviceID] {msg}")
+            # 抛错而不是返回不可靠结果,这样上层可以在启动时给用户
+            # 明确的提示(沙箱/权限问题),而不是默默生成一个错误码
+            self.deviceFeatures = {}
+            raise RuntimeError(msg)
+
+        logger.debug(
+            f"[DeviceID] 采集到 {featureCount} 项特征: "
+            f"{list(self.deviceFeatures.keys())}"
+        )
         return self.deviceFeatures
 
     def generateDeviceId(self) -> str:
@@ -346,6 +381,11 @@ def generateOrLoadDeviceId() -> str:
     生成或加载设备标识
 
     :return: 设备唯一标识符
+
+    Raises:
+        RuntimeError: 设备特征采集失败(沙箱 / 权限问题)。
+        P1-fix 2026-07-18:让异常透传,而不是返回空字符串或旧 ID,
+        上层 UI 可以捕获并展示明确的失败原因,客服侧可定位。
     """
     device = getDeviceIdentifier()
 
@@ -353,7 +393,8 @@ def generateOrLoadDeviceId() -> str:
     if device.load():
         return device.deviceId
 
-    # 生成新标识
+    # 生成新标识。collectDeviceFeatures() 会在特征数不足时抛 RuntimeError,
+    # 此处直接透传给调用方。
     device.collectDeviceFeatures()
     deviceId = device.generateDeviceId()
     device.save()
