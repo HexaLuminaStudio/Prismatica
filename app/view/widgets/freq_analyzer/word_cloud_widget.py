@@ -19,7 +19,6 @@ UI 风格与其他子页面保持一致:
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -72,7 +71,7 @@ from app.view.widgets.freq_analyzer.word_cloud_engine import (
     _WORDCLOUD_AVAILABLE,
 )
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # ---------------------------------------------------------------------------
@@ -131,38 +130,48 @@ class WordCloudWorker(QThread):
             allPosTags: List[str] = []  # 与 allTokens 一一对应
             # 是否需要词性:勾选了词性过滤时计算
             needPos = bool(self._config.posFilter)
+
+            # P0-fix:当 needPos=True 时,统一使用 jieba.posseg.cut 一次性产出
+            # (word, tag) 列表,保证 tokens 与 posTags 严格 1:1 对齐。
+            # 原实现分别调用 cutJieba + posTagBatch,两套分词器边界不同,
+            # 长度不一致时 WordAnalysisEngine 会因 `len(posTags) != len(tokens)`
+            # 而默默丢弃 posTags(走的是日志里那条 warning),用户看到的词云
+            # 永远没生效过滤。
+            from app.view.widgets.freq_analyzer.freq_engine import (
+                posTagBatch,
+            )
+
             for idx, name in enumerate(fileNames, start=1):
                 if self._cancel:
                     return
                 text = fileToText.get(name, "")
                 if not text:
                     continue
-                if tokenCache is not None:
-                    tokens = tokenCache.getOrCompute(
-                        text=text,
-                        backendName="jieba",
-                        modelVersion=modelVer,
-                        computeFn=lambda t: self._segmenter._jiebaCut(t),
-                    )
-                else:
-                    tokens = self._segmenter._jiebaCut(text)
-                allTokens.extend(tokens)
-                # 词性标注(按需)
-                if needPos:
-                    from app.view.widgets.freq_analyzer.freq_engine import (
-                        posTagBatch,
-                    )
 
-                    posResults = posTagBatch([text])
-                    if posResults and posResults[0]:
-                        # 长度对齐:posTagBatch 返回 token 级 (word, tag) 列表
-                        for word, _tag in posResults[0]:
-                            allPosTags.append(_tag)
-                        # 若 posTags 与 tokens 长度不一致,补齐
-                        if len(allPosTags) < len(allTokens):
-                            allPosTags.extend(
-                                ["x"] * (len(allTokens) - len(allPosTags))
-                            )
+                if needPos:
+                    # 用 posseg 一次性得到对齐的 (word, tag)
+                    # posTagBatch([text]) 始终返回长度为 1 的列表,
+                    # 第 0 项是该文本的 [(word, tag), ...] 序列。
+                    # 这样 tokens 与 posTags 严格等长,WordAnalysisEngine
+                    # 才能正确应用 posFilter。
+                    taggedList = posTagBatch([text])
+                    fileTagged = taggedList[0] if taggedList else []
+                    fileTokens = [w for w, _t in fileTagged]
+                    fileTags = [t for _w, t in fileTagged]
+                    allTokens.extend(fileTokens)
+                    allPosTags.extend(fileTags)
+                else:
+                    # 无 POS 过滤:走原来的纯切词路径
+                    if tokenCache is not None:
+                        tokens = tokenCache.getOrCompute(
+                            text=text,
+                            backendName="jieba",
+                            modelVersion=modelVer,
+                            computeFn=lambda t: self._segmenter.cutJieba(t),
+                        )
+                    else:
+                        tokens = self._segmenter.cutJieba(text)
+                    allTokens.extend(tokens)
 
                 pct = 10 + int(60 * idx / n)
                 self.progress.emit(pct, f"分词 {idx}/{n}")
@@ -198,7 +207,7 @@ class WordCloudWorker(QThread):
         except Exception as e:
             import traceback
 
-            logger.exception(f"[WordCloudWorker] 失败: {e}")
+            logger.exception(f"[WordCloud] 渲染失败: {e}")
             self.failed.emit(f"{e}\n{traceback.format_exc()}")
 
 
@@ -267,11 +276,14 @@ class WordCloudWidget(QWidget):
                     figure.patch.set_facecolor("white")
                     ax.set_facecolor("white")
                 ax.text(
-                    0.5, 0.5,
+                    0.5,
+                    0.5,
                     "已切换语料库,请重新生成",
-                    ha="center", va="center",
+                    ha="center",
+                    va="center",
                     transform=ax.transAxes,
-                    color="#999", fontsize=14,
+                    color="#999",
+                    fontsize=14,
                 )
             except Exception:
                 pass
@@ -293,8 +305,10 @@ class WordCloudWidget(QWidget):
                 pass
         # 导出按钮复位
         for btnName in (
-            "exportPngBtn", "exportSvgBtn",
-            "exportPngBtnPro", "exportSvgBtnPro",
+            "exportPngBtn",
+            "exportSvgBtn",
+            "exportPngBtnPro",
+            "exportSvgBtnPro",
         ):
             btn = getattr(self, btnName, None)
             if btn is not None:
@@ -748,7 +762,7 @@ class WordCloudWidget(QWidget):
                     )
             _showInfoBar("success", "导出成功", f"已保存:{path}", self, duration=2500)
         except Exception as e:
-            logger.exception(f"[WordCloudWidget] 导出失败: {e}")
+            logger.exception(f"[WordCloud] 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3500)
 
     # ------------------------------------------------------------------

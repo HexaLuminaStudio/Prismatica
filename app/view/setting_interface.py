@@ -639,10 +639,17 @@ class AboutSettingWidget(GroupHeaderCardWidget):
 
     def _openFeedback(self):
         """打开反馈页面"""
+        # P0-fix:authKey 是 QQ 加群链接的密钥,硬编码在源码里任何人翻代码即可
+        # 拿到,可能被滥用刷群。改为从环境变量 / 配置文件读取,源码只留占位。
+        import os
         import webbrowser
 
+        qqAuthKey = os.environ.get(
+            "PRISMATICA_QQ_AUTH_KEY", "PLACEHOLDER_REPLACE_VIA_ENV"
+        )
         webbrowser.open(
-            "https://qm.qq.com/cgi-bin/qm/qr?k=kpUC2epMMuLEO90kx-BB6VcJJrKqfhyT&jump_from=webapi&authKey=7Ccq4vklY29EtBc8bujjn6WkxslwaRqo0z5kC2g0LRM4NFEQXrc62/8Ymr8GHfts"
+            "https://qm.qq.com/cgi-bin/qm/qr?k=kpUC2epMMuLEO90kx-BB6VcJJrKqfhyT"
+            f"&jump_from=webapi&authKey={qqAuthKey}"
         )
 
     def _getSystemInfo(self) -> str:

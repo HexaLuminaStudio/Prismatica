@@ -265,7 +265,9 @@ class TokenCache:
                 row = cur.fetchone()
                 if row is None:
                     return None
-                return json.loads(row[0])
+                # P0-fix:统一使用 row["col"] 命名访问,与同文件其它读路径一致,
+                # 避免 row[0] 与 row["col"] 混用引起的阅读混淆。
+                return json.loads(row["tokens_json"])
         except Exception as e:
             logger.warning(f"[TokenCache] 读取失败: {e}")
             return None

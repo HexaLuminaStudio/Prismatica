@@ -4,6 +4,7 @@ import json
 from typing import Literal, Dict, Any
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame, QScrollArea
 from PySide6.QtCore import Qt
+from loguru import logger
 
 from qfluentwidgets import (
     MessageBoxBase,
@@ -183,7 +184,9 @@ class DownloadApplyWidget(MessageBoxBase):
 
         # 根据下载类型选择图标
         iconName = "Hsk" if downloadType == "Hsk" else "Global"
-        iconPath = f":/app/icons/{iconName}.svg"
+        # P0-fix:统一使用 :app/icons/ 前缀(项目其它 83 处都使用此形式)。
+        # 原 :/app/icons/ 多一个斜杠,在部分 Qt 资源解析路径下不可用。
+        iconPath = f":app/icons/{iconName}.svg"
 
         # 标题区域
         self.titleLabel = SubtitleLabel("申请下载任务", self)
@@ -266,10 +269,28 @@ class DownloadApplyWidget(MessageBoxBase):
 
     def cleanupWorker(self):
         """清理工作线程"""
-        if self.worker:
-            self.worker.stop()
-            self.worker.wait(1000)
-            self.worker.deleteLater()
+        worker = self.worker
+        if worker is not None:
+            # P0-fix:deleteLater 之前必须先 disconnect 信号,否则信号仍在
+            # 已释放的 receiver 队列里排队,触发 RuntimeError("wrapped
+            # C/C++ object has been deleted")。
+            try:
+                if hasattr(worker, "stop"):
+                    worker.stop()
+                if worker.isRunning():
+                    worker.wait(1000)
+                # 安全地断开所有连接到本对象(self)的信号
+                try:
+                    worker.finished.disconnect(self.onQueryFinished)
+                except (RuntimeError, TypeError):
+                    pass
+                try:
+                    worker.failed.disconnect(self.onQueryFailed)
+                except (RuntimeError, TypeError):
+                    pass
+                worker.deleteLater()
+            except Exception as e:
+                logger.warning(f"[DownloadApplyWidget] 清理 worker 异常: {e}")
             self.worker = None
 
     def closeEvent(self, event):

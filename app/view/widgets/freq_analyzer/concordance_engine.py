@@ -23,7 +23,10 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import jieba
 
-from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
+from app.view.widgets.freq_analyzer.freq_engine import (
+    TextSegmenter,
+    isSafeUserRegex,
+)
 
 
 class SortMode(Enum):
@@ -373,10 +376,18 @@ class ConcordanceEngine:
         # 预编译正则
         nodeRegex = None
         if isRegex:
-            try:
-                nodeRegex = re.compile(targetNorm)
-            except re.error:
-                nodeRegex = None
+            # P0-fix:先做 ReDoS 安全检查,再编译
+            safe, reason = isSafeUserRegex(targetNorm)
+            if not safe:
+                logger.warning(
+                    f"[ConcordanceEngine] 节点正则被拒绝(ReDoS 风险): "
+                    f"{targetNorm[:80]!r} - {reason}"
+                )
+            else:
+                try:
+                    nodeRegex = re.compile(targetNorm)
+                except re.error:
+                    nodeRegex = None
 
         # 中文节点词的字面匹配（更准确）
         nodeLiteral = searchWord if self.caseSensitive else searchWord.lower()
@@ -506,10 +517,18 @@ class ConcordanceEngine:
         word = secondaryWord if self.caseSensitive else secondaryWord.lower()
         regex: Optional[re.Pattern] = None
         if isRegex:
-            try:
-                regex = re.compile(word)
-            except re.error:
-                regex = None
+            # P0-fix:ReDoS 安全检查
+            safe, reason = isSafeUserRegex(word)
+            if not safe:
+                logger.warning(
+                    f"[ConcordanceEngine] 二次检索正则被拒绝: "
+                    f"{word[:80]!r} - {reason}"
+                )
+            else:
+                try:
+                    regex = re.compile(word)
+                except re.error:
+                    regex = None
         result: List[KwicHit] = []
         for hit in hits:
             if self._hitMatches(hit, word, regex, offset):

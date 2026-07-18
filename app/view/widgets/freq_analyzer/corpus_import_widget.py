@@ -163,8 +163,33 @@ class CorpusImportWidget(QWidget):
                 logger.error(f"[CorpusImportWidget] 绑定 coordinator 失败: {e}")
 
     def _bindCorpusStore(self, store: "CorpusStore") -> None:
+        # P0-fix:防止重复绑定同一 store 导致信号重复触发。
+        # _onCorpusChanged 是 bound method,每次 connect 都会追加,
+        # 切换 store 后旧引用仍挂在新连接上,造成 _publishStats 重复执行。
+        if getattr(self, "_boundStore", None) is store:
+            return
+        # 解绑旧 store(若存在)
+        old = getattr(self, "_boundStore", None)
+        if old is not None:
+            try:
+                old.textsChanged.disconnect(self._onCorpusChanged)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                old.cleanRuleChanged.disconnect(self._onCorpusChanged)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                old.textsChanged.disconnect(self._publishStats)
+            except (RuntimeError, TypeError):
+                pass
+        # 绑定新 store
         store.textsChanged.connect(self._onCorpusChanged)
         store.cleanRuleChanged.connect(self._onCorpusChanged)
+        # P0-fix:_publishStats 也在这里一次性连接,避免在 _onCorpusChanged 中
+        # 每次重复 connect
+        store.textsChanged.connect(self._publishStats)
+        self._boundStore = store
 
     def _onCorpusChanged(self) -> None:
         if self._corpusStore is not None:
@@ -172,12 +197,8 @@ class CorpusImportWidget(QWidget):
         self._updateFileCount()
         if hasattr(self, "_refreshCleanSummary"):
             self._refreshCleanSummary()
-        # 切换后重新订阅新的 store 的 textsChanged(因为 store 实例变了)
-        if self._corpusStore is not None and self._corpusManager is not None:
-            try:
-                self._corpusStore.textsChanged.connect(self._publishStats)
-            except Exception:
-                pass
+        # P0-fix:把 textsChanged -> _publishStats 的连接从 _onCorpusChanged
+        # 内部移到 _bindCorpusStore,避免每次 store 变更都重复 connect。
         self._publishStats()
 
     def _publishStats(self) -> None:
@@ -344,7 +365,9 @@ class CorpusImportWidget(QWidget):
                     preview[c] = vals[:5]
                 filePreviews[os.path.basename(f)] = preview
             except Exception as e:
-                logger.error(f"[_loadExcel] 读取文件 {os.path.basename(f)} 失败: {e}")
+                logger.error(
+                    f"[CorpusImportWidget] 读取文件 {os.path.basename(f)} 失败: {e}"
+                )
                 _showInfoBar(
                     "error",
                     "读取失败",
@@ -381,7 +404,7 @@ class CorpusImportWidget(QWidget):
 
     def _startExcelLoad(self, files: List[str], column: Optional[str]) -> None:
         logger.info(
-            f"[_startExcelLoad] 开始后台加载 {len(files)} 个文件，列={column!r}"
+            f"[CorpusImportWidget] 开始后台加载 {len(files)} 个文件,列={column!r}"
         )
         self.excelBtn.setEnabled(False)
         self.textBtn.setEnabled(False)
@@ -405,7 +428,7 @@ class CorpusImportWidget(QWidget):
         _showInfoBar("error", "加载失败", f"{fileName}: {errMsg}", self, duration=3000)
 
     def _onExcelLoadFinished(self, result: Dict[str, str]) -> None:
-        logger.info(f"[_onExcelLoadFinished] 加载完成，共 {len(result)} 个文件")
+        logger.info(f"[CorpusImportWidget] 加载完成,共 {len(result)} 个文件")
         if self._corpusStore is not None:
             for name, text in result.items():
                 self._corpusStore.addRawText(name, text)
@@ -504,7 +527,9 @@ class CorpusImportWidget(QWidget):
                     try:
                         self._corpusStore.addRawText(baseName, text)
                     except Exception as e:
-                        logger.error(f"[{label}Load] addRawText 失败 {baseName}:{e}")
+                        logger.error(
+                            f"[CorpusImportWidget] addRawText 失败 {baseName}: {e}"
+                        )
                         continue
                 else:
                     self.rawTexts[baseName] = text
@@ -1252,7 +1277,7 @@ class CorpusImportWidget(QWidget):
             try:
                 os.makedirs(dirPath, exist_ok=True)
             except Exception as e:
-                logger.error(f"[_scanPresetFiles] 创建目录失败 {dirPath}: {e}")
+                logger.error(f"[CorpusImportWidget] 创建目录失败 {dirPath}: {e}")
                 continue
 
             try:
@@ -1273,9 +1298,11 @@ class CorpusImportWidget(QWidget):
                         displayName = prefix + rawName
                         entries.append((displayName, absPath, isBuiltin))
                     except Exception as e:
-                        logger.error(f"[_scanPresetFiles] 解析预设失败 {absPath}: {e}")
+                        logger.error(
+                            f"[CorpusImportWidget] 解析预设失败 {absPath}: {e}"
+                        )
             except Exception as e:
-                logger.error(f"[_scanPresetFiles] 扫描目录失败 {dirPath}: {e}")
+                logger.error(f"[CorpusImportWidget] 扫描目录失败 {dirPath}: {e}")
 
         # 内置排在前,用户在后;同类内按名字典序
         entries.sort(key=lambda x: (not x[2], x[0]))
@@ -1331,7 +1358,7 @@ class CorpusImportWidget(QWidget):
                     data = json.load(f)
                 if not isinstance(data, dict):
                     logger.warning(
-                        f"[_importPreset] 跳过非法文件 {src}: 不是 JSON 对象"
+                        f"[CorpusImportWidget] 跳过非法文件 {src}: 不是 JSON 对象"
                     )
                     skipped += 1
                     continue
@@ -1351,12 +1378,12 @@ class CorpusImportWidget(QWidget):
 
                 shutil.copy2(src, target)
                 imported += 1
-                logger.info(f"[_importPreset] 已导入预设 {src} → {target}")
+                logger.info(f"[CorpusImportWidget] 已导入预设 {src} → {target}")
             except json.JSONDecodeError as e:
-                logger.warning(f"[_importPreset] JSON 解析失败 {src}: {e}")
+                logger.warning(f"[CorpusImportWidget] JSON 解析失败 {src}: {e}")
                 skipped += 1
             except Exception as e:
-                logger.error(f"[_importPreset] 复制失败 {src}: {e}")
+                logger.error(f"[CorpusImportWidget] 复制失败 {src}: {e}")
                 skipped += 1
 
         self._reloadPresetCombo()
@@ -1429,7 +1456,7 @@ class CorpusImportWidget(QWidget):
 
         try:
             os.remove(path)
-            logger.info(f"[_deletePreset] 已删除预设 {path}")
+            logger.info(f"[CorpusImportWidget] 已删除预设 {path}")
             _showInfoBar(
                 "success",
                 "已删除",
@@ -1439,7 +1466,7 @@ class CorpusImportWidget(QWidget):
             )
             self._reloadPresetCombo()
         except Exception as e:
-            logger.error(f"[_deletePreset] 删除失败 {path}: {e}")
+            logger.error(f"[CorpusImportWidget] 删除失败 {path}: {e}")
             _showInfoBar("error", "删除失败", str(e), self, duration=3000)
 
     def _applyPreset(self) -> None:
@@ -1466,7 +1493,7 @@ class CorpusImportWidget(QWidget):
                 payload.get("name") or os.path.splitext(os.path.basename(path))[0]
             )
         except Exception as e:
-            logger.error(f"[_applyPreset] 加载预设失败 {path}: {e}")
+            logger.error(f"[CorpusImportWidget] 加载预设失败 {path}: {e}")
             _showInfoBar("error", "应用失败", f"预设加载失败：{e}", self, duration=3000)
             return
 
@@ -1475,7 +1502,7 @@ class CorpusImportWidget(QWidget):
         self._onCleanEnableChanged(True)
         self._refreshCleanSummary()
         self._pushCleanToStore()
-        logger.info(f"[_applyPreset] 已应用预设：{label}")
+        logger.info(f"[CorpusImportWidget] 已应用预设: {label}")
         _showInfoBar("success", "预设已应用", f"已加载：{label}", self, duration=2000)
 
     @classmethod
@@ -1518,7 +1545,7 @@ class CorpusImportWidget(QWidget):
         firstName, firstText = next(iter(self.rawTexts.items()))
         sample = (firstText or "")[:500]
         rule = self._collectCleanRule()
-        logger.debug(f"[_previewCleaning] 文件={firstName}, 规则={rule}")
+        logger.debug(f"[CorpusImportWidget] 预览清洗: 文件={firstName}, 规则={rule}")
 
         if TextCleaner is not None:
             cleanedSample = TextCleaner(rule).clean(sample)

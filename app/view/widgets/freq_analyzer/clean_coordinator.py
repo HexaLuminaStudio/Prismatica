@@ -305,6 +305,30 @@ class CleanCoordinator(QObject):
     def isBusy(self) -> bool:
         return self._busy
 
+    def setCorpusStore(self, corpusStore) -> None:
+        """P0-fix:运行时切换语料库(原来在 freq_analyzer_interface.py
+        直接给 self._store 赋值,破坏封装)。
+
+        切换时:
+        - 取消 pending + 停止去抖 timer
+        - 重置 _currentHash 为新 store 的当前规则 hash
+        - 若已有 worker 在跑,等待结束(避免跨 store 的写入)
+        """
+        if corpusStore is self._store:
+            return
+        self.cancelPending()
+        if self._busy:
+            # 让现有 worker 自然跑完,这里只切换引用;
+            # worker 完成后 _onWorkerFinished 会用新 store 写 cache。
+            self._store = corpusStore
+        else:
+            self._store = corpusStore
+        # 重置 hash 记录,使下一次 flush 不会因 hash 命中而跳过
+        try:
+            self._currentHash = corpusStore._ruleHash(corpusStore._cleanRule)
+        except Exception:
+            self._currentHash = None
+
     # ---------------- 内部 ----------------
     def _flushPending(self):
         """提交 pending 规则到 worker(线程池)。

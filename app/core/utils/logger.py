@@ -17,15 +17,17 @@ from app.core.utils.setting import LOG_FOLDER
 SENSITIVE_PATTERNS_LIST: List[Pattern] = [
     # API密钥和Token
     re.compile(r"(api[_-]?key|apikey|api[_-]?token|access[_-]?token)", re.IGNORECASE),
+    # P0-fix:长度阈值从 16 降到 8,避免短 token(如 8-12 位的内部密钥)漏网
     re.compile(
-        r"(secret[_-]?key|secret[_-]?token|bearer\s+)[\w\-]{16,}", re.IGNORECASE
+        r"(secret[_-]?key|secret[_-]?token|bearer\s+)[\w\-]{8,}", re.IGNORECASE
     ),
-    re.compile(r"sk-[a-zA-Z0-9]{32,}"),  # OpenAI API Key格式
-    re.compile(r"ghp_[a-zA-Z0-9]{36,}"),  # GitHub Personal Access Token
-    re.compile(r"gho_[a-zA-Z0-9]{36,}"),  # GitHub OAuth Token
+    re.compile(r"sk-[a-zA-Z0-9]{20,}"),  # OpenAI API Key格式(放低至 20)
+    re.compile(r"ghp_[a-zA-Z0-9]{20,}"),  # GitHub Personal Access Token(放低)
+    re.compile(r"gho_[a-zA-Z0-9]{20,}"),  # GitHub OAuth Token(放低)
     # 密码相关
-    re.compile(r"(密码|pwd|passwd|password)[\::=：]+[^\s]{6,}"),
-    re.compile(r'(password|passwd|pwd)\s*[:=]\s*["\']?[^\s"\']+["\']?', re.IGNORECASE),
+    # P0-fix:阈值从 6 降到 4,4 位 PIN 也能被遮蔽
+    re.compile(r"(密码|pwd|passwd|password)[\::=：]+[^\s]{4,}"),
+    re.compile(r'(password|passwd|pwd)\s*[:=]\s*["\']?[^\s"\']{4,}["\']?', re.IGNORECASE),
     # 认证信息
     re.compile(
         r'(authorization|bearer|token|jwt)[\s:=]+["\']?[A-Za-z0-9\-_.~+/]+=*["\']?',

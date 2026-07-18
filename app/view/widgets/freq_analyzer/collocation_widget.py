@@ -152,10 +152,12 @@ class CollocationWorker(QThread):
                         text=text,
                         backendName="jieba",
                         modelVersion=modelVer,
-                        computeFn=lambda t: self._segmenter._jiebaCut(t),
+                        # P0-fix:改用公开 cutJieba
+                        computeFn=lambda t: self._segmenter.cutJieba(t),
                     )
                 else:
-                    tokens = self._segmenter._jiebaCut(text)
+                    # P0-fix:同上
+                    tokens = self._segmenter.cutJieba(text)
 
                 # P1-2 修复:在每份文件的 token 序列里找「句末标点」,
                 # 标点之后第一个 token 的全局下标就是句子边界索引

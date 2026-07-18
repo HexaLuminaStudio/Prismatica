@@ -148,9 +148,38 @@ class GetTotalWorker(QThread):
                     return
                 self.msleep(1000 * (attempt + 1))
                 continue
-            except Exception as e:
+            except requests.exceptions.HTTPError as e:
+                # HTTP 4xx/5xx:区分可重试(5xx)与不可重试(4xx)
+                status = (
+                    e.response.status_code if e.response is not None else 0
+                )
+                if status and 400 <= status < 500 and status != 408 and status != 429:
+                    # 客户端错误(除 408/429 之外)无需重试
+                    self.failed.emit(
+                        f"请求被拒绝(HTTP {status}): {str(e)[:80]}"
+                    )
+                    return
                 if attempt == self.maxRetries - 1:
-                    self.failed.emit("请求失败: " + str(e))
+                    self.failed.emit(
+                        f"HTTP 错误 {status}: {str(e)[:80]}"
+                    )
                     return
                 self.msleep(1000 * (attempt + 1))
                 continue
+            except requests.exceptions.RequestException as e:
+                # requests 库所有异常的基类(除 HTTPError/Timeout/ConnectionError 之外)
+                # 例如 InvalidURL、TooManyRedirects、SSLError 等
+                if attempt == self.maxRetries - 1:
+                    self.failed.emit(f"请求失败: {str(e)[:80]}")
+                    return
+                self.msleep(1000 * (attempt + 1))
+                continue
+            except (ValueError, KeyError, json.JSONDecodeError) as e:
+                # 响应解析阶段异常 — 不重试(服务端不会突然给出合法 JSON)
+                self.failed.emit(f"响应解析失败: {str(e)[:80]}")
+                return
+            except Exception as e:
+                # 兜底:未预期的异常(如 SQLite 锁、磁盘错误等)。
+                # P0-fix:不再无脑重试,直接 fail-fast,避免错误信息被吞没。
+                self.failed.emit(f"未预期错误: {type(e).__name__}: {str(e)[:80]}")
+                return

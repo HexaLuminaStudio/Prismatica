@@ -577,11 +577,15 @@ class FreqAnalyzerInterface(QWidget):
 
             self.corpusStore = CorpusStore(dbPath=str(DEFAULT_CORPUS_FILE), parent=self)
             if hasattr(self, "cleanCoordinator"):
+                # P0-fix:通过公开 setter 切换,避免直接访问私有成员
                 try:
-                    self.cleanCoordinator._store = self.corpusStore
-                    self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
-                        self.corpusStore._cleanRule
-                    )
+                    if hasattr(self.cleanCoordinator, "setCorpusStore"):
+                        self.cleanCoordinator.setCorpusStore(self.corpusStore)
+                    else:
+                        self.cleanCoordinator._store = self.corpusStore
+                        self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
+                            self.corpusStore._cleanRule
+                        )
                 except Exception:
                     pass
             for panel in self._panels.values():
@@ -590,7 +594,7 @@ class FreqAnalyzerInterface(QWidget):
                         panel.setCorpusStore(self.corpusStore)
                     except Exception as e:
                         logger.error(
-                            f"[_onActiveCorpusChanged=0] "
+                            f"[FreqAnalyzerInterface] "
                             f"重绑 {type(panel).__name__} 失败: {e}"
                         )
             return
@@ -607,21 +611,25 @@ class FreqAnalyzerInterface(QWidget):
         try:
             self.corpusStore.close()
         except Exception as e:
-            logger.warning(f"[_onActiveCorpusChanged] 关闭旧 store 失败: {e}")
+            logger.warning(f"[FreqAnalyzerInterface] 关闭旧 store 失败: {e}")
 
         # 2) 创建新 store
         self.corpusStore = CorpusStore(dbPath=newActive.dbPath, parent=self)
 
         # 2.5) 重建清洗协调器,指向新 store
+        # P0-fix:不要直接访问 _store / _currentHash 私有成员,改用公开 setter
         try:
-            self.cleanCoordinator.cancelPending()
-            # 直接给 _store 重新赋值(Coordinator 是 QObject,引用更新即可)
-            self.cleanCoordinator._store = self.corpusStore
-            self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
-                self.corpusStore._cleanRule
-            )
+            if hasattr(self.cleanCoordinator, "setCorpusStore"):
+                self.cleanCoordinator.setCorpusStore(self.corpusStore)
+            else:
+                # 兼容旧版本
+                self.cleanCoordinator.cancelPending()
+                self.cleanCoordinator._store = self.corpusStore
+                self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
+                    self.corpusStore._cleanRule
+                )
         except Exception as e:
-            logger.warning(f"[_onActiveCorpusChanged] 重置 coordinator 失败: {e}")
+            logger.warning(f"[FreqAnalyzerInterface] 重置 coordinator 失败: {e}")
 
         # 3) 重新分发到所有子面板(子面板的 _bindCorpusStore 已实现)
         for panel in self._panels.values():
@@ -630,7 +638,7 @@ class FreqAnalyzerInterface(QWidget):
                     panel.setCorpusStore(self.corpusStore)
                 except Exception as e:
                     logger.error(
-                        f"[_onActiveCorpusChanged] 重绑 {type(panel).__name__} 失败: {e}"
+                        f"[FreqAnalyzerInterface] 重绑 {type(panel).__name__} 失败: {e}"
                     )
 
         # 4) 通知 manager 统计已变更(用于 UI 列表展示)

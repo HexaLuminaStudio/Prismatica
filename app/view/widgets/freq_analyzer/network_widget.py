@@ -542,7 +542,7 @@ class NetworkWidget(QWidget):
     def _onBuildFailed(self, err: str):
         self.buildBtn.setEnabled(True)
         self.statusLabel.setText("构建失败")
-        logger.error(f"[_onBuildFailed] {err}")
+        logger.error(f"[NetworkWidget] 构建失败: {err}")
         _showInfoBar("error", "构建失败", err[:200], self, duration=4000)
 
     def _onBuildFinished(self, network: CooccurrenceNetwork):
@@ -821,7 +821,7 @@ class NetworkWidget(QWidget):
                     f.write(self._engine.exportGraphML(self._network))
             _showInfoBar("success", "导出成功", f"已保存:{path}", self, duration=2500)
         except Exception as e:
-            logger.error(f"[_export] {fmt} 失败: {e}")
+            logger.error(f"[NetworkWidget] {fmt} 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 
     # ------------------------------------------------------------------
@@ -863,7 +863,7 @@ class NetworkWidget(QWidget):
                     duration=2000,
                 )
         except Exception as e:
-            logger.error(f"[_openStopwordsDialog] {e}")
+            logger.error(f"[NetworkWidget] 打开停用词对话框失败: {e}")
             _showInfoBar("error", "打开失败", str(e), self, duration=2500)
 
     # ------------------------------------------------------------------

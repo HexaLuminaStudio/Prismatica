@@ -24,6 +24,36 @@ import jieba
 import pandas as pd
 from loguru import logger
 
+
+# P0-fix:用户自定义正则的 ReDoS 防御。
+# 1. 嵌套量词 (a+)+ / (a*)+ 等典型灾难性回溯模式
+# 2. 交替回溯 (a|a)+ 等
+# 3. 长度上限 256 字符(过长正则往往是用户误粘代码片段)
+_REDOS_NESTED_QUANTIFIER = re.compile(r"\([^)]*[+*]\)[+*]" r"|\([^)]*[+*]\)\?")
+_REDOS_ALTERNATION_REPEAT = re.compile(r"\((?:[^()|]*\|){2,}[^()]*\)[+*]")
+_MAX_USER_REGEX_LEN = 256
+
+
+def isSafeUserRegex(pattern: str) -> Tuple[bool, str]:
+    """判断用户输入的正则是否安全(无明显 ReDoS 风险)。
+
+    Returns:
+        (isSafe, reason): 通过返回 (True, \"\");不通过返回 (False, 原因)
+    """
+    if not isinstance(pattern, str) or not pattern:
+        return True, ""
+    if len(pattern) > _MAX_USER_REGEX_LEN:
+        return (
+            False,
+            f"正则过长({len(pattern)} > {_MAX_USER_REGEX_LEN})",
+        )
+    if _REDOS_NESTED_QUANTIFIER.search(pattern):
+        return False, "检测到嵌套量词(如 (a+)+),可能引发 ReDoS"
+    if _REDOS_ALTERNATION_REPEAT.search(pattern):
+        return False, "检测到重复交替结构(如 (a|b)+),可能引发 ReDoS"
+    return True, ""
+
+
 from app.view.widgets.freq_analyzer.token_cache import backendModelVersion
 
 
@@ -210,13 +240,26 @@ class TextCleaner:
         self._compileCustomRegex()
 
     def _compileCustomRegex(self) -> None:
-        """编译用户自定义正则；失败的项被忽略并打 warning"""
+        """编译用户自定义正则；失败的项被忽略并打 warning
+
+        P0-fix:增加 ReDoS 防御,拒绝以下模式:
+        - 嵌套量词 (a+)+
+        - 重复交替 (a|b|c)+
+        - 长度 > 256
+        """
         for pattern in self.rule.customRegexList:
+            safe, reason = isSafeUserRegex(pattern)
+            if not safe:
+                logger.warning(
+                    f"[FreqEngine] 自定义正则已拒绝(ReDoS 风险): "
+                    f"{pattern[:80]!r} - {reason}"
+                )
+                continue
             try:
                 self._compiledRegex.append(re.compile(pattern))
             except re.error as e:
                 logger.warning(
-                    f"[FreqEngine] 自定义正则编译失败，已跳过: {pattern!r} ({e})"
+                    f"[FreqEngine] 自定义正则编译失败,已跳过: {pattern!r} ({e})"
                 )
 
     def clean(self, text: str) -> str:
@@ -395,10 +438,20 @@ class TextSegmenter:
 
     @staticmethod
     def _jiebaCut(text: str) -> List[str]:
-        """调用 jieba 切分中文"""
-        import jieba
-
+        """调用 jieba 切分中文(私有实现)"""
+        # P0-fix:jieba 已通过模块顶部 import,函数内不需要再 import。
+        # 原代码每次调用都重新 import,虽命中 sys.modules 缓存,但语义冗余且
+        # 容易让人误以为依赖未在模块顶层处理。
         return [t for t in jieba.cut(text) if t and t.strip()]
+
+    @staticmethod
+    def cutJieba(text: str) -> List[str]:
+        """P0-fix:jieba 切分的公开 API,供外部模块(带缓存的 TokenCache)调用。
+
+        原模块对外暴露 _jiebaCut(私有)被多个 widget 直接访问,违反封装。
+        改为公开 cutJieba,内部仍委托 _jiebaCut 实现。
+        """
+        return TextSegmenter._jiebaCut(text)
 
     def currentBackendName(self) -> str:
         """获取当前后端名称(供 UI 显示)"""
@@ -447,7 +500,9 @@ class FrequencyAnalyzer:
         self.maxLength = maxLength
         self.caseSensitive = caseSensitive
         self.excludeNumbers = excludeNumbers
-        self.excludePunctuation = excludeNumbers  # alias
+        # P0-fix:之前误用 excludeNumbers 作为 excludePunctuation,导致
+        # 「排除纯数字」与「排除纯标点」两个独立开关被合并为同一个值。
+        self.excludePunctuation = excludePunctuation
         self.useStopwords = useStopwords
         self.stopwords = (
             stopwords

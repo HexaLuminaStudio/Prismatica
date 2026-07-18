@@ -154,10 +154,12 @@ class WordAnalysisWorker(QThread):
                         text=text,
                         backendName="jieba",
                         modelVersion=modelVer,
-                        computeFn=lambda t: self._segmenter._jiebaCut(t),
+                        # P0-fix:改用公开 cutJieba,不再访问 _jiebaCut 私有方法
+                        computeFn=lambda t: self._segmenter.cutJieba(t),
                     )
                 else:
-                    tokens = self._segmenter._jiebaCut(text)
+                    # P0-fix:同上
+                    tokens = self._segmenter.cutJieba(text)
 
                 fileToTokens[name] = tokens
                 allTokens.extend(tokens)

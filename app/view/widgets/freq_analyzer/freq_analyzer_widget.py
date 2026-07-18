@@ -422,8 +422,8 @@ class FreqAnalyzerWidget(QWidget):
             cleanEnabled = False
         effective = self.effectiveTexts
         logger.info(
-            f"[_runAnalysis] 开始分析，文件数={len(effective)}, N={self.ngramN}, "
-            f"cleanEnabled={cleanEnabled}"
+            f"[FreqAnalyzerWidget] 开始分析,文件数={len(effective)}, "
+            f"N={self.ngramN}, cleanEnabled={cleanEnabled}"
         )
         self.analyzeBtn.setEnabled(False)
         self.statusLabel.setText("正在分析...")
@@ -588,7 +588,7 @@ class FreqAnalyzerWidget(QWidget):
             self.unigramDf.to_csv(path, index=False, encoding="utf-8-sig")
             _showInfoBar("success", "导出成功", f"已保存：{path}", self)
         except Exception as e:
-            logger.error(f"[_exportCsv] 导出失败: {e}")
+            logger.error(f"[FreqAnalyzerWidget] CSV 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 
 

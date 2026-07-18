@@ -146,7 +146,15 @@ class BetaExpiredDialog(MessageBoxBase):
     def _onExit(self):
         """用户点击「退出」"""
         self.accept()
-        sys.exit(0)
+        # P0-fix:不要直接 sys.exit(0),会绕过 Qt 的析构流程,导致 worker
+        # 线程、SQLite 连接、网络会话未关闭就硬退出。
+        # 改用 QApplication.quit() 走正常 Qt 退出流程,事件循环收到 quit
+        # 信号后会自动触发各对象的析构与 atexit 钩子。
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        else:
+            sys.exit(0)
 
 
 def showBetaExpiredDialog(status: dict) -> None:

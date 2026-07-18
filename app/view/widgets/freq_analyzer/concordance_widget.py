@@ -18,7 +18,6 @@
 from __future__ import annotations
 
 import csv
-import logging
 import os
 from typing import Dict, List, Optional
 
@@ -64,7 +63,8 @@ from app.view.widgets.freq_analyzer.concordance_engine import (
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
 
-logger = logging.getLogger(__name__)
+# P0-fix:统一使用 loguru,与项目其它模块保持一致
+from loguru import logger
 
 
 # 节点词高亮颜色（柔和黄色背景）
@@ -718,7 +718,7 @@ class ConcordanceWidget(QWidget):
                 text = _readTextFile(f)
                 self.fileToText[os.path.basename(f)] = text
             except Exception as e:
-                logger.error(f"[_loadTextFiles] 读取 {f} 失败: {e}")
+                logger.error(f"[ConcordanceWidget] 读取 {f} 失败: {e}")
                 _showInfoBar(
                     "error",
                     "加载失败",
@@ -882,7 +882,7 @@ class ConcordanceWidget(QWidget):
     def _onSearchFailed(self, err: str):
         self.searchBtn.setEnabled(True)
         self.statusLabel.setText(f"检索失败: {err}")
-        logger.error(f"[_onSearchFailed] {err}")
+        logger.error(f"[ConcordanceWidget] 检索失败: {err}")
         _showInfoBar("error", "检索失败", err, self, duration=3000)
 
     def _onSearchFinished(self, result: ConcordanceResult):
@@ -890,7 +890,7 @@ class ConcordanceWidget(QWidget):
         self._currentResult = result
         self._refreshTableFromResult(result)
         logger.info(
-            f"[_onSearchFinished] 节点词={result.searchWord!r} "
+            f"[ConcordanceWidget] 节点词={result.searchWord!r} "
             f"命中={result.totalMatches} 展示={len(result.hits)}"
         )
 
@@ -964,7 +964,7 @@ class ConcordanceWidget(QWidget):
                 expandWidth=100,
             )
         except Exception as e:
-            logger.error(f"[_onRowDoubleClicked] 扩展失败: {e}")
+            logger.error(f"[ConcordanceWidget] 扩展失败: {e}")
             _showInfoBar(
                 "error",
                 "扩展失败",
@@ -1016,7 +1016,7 @@ class ConcordanceWidget(QWidget):
                         )
                 _showInfoBar("success", "导出成功", f"已保存：{path}", self)
             except Exception as e:
-                logger.error(f"[_export] TXT 导出失败: {e}")
+                logger.error(f"[ConcordanceWidget] TXT 导出失败: {e}")
                 _showInfoBar("error", "导出失败", str(e), self, duration=3000)
         else:
             defaultName = "kwic_results.csv"
@@ -1042,7 +1042,7 @@ class ConcordanceWidget(QWidget):
                         )
                 _showInfoBar("success", "导出成功", f"已保存：{path}", self)
             except Exception as e:
-                logger.error(f"[_export] CSV 导出失败: {e}")
+                logger.error(f"[ConcordanceWidget] CSV 导出失败: {e}")
                 _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 
 
