@@ -5,101 +5,14 @@ P2 和 P3 级问题因原报告未逐项编号且内容为类别概览，此处�
 
 ## P0 致命问题（16 项）
 
-### P0-S1
-**问题名称（编号）**：P0-S1 AES 加密密钥硬编码  
-**问题位置**：`app/core/utils/encryption.py:17`  
-**解决方法**：用 DPAPI / Argon2 派生密钥，禁止明文常量；立即轮换现有密钥。
 
----
 
-### P0-S2
-**问题名称（编号）**：P0-S2 用户凭证明文存储  
-**问题位置**：`config/config.json:4-9`  
-**解决方法**：立即吊销该文件中的 JWT Token 和账号密码；凭据改为走 OS Keyring 和环境变量注入。
-
----
-
-### P0-S3
-**问题名称（编号）**：P0-S3 HanLP 商业 API 密钥硬编码  
-**问题位置**：`app/view/widgets/freq_analyzer/dependency_engine.py:475`  
-**解决方法**：删除硬编码密钥；改为通过 `_resolveAuth()` 从环境变量获取；CI 增加 gitleaks 检测。
-
----
-
-### P0-S4
-**问题名称（编号）**：P0-S4 PHPSESSID 共享会话写死  
-**问题位置**：`app/core/services/global_download.py:154、444`  
-**解决方法**：改用 `requests.Session()` 并实现标准登录流程，禁止源码中硬编码会话 ID。
-
----
-
-### P0-S5
-**问题名称（编号）**：P0-S5 MD5 无盐哈希密码  
-**问题位置**：`app/core/services/global_service.py:32-36`  
-**解决方法**：HTTPS 下可改用明文传输或加盐时间戳；至少需在 UI 警告用户弱密码协议风险，并尽快迁移至 bcrypt/Argon2。
-
----
-
-### P0-S6
-**问题名称（编号）**：P0-S6 AES-CBC 无认证（padding oracle + 位翻转风险）  
-**问题位置**：`app/core/utils/encryption.py:35-81`  
-**解决方法**：全量迁移到已实现的 `AESCipherGCM`，废弃 CBC 模式。
-
----
-
-### P0-A1
-**问题名称（编号）**：P0-A1 视图层直接调用 `app.core.api`  
-**问题位置**：`main_window.py:15`、`task_downloading.py:14`、`task_downloaded.py:14`、`download_card.py:381、409、449`（共 6 处）  
-**解决方法**：在 `TaskManager` 上增加 `getDownloadPath()`、`removeTaskWithFallback()` 等高阶接口，视图层统一调用这些接口。
-
----
-
-### P0-A2
-**问题名称（编号）**：P0-A2 使用 `logging.getLogger` 绕过统一日志过滤  
-**问题位置**：42 个文件（含 `corpus_store.py`、`corpus_manager.py`、`sentiment_engine.py` 等）  
-**解决方法**：全局替换为 `from app.core.utils import logger`；在 `logger.py` 中添加 `InterceptHandler` 桥接标准库日志。
-
----
-
-### P0-A3
-**问题名称（编号）**：P0-A3 matplotlib 后端导入顺序错误  
-**问题位置**：`sentiment_widget.py:31-33`、`network_widget.py:34`  
-**解决方法**：严格按 `import matplotlib` → `matplotlib.use('Agg')` → `from matplotlib import pyplot` 顺序；`force=False` 改为 `force=True`。
-
----
-
-### P0-A4
-**问题名称（编号）**：P0-A4 运行时切换 matplotlib 全局后端  
-**问题位置**：`sentiment_widget.py:1046-1048`  
-**解决方法**：改用 `FigureCanvasAgg` 创建独立 figure，不再切换全局后端。
-
----
-
-### P0-A5
-**问题名称（编号）**：P0-A5 license 签名密钥硬编码  
-**问题位置**：`main.py:58-59`、`setting.py:60`  
-**解决方法**：签名密钥走环境变量；CI 集成 gitleaks 防止硬编码泄漏。
-
----
 
 ### P0-A6
 **问题名称（编号）**：P0-A6 God 模块/类（超大文件）  
 **问题位置**：`app/view/bias_interface.py`（2858 行）、`app/view/widgets/freq_analyzer/corpus_store.py`（1079 行）  
 **解决方法**：拆分 `bias_interface.py` 为 `bias/{dialogs, workers, filters, main}.py`；拆分 `CorpusStore` 为 `DocumentsStore`、`CleanCacheStore`、`FtsSearcher`。
 
----
-
-### P0-AC1
-**问题名称（编号）**：P0-AC1 HanLP 凭据硬编码（学术不可复现）  
-**问题位置**：`dependency_engine.py:475`（同 P0-S3）  
-**解决方法**：同 P0-S3；同时增加 HanLP 不可用时的 UI 警告。
-
----
-
-### P0-AC2
-**问题名称（编号）**：P0-AC2 内置停用词表无学术引用  
-**问题位置**：`freq_engine.py:60-146`  
-**解决方法**：引用哈工大/百度/中科院停用词表，并提供完整版文件及出处。
 
 ---
 

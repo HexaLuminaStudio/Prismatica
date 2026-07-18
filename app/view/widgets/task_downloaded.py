@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout
 from qfluentwidgets import SmoothScrollArea, BodyLabel
 
 from app.core.services import taskManager
-from app.core.api import taskControl
 
 from .download_card import DownloadCard
 
@@ -61,8 +60,9 @@ class DownloadedScrollArea(SmoothScrollArea):
 
     def _restoreCompletedTasks(self):
         """恢复已完成的任务"""
+        # P0-A1 fix 2026-07-18:走 TaskManager.getDoneTasks() 高阶接口
         try:
-            completedTasks = taskControl.getDoneTasks()
+            completedTasks = taskManager.getDoneTasks()
             for task in completedTasks:
                 taskId = task.get("id")
                 if taskId and taskId not in self.completedCards:
@@ -93,7 +93,8 @@ class DownloadedScrollArea(SmoothScrollArea):
         logger.info(f"[DownloadedArea] 任务完成: {taskId}")
 
         try:
-            taskInfo = taskControl.queryTask(taskId)
+            # P0-A1 fix 2026-07-18:走 TaskManager.getTask() 高阶接口
+            taskInfo = taskManager.getTask(taskId)
             if not taskInfo:
                 return
 
@@ -116,7 +117,8 @@ class DownloadedScrollArea(SmoothScrollArea):
         logger.info(f"[DownloadedArea] 任务失败: {taskId}")
 
         try:
-            taskInfo = taskControl.queryTask(taskId)
+            # P0-A1 fix 2026-07-18:走 TaskManager.getTask() 高阶接口
+            taskInfo = taskManager.getTask(taskId)
             if not taskInfo:
                 return
 

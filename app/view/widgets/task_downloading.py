@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout
 from qfluentwidgets import SmoothScrollArea, BodyLabel
 
 from app.core.services import taskManager
-from app.core.api import taskControl
 
 from .download_card import DownloadCard
 
@@ -62,9 +61,10 @@ class DownloadingScrollArea(SmoothScrollArea):
     def _restoreRunningTasks(self):
         """恢复进行中的任务"""
         # 获取pending和in_progress状态的任务
+        # P0-A1 fix 2026-07-18:走 TaskManager 高阶接口,不再直接调 taskControl
         try:
-            pendingTasks = taskControl.getTasksByStatus("pending")
-            inProgressTasks = taskControl.getTasksByStatus("in_progress")
+            pendingTasks = taskManager.getPendingTasksFromDb()
+            inProgressTasks = taskManager.getInProgressTasks()
 
             for task in inProgressTasks + pendingTasks:
                 taskId = task.get("id")
@@ -93,7 +93,8 @@ class DownloadingScrollArea(SmoothScrollArea):
         """任务启动时创建卡片"""
         logger.info(f"[DownloadingArea] 任务启动: {taskId}")
 
-        taskInfo = taskControl.queryTask(taskId)
+        # P0-A1 fix 2026-07-18:走 TaskManager.getTask() 高阶接口
+        taskInfo = taskManager.getTask(taskId)
         if not taskInfo:
             logger.warning(f"[DownloadingArea] 任务信息不存在: {taskId}")
             return

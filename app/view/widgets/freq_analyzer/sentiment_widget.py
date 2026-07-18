@@ -22,16 +22,19 @@
 from __future__ import annotations
 
 import csv
-import logging
 import os
 import time
 import traceback
 from typing import Dict, List, Optional
 
 import matplotlib
-import matplotlib.font_manager as fm  # noqa: F401
-import matplotlib.pyplot as plt
 import numpy as np
+
+# matplotlib 后端必须在 from matplotlib import pyplot 之前显式指定
+# P0-A3 fix 2026-07-18:严格 import 顺序 + force=True
+# 错误顺序:先 import matplotlib.pyplot 会触发 matplotlib 自动选择后端,
+#           此时再调 matplotlib.use() 会被默认行为覆盖。
+# 正确顺序:import matplotlib → matplotlib.use(...) → from matplotlib import pyplot
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -74,8 +77,11 @@ from app.view.widgets.freq_analyzer.sentiment_engine import (
 )
 
 # matplotlib 后端必须在导入 Figure 前指定
-matplotlib.use("QtAgg", force=False)
+# P0-A3 fix 2026-07-18:force=True 强制覆盖已锁定的默认后端
+matplotlib.use("QtAgg", force=True)
 
+import matplotlib.font_manager as fm  # noqa: E402,F401
+import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.backends.backend_qtagg import (  # noqa: E402
     FigureCanvasQTAgg as FigureCanvas,
@@ -88,7 +94,8 @@ plt.rcParams["axes.unicode_minus"] = False
 
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 
 # ===========================================================================

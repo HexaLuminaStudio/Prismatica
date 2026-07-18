@@ -14,7 +14,6 @@ import base64
 import hashlib
 import hmac
 import json
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -22,13 +21,14 @@ from typing import Any, Optional
 from .encryption import AESCipherGCM, deriveKey, hash256
 from .setting import LICENSE_SECRET
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 # ============================================================================
 # 内测时间锁常量
 # ============================================================================
 # 内测截止日(绝对硬上限,任何内测用户均受此日期约束)
-BETA_HARD_DEADLINE = "2026-07-19"
+BETA_HARD_DEADLINE = "2026-07-30"
 # 内测模式最大有效期(天):从首次启动算起,防止无限延期
 BETA_MAX_VALID_DAYS = 30
 # 内测模式启动时记录的密钥标识(派生自设备特征,防止复制 license.dat 到另一台机器)

@@ -656,6 +656,9 @@ class FrequencyAnalyzer:
         ):
             sources_ = wordToSources.get(word, set())
             rangeVal = len(sources_)
+            # P0-AC3 fix 2026-07-18:增加 PMW(每百万词频次)归一化
+            # PMW = freq / total * 1_000_000,用于跨语料规模比较
+            # UI 提供 Pct/PMW 切换显示
             rows.append(
                 {
                     "Rank": rank,
@@ -664,6 +667,7 @@ class FrequencyAnalyzer:
                     "Range": rangeVal,
                     "Files": ", ".join(sorted(sources_)) if sources else "",
                     "Pct": (freq / total * 100) if total > 0 else 0.0,
+                    "Pmw": (freq / total * 1_000_000) if total > 0 else 0.0,
                 }
             )
         df = pd.DataFrame(rows)
@@ -838,6 +842,7 @@ class FrequencyAnalyzer:
             sorted(globalCounter.items(), key=lambda x: (-x[1], x[0])), 1
         ):
             sources_ = ngramToSources[ng]
+            # P0-AC3 fix 2026-07-18:同样给 ngram 表加 PMW 列
             rows.append(
                 {
                     "Rank": rank,
@@ -846,6 +851,7 @@ class FrequencyAnalyzer:
                     "Range": len(sources_),
                     "Files": ", ".join(sorted(sources_)),
                     "Pct": (freq / total * 100) if total > 0 else 0.0,
+                    "Pmw": (freq / total * 1_000_000) if total > 0 else 0.0,
                 }
             )
         return pd.DataFrame(rows)

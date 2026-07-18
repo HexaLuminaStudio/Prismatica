@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame
 
 from loguru import logger
 
+from app.core.services import taskManager
+
 from qfluentwidgets import (
     CardWidget,
     BodyLabel,
@@ -374,17 +376,9 @@ class DownloadCard(CardWidget):
 
         if confirmDialog.exec():
             # 通过 TaskManager 统一删除 + 通知 UI
-            try:
-                taskManager.removeTask(self.taskId)
-            except Exception as e:
-                # 降级路径:直接调底层 API
-                from app.core.api import taskControl
-
-                logger.error(f"[DownloadCard] 删除任务失败,降级路径: {e}")
-                try:
-                    taskControl.deleteTask(self.taskId)
-                except Exception:
-                    pass
+            # P0-A1 fix 2026-07-18:统一走 taskManager.removeTaskWithFallback()
+            # 不再自己 try/except + 手动调 taskControl
+            taskManager.removeTaskWithFallback(self.taskId)
 
             try:
                 if hasattr(self, "pauseButton"):
@@ -406,9 +400,8 @@ class DownloadCard(CardWidget):
         from loguru import logger
 
         # 从数据库获取下载路径
-        from app.core.api import taskControl
-
-        filePath = taskControl.getDownloadPath(self.taskId)
+        # P0-A1 fix 2026-07-18:走 taskManager.getDownloadPath() 高阶接口
+        filePath = taskManager.getDownloadPath(self.taskId)
         if not filePath:
             logger.warning(f"[DownloadCard] 无法获取下载路径: {self.taskId}")
             from qfluentwidgets import MessageBox
@@ -440,19 +433,8 @@ class DownloadCard(CardWidget):
 
             if msgBox.exec():
                 # 用户选择删除记录
-                # P0-fix:统一走 TaskManager.removeTask,触发 taskDeleted 信号
-                from app.core.services import taskManager
-
-                try:
-                    taskManager.removeTask(self.taskId)
-                except Exception as e:
-                    from app.core.api import taskControl
-
-                    logger.error(f"[DownloadCard] 删除任务记录失败,降级路径: {e}")
-                    try:
-                        taskControl.deleteTask(self.taskId)
-                    except Exception:
-                        pass
+                # P0-A1 fix 2026-07-18:统一走 taskManager.removeTaskWithFallback()
+                taskManager.removeTaskWithFallback(self.taskId)
 
                 try:
                     if hasattr(self, "pauseButton"):

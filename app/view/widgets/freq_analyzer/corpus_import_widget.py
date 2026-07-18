@@ -5,13 +5,13 @@
 """
 
 import json
-import logging
 import os
 import shutil
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 import pandas as pd
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal

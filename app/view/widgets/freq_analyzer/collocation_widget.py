@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import csv
-import logging
 import os
 from typing import Dict, List, Optional
 
@@ -65,7 +64,8 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
     _showInfoBar,
 )
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 
 # ---------------------------------------------------------------------------

@@ -48,7 +48,6 @@ References:
 
 from __future__ import annotations
 
-import logging
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
@@ -57,7 +56,8 @@ import networkx as nx
 
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 
 @dataclass

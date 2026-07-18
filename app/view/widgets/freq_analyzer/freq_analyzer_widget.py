@@ -4,11 +4,11 @@
 保留全部实现，仅补充必要的 imports。
 """
 
-import logging
 import traceback
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 try:
     import jieba  # type: ignore
@@ -259,9 +259,20 @@ class FreqAnalyzerWidget(QWidget):
         self.exportBtn.clicked.connect(self._exportCsv)
         self.exportBtn.setEnabled(False)
 
+        # P0-AC3 fix 2026-07-18:占比 vs PMW 切换按钮(列 4 在两种模式间切换)
+        # PMW = per million words,用于跨语料规模比较的归一化指标
+        self._showPmw = False
+        self.pctModeBtn = PushButton("占比 (%)", self)
+        self.pctModeBtn.setIcon(FluentIcon.SEND)
+        self.pctModeBtn.setToolTip(
+            "点击切换显示模式:\n• 占比(%):当前语料内的相对频率\n• PMW:每百万词频次(便于跨语料比较)"
+        )
+        self.pctModeBtn.clicked.connect(self._togglePctMode)
+
         opRow.addWidget(self.analyzeBtn)
         opRow.addWidget(self.zipfBtn)
         opRow.addWidget(self.ngramBtn)
+        opRow.addWidget(self.pctModeBtn)
         opRow.addWidget(self.exportBtn)
         opRow.addStretch(1)
         paramLayout.addLayout(opRow)
@@ -543,6 +554,14 @@ class FreqAnalyzerWidget(QWidget):
 
     def _populateTable(self, df):
         self.table.setRowCount(len(df))
+        # P0-AC3 fix 2026-07-18:根据当前显示模式渲染列 4
+        # _showPmw=False → 显示「占比 %」;True → 显示「PMW」
+        showPmw = bool(getattr(self, "_showPmw", False))
+        # 同步表头(只在标题文字变化时调用,避免触发 layout 抖动)
+        targetHeader = "PMW" if showPmw else "占比"
+        currentHeader = self.table.horizontalHeaderItem(4).text()
+        if currentHeader != targetHeader:
+            self.table.setHorizontalHeaderItem(4, QTableWidgetItem(targetHeader))
         for i in range(len(df)):
             row = df.iloc[i]
             self.table.setItem(i, 0, _makeAlignedItem(str(int(row["Rank"]))))
@@ -551,8 +570,34 @@ class FreqAnalyzerWidget(QWidget):
             self.table.setItem(
                 i, 3, _makeAlignedItem(f"{int(row['Range'])}/{len(self.rawTexts)}")
             )
-            self.table.setItem(i, 4, _makeAlignedItem(f"{row['Pct']:.2f}%"))
+            # 列 4:占比 % 或 PMW(整数 PMW 用千分位分隔;小数用 .2f)
+            if showPmw:
+                pmwVal = float(row.get("Pmw", 0.0))
+                self.table.setItem(i, 4, _makeAlignedItem(f"{pmwVal:,.1f}"))
+            else:
+                self.table.setItem(i, 4, _makeAlignedItem(f"{row['Pct']:.2f}%"))
             self.table.setItem(i, 5, _makeAlignedItem(f"{row['Freq'] * row['Rank']:,}"))
+
+    def _togglePctMode(self):
+        """切换列 4 显示:占比(%) ↔ PMW(每百万词频次)
+
+        P0-AC3 fix 2026-07-18:提供 UI 切换,不重新分析,只是重渲染表
+        """
+        self._showPmw = not bool(getattr(self, "_showPmw", False))
+        if self._showPmw:
+            self.pctModeBtn.setText("PMW")
+            self.pctModeBtn.setToolTip(
+                "当前显示 PMW(每百万词频次)。\n"
+                "点击切换回占比(%):当前语料内的相对频率"
+            )
+        else:
+            self.pctModeBtn.setText("占比 (%)")
+            self.pctModeBtn.setToolTip(
+                "点击切换显示模式:\n• 占比(%):当前语料内的相对频率\n• PMW:每百万词频次(便于跨语料比较)"
+            )
+        # 重新填充表格(复用现有数据,不重新跑分析)
+        if getattr(self, "unigramDf", None) is not None:
+            self._populateTable(self.unigramDf)
 
     def _showZipf(self):
         if self.unigramDf is None or self.unigramDf.empty:

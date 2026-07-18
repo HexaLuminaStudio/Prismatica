@@ -23,7 +23,6 @@
 
 from __future__ import annotations
 
-import logging
 import math
 import os
 import traceback
@@ -31,7 +30,12 @@ from typing import Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
-import matplotlib.font_manager as fm
+
+# matplotlib 后端必须在 from matplotlib import pyplot 之前显式指定
+# P0-A3 fix 2026-07-18:严格 import 顺序 + force=True
+# 错误顺序:先 import matplotlib.font_manager / matplotlib.pyplot 会触发
+#           matplotlib 自动选择后端,此时再调 matplotlib.use() 会被默认行为覆盖。
+# 正确顺序:import matplotlib → matplotlib.use(...) → from matplotlib import pyplot
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QCursor
@@ -64,9 +68,13 @@ from qfluentwidgets import (
 # 警告,或在某些环境下选择错误后端导致程序启动失败。
 import matplotlib  # noqa: E402
 
-matplotlib.use("QtAgg", force=False)
+# P0-A3 fix 2026-07-18:force=True 强制覆盖已锁定的默认后端
+matplotlib.use("QtAgg", force=True)
+
 # 延迟到模块下方 _availableCjkFonts() 定义后再设置 rcParams,
 # 确保 matplotlib font_manager 已就绪。这里先 import。
+import matplotlib.font_manager as fm  # noqa: E402,F401
+import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.backends.backend_qtagg import (  # noqa: E402
     FigureCanvasQTAgg as FigureCanvas,
@@ -81,7 +89,8 @@ from app.view.widgets.freq_analyzer.network_engine import (
 )
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +146,7 @@ def _availableCjkFonts() -> List[str]:
 
 # 初始化时同步一次 rcParams,过滤掉系统中不存在的字体,
 # 避免后续 plt.title/plt.text 等任何调用触发 findfont 警告
-import matplotlib.pyplot as plt  # noqa: E402
-
+# P0-A3 fix 2026-07-18:plt 已在模块上方 import,直接复用
 plt.rcParams["font.sans-serif"] = _availableCjkFonts()
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["axes.unicode_minus"] = False

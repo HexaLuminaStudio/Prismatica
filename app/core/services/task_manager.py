@@ -319,6 +319,107 @@ class TaskManager(QObject):
 
         return result
 
+    # ========================================================================
+    # 视图层高阶接口(P0-A1 fix 2026-07-18)
+    # ========================================================================
+    # 设计目标:把 app.core.api.taskControl 的直接调用从视图层
+    # (app/view/widgets/*)完全收敛到 TaskManager,做到「视图层只依赖
+    # services 层」的单向依赖。这样:
+    #   - 替换底层数据源(比如换 SQLite → PostgreSQL / 文件 → 远程 API)
+    #     只需改 TaskManager 内部,UI 完全不动
+    #   - 视图层不需要 try/except 处理每个底层 API 的异常路径
+    #   - 单元测试可以 mock TaskManager 接口而不必 mock 数据库
+    # ========================================================================
+
+    def getDownloadPath(self, taskId: str) -> Optional[str]:
+        """获取任务的下载文件路径(视图层入口)
+
+        Returns:
+            文件绝对路径,或 None(任务不存在 / 尚未记录路径)
+        """
+        try:
+            return taskControl.getDownloadPath(taskId)
+        except Exception as e:
+            logger.error(f"[TaskManager] getDownloadPath 失败 {taskId}: {e}")
+            return None
+
+    def getDoneTasks(self) -> List[Dict[str, Any]]:
+        """获取已完成的任务列表(视图层入口)
+
+        返回 status IN ('completed', 'failed', 'cancelled') 的任务,
+        按 endedAt 倒序。
+        """
+        try:
+            return taskControl.getDoneTasks()
+        except Exception as e:
+            logger.error(f"[TaskManager] getDoneTasks 失败: {e}")
+            return []
+
+    def getInProgressTasks(self) -> List[Dict[str, Any]]:
+        """获取正在进行的任务列表(视图层入口)
+
+        返回 status='in_progress' 的任务,按 createdAt 倒序。
+        """
+        try:
+            return taskControl.getTasksByStatus("in_progress")
+        except Exception as e:
+            logger.error(f"[TaskManager] getInProgressTasks 失败: {e}")
+            return []
+
+    def getPendingTasksFromDb(self) -> List[Dict[str, Any]]:
+        """从数据库获取 pending 状态任务列表(视图层入口)
+
+        与 getPendingTasks() 的区别:本方法返回完整 task dict 列表
+        (含 info / createdAt 等),供 UI 卡片渲染使用;而 getPendingTasks()
+        仅返回内存队列中的 taskId 字符串列表。
+
+        Returns:
+            List[Dict]: status='pending' 的任务,按 createdAt 倒序。
+        """
+        try:
+            return taskControl.getTasksByStatus("pending")
+        except Exception as e:
+            logger.error(f"[TaskManager] getPendingTasksFromDb 失败: {e}")
+            return []
+
+    def removeTaskWithFallback(self, taskId: str) -> bool:
+        """删除任务,带降级路径(视图层入口)
+
+        流程:
+            1. 优先调用 removeTask() — 走 TaskManager 完整流程,
+               包括停止运行中的 worker + emit taskDeleted 信号
+            2. removeTask() 内部抛异常时,降级为直接调底层 API
+               (即使数据库写失败也不抛出,只记日志 + 返回 False)
+
+        这就是 P0-A1 修复要求的 removeTaskWithFallback 接口 — 视图层
+        只需要调这一个方法,不需要自己处理 taskControl fallback。
+
+        Args:
+            taskId: 任务 ID
+
+        Returns:
+            True 表示已成功删除(含降级路径),False 表示完全失败
+        """
+        try:
+            return self.removeTask(taskId)
+        except Exception as e:
+            # 降级路径:即使 TaskManager 内部异常,也要保证记录被清掉
+            logger.error(
+                f"[TaskManager] removeTaskWithFallback 主路径异常 {taskId}: {e}, "
+                f"降级到直接调 taskControl"
+            )
+            try:
+                result = taskControl.deleteTask(taskId)
+                if result:
+                    # 即使是降级路径,也要 emit 信号让 UI 同步移除卡片
+                    self.taskDeleted.emit(taskId)
+                return result
+            except Exception as inner:
+                logger.exception(
+                    f"[TaskManager] removeTaskWithFallback 降级路径也失败 {taskId}: {inner}"
+                )
+                return False
+
     def stopAllTasks(self) -> int:
         """停止所有任务。
 

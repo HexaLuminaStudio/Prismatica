@@ -12,7 +12,7 @@ from qfluentwidgets import (
 )
 
 from app.core.utils import signalBus, logger
-from app.core.api import taskControl
+from app.core.services import taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
 from .global_interface import GlobalInterface
@@ -115,8 +115,9 @@ class MainWindow(MSFluentWindow):
     def closeEvent(self, event):
         """窗口关闭事件"""
         # 检查是否有进行中或等待中的任务
-        pendingTasks = taskControl.getTasksByStatus("pending")
-        inProgressTasks = taskControl.getTasksByStatus("in_progress")
+        # P0-A1 fix 2026-07-18:不再直接调 taskControl,改走 TaskManager 高阶接口
+        pendingTasks = taskManager.getPendingTasksFromDb()
+        inProgressTasks = taskManager.getInProgressTasks()
 
         totalTasks = len(pendingTasks) + len(inProgressTasks)
 
@@ -138,9 +139,11 @@ class MainWindow(MSFluentWindow):
             msgBox.cancelButton.setText("取消")
 
             if msgBox.exec():
-                # 用户确认退出，停止所有任务
-                from app.core.services import taskManager
-
+                # 用户确认退出,停止所有任务
+                # P0-fix 2026-07-18:不要再写 `from app.core.services import taskManager`,
+                # 那会让 taskManager 在整个 closeEvent 内变成 local,
+                # 导致 line 119-120 的 taskManager.getPendingTasksFromDb() 报 UnboundLocalError。
+                # 模块顶部已经导入过,直接用即可。
                 taskManager.stopAllTasks()
                 logger.info("[MainWindow] 用户确认退出，停止所有任务")
                 # 刷新分词缓存到磁盘

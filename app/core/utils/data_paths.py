@@ -30,7 +30,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 from pathlib import Path
@@ -38,7 +37,8 @@ from typing import Final
 
 from .setting import DATA_FOLDER, INSTALL_DIR
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 
 # ---------------------------------------------------------------------------

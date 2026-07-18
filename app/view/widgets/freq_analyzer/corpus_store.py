@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
 import sqlite3
 import threading
@@ -34,7 +33,8 @@ from PySide6.QtCore import QObject, Signal
 
 from app.view.widgets.freq_analyzer.freq_engine import CleanRule, TextCleaner
 
-logger = logging.getLogger(__name__)
+# P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from loguru import logger
 
 
 # 语料库默认位置: <INSTALL_DIR>/datas/corpora/default.db
