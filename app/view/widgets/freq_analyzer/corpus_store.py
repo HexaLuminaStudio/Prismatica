@@ -259,23 +259,17 @@ class CorpusStore(QObject):
         """关闭数据库连接(应用退出时调用)。
 
         关闭流程:
-            1. flush TokenCache 待写入队列(避免 token 落盘丢失)
-            2. 清空 TokenCache L1(释放进程内缓存,防止 OOM 残留)
-            3. 关闭 SQLite 连接
+            1. 关闭 TokenCache(flush 待写入 + 清空 L1 + 标记关闭)
+            2. 关闭 SQLite 连接
         """
-        # 1) 先刷 token cache 待写入数据,确保已分词的 token 不丢失
-        try:
-            self.flushTokenCache(maxWait=1.0)
-        except Exception as e:
-            logger.warning(f"[CorpusStore] flushTokenCache 失败: {e}")
-        # 2) 清空 L1 进程内缓存,释放内存(P0-fix:防止 OOM)
+        # 1) 关闭 TokenCache（flush + clear + 标记 closed，防止后续 DB 访问）
         cache = getattr(self, "_tokenCache", None)
         if cache is not None:
             try:
-                cache.clear()
+                cache.close()
             except Exception as e:
-                logger.warning(f"[CorpusStore] TokenCache.clear 失败: {e}")
-        # 3) 关闭 SQLite 连接
+                logger.warning(f"[CorpusStore] TokenCache.close 失败: {e}")
+        # 2) 关闭 SQLite 连接
         with self._lock:
             try:
                 self._conn.close()

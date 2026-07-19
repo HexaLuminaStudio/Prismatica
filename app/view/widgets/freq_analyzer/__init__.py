@@ -2,6 +2,7 @@
 
 公共 API:
     - ConcordanceWidget        语境分析 (KWIC) 主面板
+    - ConcordancePlotCanvas    Concordance Plot 分布图（§2.4.2）
     - CorpusStatusCard         共享语料状态卡
     - CorpusImportWidget       语料导入与清洗面板
     - FreqAnalyzerWidget       词频分析主面板
@@ -22,6 +23,11 @@
 
 from .clean_coordinator import CleanCoordinator, CleanWorker
 from .concordance_engine import ConcordanceEngine, KwicHit
+from .concordance_plot_widget import (
+    ConcordancePlotCanvas,
+    computeFileTokenCounts,
+    extractHitPositions,
+)
 from .concordance_widget import (
     ConcordanceWidget,
     CorpusStatusCard,
@@ -134,6 +140,7 @@ __all__ = [
     "CleanCoordinator",
     "CleanWorker",
     "ConcordanceEngine",
+    "ConcordancePlotCanvas",
     "ConcordanceWidget",
     "CorpusImportWidget",
     "CorpusInfo",
@@ -202,7 +209,9 @@ __all__ = [
     "availablePosBackend",
     "backendModelVersion",
     "colorForCommunity",
+    "computeFileTokenCounts",
     "defaultStopwords",
+    "extractHitPositions",
     "KeywordListResult",
     "KeywordListWidget",
     "KeywordListWorker",

@@ -111,6 +111,7 @@ class TokenCache:
         """
         self._conn = conn
         self._lock = lock
+        self._closed = False  # 标记 DB 已关闭，所有后续操作静默跳过
 
         # L1 cache: text_hash -> tokens (进程内,LRU)
         # key: (text_hash, backend_name, model_version)
@@ -204,12 +205,15 @@ class TokenCache:
         CorpusStore.close() 应调用此方法,确保:
             1. 待写入 DB 的 token 全部落盘(避免丢失)
             2. L1 进程内缓存立即释放(避免 OOM 残留)
+            3. 标记关闭状态，后续 DB 操作静默跳过（防止 closed database 错误）
         """
         try:
             self.flush(maxWait=1.0)
         except Exception as e:
             logger.warning(f"[TokenCache] flush 失败: {e}")
         self.clear()
+        self._closed = True
+        logger.info("[TokenCache] 缓存管理器已关闭")
 
     def stats(self) -> Dict[str, int]:
         """获取缓存统计"""
@@ -253,6 +257,8 @@ class TokenCache:
         self, textHash: str, backendName: str, modelVersion: str
     ) -> Optional[List[str]]:
         """从 SQLite 读取 token"""
+        if self._closed:
+            return None
         try:
             with self._lock:
                 cur = self._conn.execute(
@@ -281,6 +287,8 @@ class TokenCache:
         durationMs: float,
     ):
         """加入待写入队列"""
+        if self._closed:
+            return
         self._writeQueue.append(
             (textHash, backendName, modelVersion, tokens, durationMs)
         )
@@ -291,6 +299,10 @@ class TokenCache:
 
     def _drainQueue(self):
         """批量写入队列到 DB"""
+        if self._closed:
+            with self._writeQueueLock:
+                self._writeQueue.clear()
+            return
         with self._writeQueueLock:
             if not self._writeQueue:
                 return

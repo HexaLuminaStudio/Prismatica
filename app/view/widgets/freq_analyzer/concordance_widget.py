@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QStackedWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -43,6 +44,7 @@ from qfluentwidgets import (
     InfoBarPosition,
     LineEdit,
     MessageBoxBase,
+    Pivot,
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
@@ -60,6 +62,11 @@ from app.view.widgets.freq_analyzer.concordance_engine import (
     ConcordanceResult,
     KwicHit,
     SortMode,
+)
+from app.view.widgets.freq_analyzer.concordance_plot_widget import (
+    ConcordancePlotCanvas,
+    computeFileTokenCounts,
+    extractHitPositions,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
 
@@ -481,6 +488,9 @@ class ConcordanceWidget(QWidget):
         if hasattr(self, "statusLabel"):
             self.statusLabel.setText("就绪")
         self._secondaryStack = []
+        # 切换回表格视图
+        if hasattr(self, "_viewPivot"):
+            self._viewPivot.setCurrentItem("table")
         # _updateFileCount 已废弃：原用于更新页面底部 fileCountLabel，
         # 该 UI 元素已被顶部 CorpusStatusCard 替代。
 
@@ -635,13 +645,23 @@ class ConcordanceWidget(QWidget):
         return card
 
     def _buildResultCard(self) -> CardWidget:
-        """结果列表卡片"""
+        """结果列表卡片（含表格视图 / Plot 视图切换）"""
         card = CardWidget(self)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
 
-        layout.addWidget(StrongBodyLabel("检索结果", card))
+        # 标题行 + 视图切换 Pivot
+        titleRow = QHBoxLayout()
+        titleRow.addWidget(StrongBodyLabel("检索结果", card))
+        titleRow.addStretch()
+        self._viewPivot = Pivot(card)
+        self._viewPivot.addItem(routeKey="table", text="表格视图")
+        self._viewPivot.addItem(routeKey="plot", text="Plot视图")
+        self._viewPivot.setCurrentItem("table")
+        self._viewPivot.currentItemChanged.connect(self._onViewTabChanged)
+        titleRow.addWidget(self._viewPivot)
+        layout.addLayout(titleRow)
 
         # 统计栏(FR-KWC-007,使用统一 ResultSummary 大指标卡)
         from app.view.widgets.freq_analyzer.result_summary import (
@@ -656,8 +676,16 @@ class ConcordanceWidget(QWidget):
         # 兼容旧代码:summaryLabel 仍指向 detailLabel,避免外部代码报错
         self.summaryLabel = self._resultSummary._detailLabel
 
-        # 双击行 → 展开详情
-        self.resultTable = ProRoundTableWidget(card)
+        # 视图堆栈
+        self._viewStack = QStackedWidget(card)
+
+        # --- 页 0: 表格视图 ---
+        tablePage = QWidget()
+        tableLayout = QVBoxLayout(tablePage)
+        tableLayout.setContentsMargins(0, 0, 0, 0)
+        tableLayout.setSpacing(0)
+
+        self.resultTable = ProRoundTableWidget(tablePage)
         self.resultTable.setColumnCount(4)
         self.resultTable.setHorizontalHeaderLabels(
             ["来源文件", "左侧语境", "节点词", "右侧语境"]
@@ -679,7 +707,14 @@ class ConcordanceWidget(QWidget):
         self.resultTable.cellDoubleClicked.connect(self._onRowDoubleClicked)
         # CardWidget 内 stretch 无效，给表格一个合理的最小高度避免被压缩到一行
         self.resultTable.setMinimumHeight(360)
-        layout.addWidget(self.resultTable)
+        tableLayout.addWidget(self.resultTable)
+        self._viewStack.addWidget(tablePage)
+
+        # --- 页 1: Plot 视图 ---
+        self._plotCanvas = ConcordancePlotCanvas(self)
+        self._viewStack.addWidget(self._plotCanvas)
+
+        layout.addWidget(self._viewStack, 1)
 
         # 状态栏
         self.statusLabel = CaptionLabel("", card)
@@ -824,6 +859,43 @@ class ConcordanceWidget(QWidget):
             )
         self._currentResult.hits = hits
         self._refreshTableFromResult(self._currentResult)
+        # 若当前在 Plot 视图，同步刷新
+        if (
+            getattr(self, "_viewPivot", None)
+            and self._viewPivot.currentItem() == "plot"
+        ):
+            self._refreshPlotView()
+
+    # ------------------------------------------------------------------
+    # 视图切换（表格 / Plot）
+    # ------------------------------------------------------------------
+    def _onViewTabChanged(self, routeKey: str) -> None:
+        """Pivot 切换：「表格视图」↔「Plot视图」"""
+        if routeKey == "table":
+            self._viewStack.setCurrentIndex(0)
+        elif routeKey == "plot":
+            self._viewStack.setCurrentIndex(1)
+            self._refreshPlotView()
+
+    def _refreshPlotView(self) -> None:
+        """根据当前检索结果渲染 Plot 视图。
+
+        后台计算各文件的 token 数与命中位置，然后交给 ConcordancePlotCanvas 渲染。
+        token 数计算复用 ConcordanceEngine 的分词器，确保与检索时的位置索引一致。
+        """
+        if not self._currentResult or not self._currentResult.hits:
+            return
+        if not self.fileToText:
+            return
+
+        # 提取命中位置
+        fileToPositions, searchWord = extractHitPositions(self._currentResult)
+
+        # 计算各文件 token 数（复用 engine 分词）
+        fileToTokenCounts = computeFileTokenCounts(self.fileToText, self._engine)
+
+        # 渲染
+        self._plotCanvas.render(fileToPositions, fileToTokenCounts, searchWord)
 
     # ------------------------------------------------------------------
     # 检索
