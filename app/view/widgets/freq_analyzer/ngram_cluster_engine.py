@@ -378,6 +378,15 @@ class NgramClusterEngine:
             sil = silhouette_score(matrix, labels) if k > 1 else 0.0
             return k, labels, sil
 
+        # 检测退化数据：矩阵方差接近零（所有数据点几乎相同）
+        totalVar = float(np.var(matrix))
+        if totalVar < 1e-8:
+            logger.info(
+                f"[NgramClusterEngine] 矩阵方差={totalVar:.2e}，数据点无差异，"
+                "跳过聚类循环直接归为 1 个簇"
+            )
+            return 1, np.zeros(nSamples, dtype=int), 0.0
+
         # 尝试不同 k 并计算轮廓系数
         bestK = minK
         bestSilhouette = -1.0

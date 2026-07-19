@@ -196,17 +196,6 @@ class NgramDialog(MessageBoxBase):
         exportLayout = QHBoxLayout()
         exportLayout.addStretch(1)
 
-        # N>=3 时显示「聚簇分析」按钮（后台多线程执行，不阻塞 UI）
-        if self.n >= 3:
-            from app.view.widgets.freq_analyzer.ngram_cluster_widget import (
-                NgramClusterDialog,
-            )
-
-            self._clusterBtn = PushButton("聚簇分析", self)
-            self._clusterBtn.setIcon(FluentIcon.SEARCH)
-            self._clusterBtn.clicked.connect(self._openClusterAnalysis)
-            exportLayout.addWidget(self._clusterBtn)
-
         exportCsvBtn = PushButton("导出 CSV", self)
         exportCsvBtn.clicked.connect(self._exportCsv)
         exportLayout.addWidget(exportCsvBtn)
@@ -220,26 +209,6 @@ class NgramDialog(MessageBoxBase):
 
         _setupDialogClose(self)
 
-    def _openClusterAnalysis(self) -> None:
-        """打开聚簇分析弹窗（后台线程执行，不阻塞 UI）"""
-        if self.df is None or self.df.empty:
-            _showInfoBar(
-                "warning",
-                "提示",
-                "无 N-gram 数据，无法进行聚簇分析",
-                self,
-                duration=2000,
-            )
-            return
-        from app.view.widgets.freq_analyzer.ngram_cluster_widget import (
-            NgramClusterDialog,
-        )
-
-        NgramClusterDialog.show(
-            ngramDf=self.df,
-            n=self.n,
-            parent=self.window(),
-        )
 
     def _exportCsv(self):
         if self.df is None or self.df.empty:
