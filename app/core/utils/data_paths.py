@@ -61,6 +61,9 @@ CORPORA_DIR: Final[Path] = DATA_DIR / "corpora"
 DEFAULT_CORPUS_NAME: Final[str] = "default"
 DEFAULT_CORPUS_FILE: Final[Path] = CORPORA_DIR / "default.db"
 
+# 词频分析高级设置记忆文件(JSON)
+FREQ_ANALYZER_SETTINGS_FILE: Final[Path] = DATA_DIR / "freq_analyzer_settings.json"
+
 # 导出文件目录(预留,本模块不强制约束内部结构)
 EXPORTS_DIR: Final[Path] = DATA_DIR / "exports"
 EXPORT_REPORTS_DIR: Final[Path] = EXPORTS_DIR / "reports"

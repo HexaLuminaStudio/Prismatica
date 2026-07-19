@@ -130,7 +130,10 @@ class ZipfDialog(MessageBoxBase):
 
 
 class NgramDialog(MessageBoxBase):
-    """N-gram 频率统计弹窗（支持任意阶数 n>=2）"""
+    """N-gram 频率统计弹窗（支持任意阶数 n>=2）
+
+    N>=3 时提供「聚簇分析」按钮，可在后台多线程中执行 t-SNE + KMeans 聚类并可视化。
+    """
 
     def __init__(self, ngramDf, n: int = 2, parent=None):
         super().__init__(parent)
@@ -189,9 +192,25 @@ class NgramDialog(MessageBoxBase):
         statusLabel = CaptionLabel(statusText, self)
         statusLabel.setStyleSheet("color: #666; font-size: 12px;")
 
-        # 导出按钮
+        # 导出按钮 + 聚簇分析按钮
         exportLayout = QHBoxLayout()
         exportLayout.addStretch(1)
+
+        # N>=3 时显示「聚簇分析」按钮（后台多线程执行，不阻塞 UI）
+        if self.n >= 3:
+            from app.view.widgets.freq_analyzer.ngram_cluster_widget import (
+                NgramClusterDialog,
+            )
+
+            self._clusterBtn = PushButton("聚簇分析", self)
+            self._clusterBtn.setIcon(FluentIcon.SEARCH)
+            self._clusterBtn.setToolTip(
+                f"对 {self.label} 进行 t-SNE + KMeans 聚簇分析\n"
+                "（后台线程执行，不影响 UI 响应）"
+            )
+            self._clusterBtn.clicked.connect(self._openClusterAnalysis)
+            exportLayout.addWidget(self._clusterBtn)
+
         exportCsvBtn = PushButton("导出 CSV", self)
         exportCsvBtn.clicked.connect(self._exportCsv)
         exportLayout.addWidget(exportCsvBtn)
@@ -204,6 +223,27 @@ class NgramDialog(MessageBoxBase):
         self.viewLayout.addLayout(exportLayout)
 
         _setupDialogClose(self)
+
+    def _openClusterAnalysis(self) -> None:
+        """打开聚簇分析弹窗（后台线程执行，不阻塞 UI）"""
+        if self.df is None or self.df.empty:
+            _showInfoBar(
+                "warning",
+                "提示",
+                "无 N-gram 数据，无法进行聚簇分析",
+                self,
+                duration=2000,
+            )
+            return
+        from app.view.widgets.freq_analyzer.ngram_cluster_widget import (
+            NgramClusterDialog,
+        )
+
+        NgramClusterDialog.show(
+            ngramDf=self.df,
+            n=self.n,
+            parent=self.window(),
+        )
 
     def _exportCsv(self):
         if self.df is None or self.df.empty:
@@ -515,7 +555,7 @@ class AdvancedSettingsDialog(MessageBoxBase):
         }
 
         # 顶部标题
-        _makeDialogHeader(self, ":app/icons/Setting.svg", "高级设置", self.reject)
+        _makeDialogHeader(self, ":app/icons/Setting.svg", "高级设置", self.accept)
 
         # ----- 主词频最低频次 -----
         unigramTitle = StrongBodyLabel("主词频筛选", self)
@@ -576,19 +616,7 @@ class AdvancedSettingsDialog(MessageBoxBase):
         self.viewLayout.addLayout(ngramFreqRow)
         self.viewLayout.addStretch(1)
 
-        # 底部：取消 + 确定（替换 qfluentwidgets 默认 buttonGroup）
-        okBtn = PushButton("确定", self)
-        okBtn.setFixedWidth(96)
-        okBtn.clicked.connect(self.accept)
-        cancelBtn = PushButton("取消", self)
-        cancelBtn.setFixedWidth(96)
-        cancelBtn.clicked.connect(self.reject)
-
         self.buttonGroup.hide()
-        self.buttonLayout.addStretch(1)
-        self.buttonLayout.addWidget(cancelBtn)
-        self.buttonLayout.addSpacing(8)
-        self.buttonLayout.addWidget(okBtn)
         self.widget.setFixedWidth(460)
         self.widget.setFixedHeight(360)
 

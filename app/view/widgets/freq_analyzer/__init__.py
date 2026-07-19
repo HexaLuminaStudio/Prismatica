@@ -75,6 +75,18 @@ from .freq_engine import (
     posTagsFilter,
     saveStopwordsToFile,
 )
+from .keyword_list_engine import (
+    LL_THRESHOLD_P001,
+    LL_THRESHOLD_P005,
+    LL_THRESHOLD_P001_LARGE,
+    KeywordListResult,
+    analyzeKeywordList,
+    computeLogLikelihood,
+    computeLogRatio,
+    computePctDiff,
+    tokenizeCorpusStore,
+)
+from .keyword_list_widget import KeywordListWidget, KeywordListWorker
 from .network_engine import (
     CooccurrenceEdge,
     CooccurrenceEngine,
@@ -83,6 +95,8 @@ from .network_engine import (
     colorForCommunity,
 )
 from .network_widget import NetworkBuildWorker, NetworkWidget
+from .ngram_cluster_engine import NgramClusterEngine, NgramClusterResult
+from .ngram_cluster_widget import NgramClusterDialog, NgramClusterWorker
 from .result_summary import MetricCard, MetricColor, ResultSummary
 from .token_cache import TokenCache, backendModelVersion, hashText
 from .word_analysis_engine import (
@@ -158,6 +172,10 @@ __all__ = [
     "NetworkBuildWorker",
     "NetworkWidget",
     "NewCorpusDialog",
+    "NgramClusterDialog",
+    "NgramClusterEngine",
+    "NgramClusterResult",
+    "NgramClusterWorker",
     "NgramDialog",
     "POS_COARSE_CATEGORY",
     "POSTag",
@@ -185,6 +203,17 @@ __all__ = [
     "backendModelVersion",
     "colorForCommunity",
     "defaultStopwords",
+    "KeywordListResult",
+    "KeywordListWidget",
+    "KeywordListWorker",
+    "LL_THRESHOLD_P001",
+    "LL_THRESHOLD_P005",
+    "LL_THRESHOLD_P001_LARGE",
+    "analyzeKeywordList",
+    "computeLogLikelihood",
+    "computeLogRatio",
+    "computePctDiff",
+    "tokenizeCorpusStore",
     "getAvailableParsers",
     "getDefaultParser",
     "hashText",

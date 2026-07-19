@@ -4,8 +4,11 @@
 保留全部实现，仅补充必要的 imports。
 """
 
+import json
 import traceback
 from typing import Any, Dict, List, Optional
+
+from app.core.utils.data_paths import FREQ_ANALYZER_SETTINGS_FILE
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -87,6 +90,9 @@ class FreqAnalyzerWidget(QWidget):
         self.stopwords: List[str] = defaultStopwords()
         self._worker = None
 
+        # 从持久化文件恢复上次的高级设置
+        self._loadAdvancedSettings()
+
         self._initUi()
 
         # 监听语料变化（store 可能后绑定）
@@ -136,6 +142,8 @@ class FreqAnalyzerWidget(QWidget):
             self.zipfBtn.setEnabled(False)
         if hasattr(self, "ngramBtn"):
             self.ngramBtn.setEnabled(False)
+        if hasattr(self, "clusterBtn"):
+            self.clusterBtn.setEnabled(False)
         if hasattr(self, "exportBtn"):
             self.exportBtn.setEnabled(False)
         if hasattr(self, "statusLabel"):
@@ -259,6 +267,16 @@ class FreqAnalyzerWidget(QWidget):
         self.exportBtn.clicked.connect(self._exportCsv)
         self.exportBtn.setEnabled(False)
 
+        # N-gram 聚簇分析按钮(N>=3 时可见)
+        self.clusterBtn = PushButton("聚簇分析", self)
+        self.clusterBtn.setIcon(FluentIcon.SEARCH)
+        self.clusterBtn.setToolTip(
+            "对 N-gram 进行 t-SNE + KMeans 聚簇可视化\n" "后台多线程执行，不阻塞 UI"
+        )
+        self.clusterBtn.clicked.connect(self._showCluster)
+        self.clusterBtn.setEnabled(False)
+        self.clusterBtn.setVisible(self.ngramN >= 3)
+
         # P0-AC3 fix 2026-07-18:占比 vs PMW 切换按钮(列 4 在两种模式间切换)
         # PMW = per million words,用于跨语料规模比较的归一化指标
         self._showPmw = False
@@ -272,6 +290,7 @@ class FreqAnalyzerWidget(QWidget):
         opRow.addWidget(self.analyzeBtn)
         opRow.addWidget(self.zipfBtn)
         opRow.addWidget(self.ngramBtn)
+        opRow.addWidget(self.clusterBtn)
         opRow.addWidget(self.pctModeBtn)
         opRow.addWidget(self.exportBtn)
         opRow.addStretch(1)
@@ -339,6 +358,8 @@ class FreqAnalyzerWidget(QWidget):
     def _onNgramNChanged(self, value: int):
         """阶数变化时即时更新按钮标题（用户感知当前会分析的 N）"""
         self.ngramBtn.setText(self._ngramButtonText(value))
+        if hasattr(self, "clusterBtn") and self.clusterBtn is not None:
+            self.clusterBtn.setVisible(value >= 3)
 
     # ------------------------------------------------------------------
     # 高级设置弹窗（收纳主页参数行中的次要选项）
@@ -367,8 +388,15 @@ class FreqAnalyzerWidget(QWidget):
         self.unigramMinFreq = int(result["unigramMinFreq"])
         self.ngramN = int(result["ngramN"])
         self.ngramMinFreq = int(result["ngramMinFreq"])
+        # 持久化到磁盘,重启后自动恢复
+        self._saveAdvancedSettings()
         # 同步按钮标题与摘要文案
         self.ngramBtn.setText(self._ngramButtonText(self.ngramN))
+        if hasattr(self, "clusterBtn") and self.clusterBtn is not None:
+            self.clusterBtn.setVisible(self.ngramN >= 3)
+            # 若已有 ngramDf 数据且 N>=3，启用聚簇分析按钮
+            if self.ngramN >= 3 and self.ngramDf is not None and not self.ngramDf.empty:
+                self.clusterBtn.setEnabled(True)
         if hasattr(self, "advancedHint") and self.advancedHint is not None:
             self.advancedHint.setText(self._advancedHintText())
         _showInfoBar(
@@ -378,6 +406,44 @@ class FreqAnalyzerWidget(QWidget):
             self,
             duration=1800,
         )
+
+    # ------------------------------------------------------------------
+    # 高级设置持久化（重启后恢复上次的设置值）
+    # ------------------------------------------------------------------
+    def _loadAdvancedSettings(self) -> None:
+        """从磁盘恢复上次保存的高级设置;文件不存在或损坏时静默跳过。"""
+        try:
+            if not FREQ_ANALYZER_SETTINGS_FILE.exists():
+                return
+            data = json.loads(FREQ_ANALYZER_SETTINGS_FILE.read_text(encoding="utf-8"))
+            self.unigramMinFreq = int(data.get("unigramMinFreq", self.unigramMinFreq))
+            self.ngramN = int(data.get("ngramN", self.ngramN))
+            self.ngramMinFreq = int(data.get("ngramMinFreq", self.ngramMinFreq))
+            logger.info(
+                f"[FreqAnalyzerWidget] 已恢复高级设置: "
+                f"unigramMinFreq={self.unigramMinFreq}, "
+                f"ngramN={self.ngramN}, "
+                f"ngramMinFreq={self.ngramMinFreq}"
+            )
+        except Exception as e:
+            logger.warning(f"[FreqAnalyzerWidget] 读取高级设置失败: {e}")
+
+    def _saveAdvancedSettings(self) -> None:
+        """将当前高级设置写入磁盘。"""
+        try:
+            FREQ_ANALYZER_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "unigramMinFreq": self.unigramMinFreq,
+                "ngramN": self.ngramN,
+                "ngramMinFreq": self.ngramMinFreq,
+            }
+            FREQ_ANALYZER_SETTINGS_FILE.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(f"[FreqAnalyzerWidget] 已保存高级设置: {payload}")
+        except Exception as e:
+            logger.error(f"[FreqAnalyzerWidget] 保存高级设置失败: {e}")
 
     # ------------------------------------------------------------------
     # 停用词弹窗（导入 / 查看 / 编辑 / 恢复默认 / 导出）
@@ -508,6 +574,9 @@ class FreqAnalyzerWidget(QWidget):
         self._populateTable(unigramDf)
         self.zipfBtn.setEnabled(unigramDf is not None and not unigramDf.empty)
         self.ngramBtn.setEnabled(ngramDf is not None and not ngramDf.empty)
+        if hasattr(self, "clusterBtn") and self.clusterBtn is not None:
+            clusterOk = ngramDf is not None and not ngramDf.empty and self.ngramN >= 3
+            self.clusterBtn.setEnabled(clusterOk)
         self.exportBtn.setEnabled(unigramDf is not None and not unigramDf.empty)
 
         nTypes = len(unigramDf) if unigramDf is not None else 0
@@ -618,6 +687,28 @@ class FreqAnalyzerWidget(QWidget):
             return
         dialog = NgramDialog(self.ngramDf, self.ngramN, self.window())
         dialog.exec()
+
+    def _showCluster(self):
+        """打开 N-gram 聚簇分析弹窗（后台线程执行，不阻塞 UI）"""
+        if self.ngramDf is None or self.ngramDf.empty:
+            ngramLabel = "Bigram" if self.ngramN == 2 else f"{self.ngramN}-gram"
+            _showInfoBar(
+                "warning",
+                "提示",
+                f"无 {ngramLabel} 数据，请调低「N-gram 最低频次」后重试",
+                self,
+                duration=2000,
+            )
+            return
+        from app.view.widgets.freq_analyzer.ngram_cluster_widget import (
+            NgramClusterDialog,
+        )
+
+        NgramClusterDialog.show(
+            ngramDf=self.ngramDf,
+            n=self.ngramN,
+            parent=self.window(),
+        )
 
     def _exportCsv(self):
         if self.unigramDf is None or self.unigramDf.empty:

@@ -399,6 +399,7 @@ from app.view.widgets.freq_analyzer.word_analysis_widget import WordAnalysisWidg
 from app.view.widgets.freq_analyzer.collocation_widget import CollocationWidget
 from app.view.widgets.freq_analyzer.word_cloud_widget import WordCloudWidget
 from app.view.widgets.freq_analyzer.dependency_widget import DependencyWidget
+from app.view.widgets.freq_analyzer.keyword_list_widget import KeywordListWidget
 
 
 class FreqAnalyzerInterface(QWidget):
@@ -511,6 +512,11 @@ class FreqAnalyzerInterface(QWidget):
             "dependency": DependencyWidget(
                 panelContainer, corpusStore=self.corpusStore
             ),
+            "keywordList": KeywordListWidget(
+                panelContainer,
+                corpusStore=self.corpusStore,
+                corpusManager=self.corpusManager,
+            ),
         }
         for key, widget in self._panels.items():
             widget.setObjectName(key)
@@ -520,6 +526,7 @@ class FreqAnalyzerInterface(QWidget):
         self.segmented.addItem("corpusImport", "语料导入与清洗")
         self.segmented.addItem("freqAnalyzer", "词频分析")
         self.segmented.addItem("wordAnalysis", "词语分析")
+        self.segmented.addItem("keywordList", "主题词分析")
         self.segmented.addItem("concordance", "语境分析")
         self.segmented.addItem("sentiment", "情感分析")
         self.segmented.addItem("collocation", "搭配分析")
