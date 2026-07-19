@@ -66,7 +66,9 @@ class NewCorpusDialog(MessageBoxBase):
         nameWrap = QVBoxLayout()
         nameLabel = BodyLabel("语料库名称 *", self)
         self.nameEdit = LineEdit(self)
-        self.nameEdit.setPlaceholderText("例如:HSK-A级 / 学术汉语 / 新闻语料 (1-32 字符)")
+        self.nameEdit.setPlaceholderText(
+            "例如:HSK-A级 / 学术汉语 / 新闻语料 (1-32 字符)"
+        )
         self.nameErrLabel = CaptionLabel("", self)
         self.nameErrLabel.setStyleSheet("color: #d83b01; font-size: 11px;")
         self.nameErrLabel.setVisible(False)
@@ -87,9 +89,7 @@ class NewCorpusDialog(MessageBoxBase):
         self.viewLayout.addSpacing(8)
 
         # 保存路径提示
-        pathHint = CaptionLabel(
-            f"数据库文件将保存至: {defaultPath}", self
-        )
+        pathHint = CaptionLabel(f"数据库文件将保存至: {defaultPath}", self)
         pathHint.setStyleSheet("color: #888; font-size: 11px;")
         pathHint.setWordWrap(True)
         self.viewLayout.addWidget(pathHint)
@@ -190,13 +190,11 @@ class CorpusSwitcherWidget(CardWidget):
         self.lastBtn = PushButton("打开上次", self)
         self.lastBtn.setIcon(FluentIcon.SYNC)
         self.lastBtn.clicked.connect(self._onActivateLastClicked)
-        self.lastBtn.setToolTip("切换回上次使用过的语料库")
         row1.addWidget(self.lastBtn)
 
         self.importBtn = PushButton("绑定外部库...", self)
         self.importBtn.setIcon(FluentIcon.FOLDER)
         self.importBtn.clicked.connect(self._onImportExternalClicked)
-        self.importBtn.setToolTip("导入一个已有的 .db 文件作为新语料库")
         row1.addWidget(self.importBtn)
 
         layout.addLayout(row1)
@@ -228,9 +226,7 @@ class CorpusSwitcherWidget(CardWidget):
 
         # 按钮状态
         active = self._manager.activeCorpus()
-        self.deleteBtn.setEnabled(
-            active is not None and active.name != "default"
-        )
+        self.deleteBtn.setEnabled(active is not None and active.name != "default")
         self.lastBtn.setEnabled(lastId > 0 and lastId != activeId)
 
         # 摘要
@@ -259,9 +255,7 @@ class CorpusSwitcherWidget(CardWidget):
             try:
                 cur = conn.execute("SELECT COUNT(*) FROM documents")
                 files = int(cur.fetchone()[0] or 0)
-                cur = conn.execute(
-                    "SELECT COALESCE(SUM(char_count), 0) FROM documents"
-                )
+                cur = conn.execute("SELECT COALESCE(SUM(char_count), 0) FROM documents")
                 chars = int(cur.fetchone()[0] or 0)
                 return f"{files} 个文件 / {chars:,} 字符"
             finally:
@@ -369,7 +363,11 @@ class CorpusSwitcherWidget(CardWidget):
             followUp.cancelButton.setText("保留")
             if followUp.exec():
                 try:
-                    for p in (active.dbPath, active.dbPath + "-shm", active.dbPath + "-wal"):
+                    for p in (
+                        active.dbPath,
+                        active.dbPath + "-shm",
+                        active.dbPath + "-wal",
+                    ):
                         if os.path.exists(p):
                             os.remove(p)
                     _showInfoBar(

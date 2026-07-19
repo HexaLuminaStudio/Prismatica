@@ -230,7 +230,6 @@ class FreqAnalyzerWidget(QWidget):
         self.stopwordsViewBtn = PushButton("查看", self)
         self.stopwordsViewBtn.setIcon(":app/icons/Dictionary.svg")
         self.stopwordsViewBtn.setFixedWidth(90)
-        self.stopwordsViewBtn.setToolTip("查看/编辑当前停用词列表")
         self.stopwordsViewBtn.clicked.connect(self._showStopwordsDialog)
 
         self.numberSwitch = _makeSwitchButton("排除纯数字", self)
@@ -270,9 +269,6 @@ class FreqAnalyzerWidget(QWidget):
         # N-gram 聚簇分析按钮(N>=3 时可见)
         self.clusterBtn = PushButton("聚簇分析", self)
         self.clusterBtn.setIcon(FluentIcon.SEARCH)
-        self.clusterBtn.setToolTip(
-            "对 N-gram 进行 t-SNE + KMeans 聚簇可视化\n" "后台多线程执行，不阻塞 UI"
-        )
         self.clusterBtn.clicked.connect(self._showCluster)
         self.clusterBtn.setEnabled(False)
         self.clusterBtn.setVisible(self.ngramN >= 3)
@@ -282,9 +278,6 @@ class FreqAnalyzerWidget(QWidget):
         self._showPmw = False
         self.pctModeBtn = PushButton("占比 (%)", self)
         self.pctModeBtn.setIcon(FluentIcon.SEND)
-        self.pctModeBtn.setToolTip(
-            "点击切换显示模式:\n• 占比(%):当前语料内的相对频率\n• PMW:每百万词频次(便于跨语料比较)"
-        )
         self.pctModeBtn.clicked.connect(self._togglePctMode)
 
         opRow.addWidget(self.analyzeBtn)
@@ -655,15 +648,8 @@ class FreqAnalyzerWidget(QWidget):
         self._showPmw = not bool(getattr(self, "_showPmw", False))
         if self._showPmw:
             self.pctModeBtn.setText("PMW")
-            self.pctModeBtn.setToolTip(
-                "当前显示 PMW(每百万词频次)。\n"
-                "点击切换回占比(%):当前语料内的相对频率"
-            )
         else:
             self.pctModeBtn.setText("占比 (%)")
-            self.pctModeBtn.setToolTip(
-                "点击切换显示模式:\n• 占比(%):当前语料内的相对频率\n• PMW:每百万词频次(便于跨语料比较)"
-            )
         # 重新填充表格(复用现有数据,不重新跑分析)
         if getattr(self, "unigramDf", None) is not None:
             self._populateTable(self.unigramDf)

@@ -1959,9 +1959,6 @@ class BiasInterface(QWidget):
         self.chooseFileBtn.clicked.connect(self._onChooseFile)
 
         self.switchBtn = SwitchButton("单文件模式", self)
-        self.switchBtn.setToolTip(
-            "单文件模式: 仅统计单个文件\n多文件模式: 统计所有文件中的偏误"
-        )
         self.switchBtn.installEventFilter(
             ToolTipFilter(self.switchBtn, 200, ToolTipPosition.TOP)
         )

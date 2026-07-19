@@ -469,26 +469,15 @@ class CollocationWidget(QWidget):
         self.sigSpin.setDecimals(1)
         self.sigSpin.setSingleStep(0.5)
         self.sigSpin.setValue(3.0)
-        self.sigSpin.setToolTip(
-            "显著搭配的 MI 阈值(默认 3.0,Church & Hanks 1990);" "中文研究可调至 2.5~3.5"
-        )
         row2b.addWidget(self.sigSpin)
 
         self.yatesSwitch = _makeSwitchButton("Yates 连续性修正", card)
         self.yatesSwitch.setChecked(False)
-        self.yatesSwitch.setToolTip(
-            "对低频搭配(O<5)启用 Yates 1934 连续性修正,默认关闭以兼容 AntConc"
-        )
         row2b.addWidget(self.yatesSwitch)
 
         # P1-2 修复:跨句边界开关
         self.crossSentSwitch = _makeSwitchButton("跨句边界", card)
         self.crossSentSwitch.setChecked(False)
-        self.crossSentSwitch.setToolTip(
-            "P1-2 修复:默认按学术惯例「不跨句」统计(Sinclair 1991),"
-            "避免把不同句子的词误算为搭配;启用后将忽略句子边界,"
-            "适用于文体学相邻句话题连续性分析"
-        )
         row2b.addWidget(self.crossSentSwitch)
 
         row2b.addStretch(1)

@@ -616,12 +616,6 @@ class CorpusImportWidget(QWidget):
         # P3-fix:依赖「启用清洗」总开关,自身不独立工作。
         self.posOnCleanSwitch = _makeSwitchButton("清洗时同时词性标注", self)
         self.posOnCleanSwitch.setChecked(False)
-        self.posOnCleanSwitch.setToolTip(
-            "启用后,每次清洗完成的瞬间会同步对该文件做 jieba 词性标注,"
-            "并将结果写入 pos_cache 表。可随后在「词性标记」卡片点"
-            "「导出 POS 语料」获取可复用的标注文件。\n"
-            "依赖「启用清洗」总开关:未启用清洗时此选项无效。"
-        )
         # P3-fix:勾选变更也要推送到 store,并触发联动校验
         self.posOnCleanSwitch.checkedChanged.connect(self._onPosOnCleanChanged)
         switchRow.addWidget(self.posOnCleanSwitch)
@@ -683,24 +677,18 @@ class CorpusImportWidget(QWidget):
         # 导入预设(从外部 JSON 文件复制到 config/clean_presets/)
         importPresetBtn = PushButton("导入预设", card)
         importPresetBtn.setIcon(FluentIcon.ADD)
-        importPresetBtn.setToolTip(
-            "从外部 JSON 文件导入预设,保存到 config/clean_presets/\n"
-            "之后可在「打开预设目录」中查看"
-        )
         importPresetBtn.clicked.connect(self._importPreset)
         btnRow.addWidget(importPresetBtn)
 
         # 打开用户预设目录
         openPresetDirBtn = TransparentPushButton("打开目录", card)
         openPresetDirBtn.setIcon(FluentIcon.FOLDER)
-        openPresetDirBtn.setToolTip("打开 config/clean_presets/ 目录")
         openPresetDirBtn.clicked.connect(self._openPresetDir)
         btnRow.addWidget(openPresetDirBtn)
 
         # 删除当前预设(仅对用户预设有效)
         deletePresetBtn = TransparentPushButton("删除", card)
         deletePresetBtn.setIcon(FluentIcon.DELETE)
-        deletePresetBtn.setToolTip("删除当前选中的用户预设(内置预设无法删除)")
         deletePresetBtn.clicked.connect(self._deletePreset)
         btnRow.addWidget(deletePresetBtn)
 
@@ -863,7 +851,6 @@ class CorpusImportWidget(QWidget):
         categories = posTagCategories()
         for cat in categories:
             cb = CheckBox(cat["label"], self)
-            cb.setToolTip(cat["description"])
             cb.setChecked(False)
             cb.stateChanged.connect(self._onPosSelectionChanged)
             self.posCheckBoxes[cat["key"]] = cb
@@ -881,21 +868,11 @@ class CorpusImportWidget(QWidget):
         # POS 语料导出(基于清洗时同步标注的 pos_cache)
         self.posFormatCombo = ComboBox(self)
         self.posFormatCombo.addItems(["CoNLL", "TSV", "JSONL"])
-        self.posFormatCombo.setToolTip(
-            "导出格式:\n"
-            "• CoNLL — 每个 token 一行 word/tag\n"
-            "• TSV   — 每行 word\\ttag\n"
-            "• JSONL — 每行 JSON 对象 {word, tag}"
-        )
         self.posFormatCombo.setFixedWidth(110)
         btnRow.addWidget(self.posFormatCombo)
 
         self.exportPosBtn = PushButton("导出 POS 语料", self)
         self.exportPosBtn.setIcon(FluentIcon.SAVE)
-        self.exportPosBtn.setToolTip(
-            "导出当前 pos_cache 中的词性标注结果为可复用语料文件\n"
-            "(先在「清洗规则」中开启「清洗时同时进行词性标注」)"
-        )
         self.exportPosBtn.clicked.connect(self._exportPosCorpus)
         btnRow.addWidget(self.exportPosBtn)
 

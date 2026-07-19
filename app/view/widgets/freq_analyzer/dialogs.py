@@ -204,10 +204,6 @@ class NgramDialog(MessageBoxBase):
 
             self._clusterBtn = PushButton("聚簇分析", self)
             self._clusterBtn.setIcon(FluentIcon.SEARCH)
-            self._clusterBtn.setToolTip(
-                f"对 {self.label} 进行 t-SNE + KMeans 聚簇分析\n"
-                "（后台线程执行，不影响 UI 响应）"
-            )
             self._clusterBtn.clicked.connect(self._openClusterAnalysis)
             exportLayout.addWidget(self._clusterBtn)
 

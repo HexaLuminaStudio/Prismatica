@@ -1184,7 +1184,6 @@ class KeywordListWidget(QWidget, WorkerMixin):
         self.minFreqSpin = SpinBox(card)
         self.minFreqSpin.setRange(1, 100)
         self.minFreqSpin.setValue(2)
-        self.minFreqSpin.setToolTip("观察语料中至少出现该次数才纳入候选词表")
         row3.addWidget(self.minFreqSpin)
 
         row3.addWidget(BodyLabel("Top-N:", card))
@@ -1195,9 +1194,6 @@ class KeywordListWidget(QWidget, WorkerMixin):
         self.topNSpin.setRange(50, 2000)
         self.topNSpin.setValue(500)
         self.topNSpin.setSingleStep(50)
-        self.topNSpin.setToolTip(
-            "主题词表最大行数(50-2000,默认 500)。超过 2000 的 keyness 价值有限。"
-        )
         row3.addWidget(self.topNSpin)
 
         row3.addWidget(BodyLabel("显著性:", card))
@@ -1213,10 +1209,6 @@ class KeywordListWidget(QWidget, WorkerMixin):
             userData=LL_THRESHOLD_P001_LARGE,
         )
         self.sigCombo.setCurrentIndex(1)
-        self.sigCombo.setToolTip(
-            "Log-Likelihood 阈值。p<0.01 是 AntConc 默认。"
-            "语料规模 > 100万 token 时建议用更严格阈值。"
-        )
         row3.addWidget(self.sigCombo)
 
         row3.addStretch(1)
@@ -1244,7 +1236,6 @@ class KeywordListWidget(QWidget, WorkerMixin):
 
         self.stopSwitch = _makeSwitchButton("过滤停用词", card)
         self.stopSwitch.setChecked(False)
-        self.stopSwitch.setToolTip("使用默认中英文停用词表")
         row4.addWidget(self.stopSwitch)
 
         self.numberSwitch = _makeSwitchButton("排除纯数字", card)

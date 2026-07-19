@@ -350,7 +350,6 @@ class NetworkWidget(QWidget):
         self.windowSpin = SpinBox(card)
         self.windowSpin.setRange(1, 30)
         self.windowSpin.setValue(5)
-        self.windowSpin.setToolTip("滑动窗口半径,默认 ±5 词(FR-CON-001)")
         row1.addWidget(self.windowSpin)
 
         row1.addSpacing(12)
@@ -358,7 +357,6 @@ class NetworkWidget(QWidget):
         self.minFreqSpin = SpinBox(card)
         self.minFreqSpin.setRange(1, 100)
         self.minFreqSpin.setValue(2)
-        self.minFreqSpin.setToolTip("词频低于此值的词将被过滤(FR-CON-006)")
         row1.addWidget(self.minFreqSpin)
 
         row1.addSpacing(12)
@@ -366,7 +364,6 @@ class NetworkWidget(QWidget):
         self.minCoSpin = SpinBox(card)
         self.minCoSpin.setRange(1, 100)
         self.minCoSpin.setValue(2)
-        self.minCoSpin.setToolTip("共现频次低于此值的边将被过滤(FR-CON-006)")
         row1.addWidget(self.minCoSpin)
 
         row1.addSpacing(12)
@@ -374,7 +371,6 @@ class NetworkWidget(QWidget):
         self.topKSpin = SpinBox(card)
         self.topKSpin.setRange(5, 500)
         self.topKSpin.setValue(80)
-        self.topKSpin.setToolTip("仅保留频率最高的 K 个节点,避免图过大")
         row1.addWidget(self.topKSpin)
 
         layout.addLayout(row1)
@@ -388,7 +384,6 @@ class NetworkWidget(QWidget):
 
         self.communityCheck = _makeSwitch("社区发现着色", card)
         self.communityCheck.setChecked(True)
-        self.communityCheck.setToolTip("按 Louvain 风格算法为节点着色(FR-CON-005)")
         row2.addWidget(self.communityCheck)
 
         self.caseCheck = CheckBox("区分大小写", card)

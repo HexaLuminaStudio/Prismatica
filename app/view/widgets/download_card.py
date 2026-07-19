@@ -168,7 +168,6 @@ class DownloadCard(CardWidget):
 
         self.deleteButton = ToolButton(FluentIcon.DELETE, self)
         self.deleteButton.setFixedSize(32, 32)
-        self.deleteButton.setToolTip("删除记录")
         self.deleteButton.clicked.connect(self._onDeleteClicked)
 
         # 获取按钮布局并添加删除按钮
@@ -185,7 +184,6 @@ class DownloadCard(CardWidget):
 
         self.redownloadButton = ToolButton(FluentIcon.SYNC, self)
         self.redownloadButton.setFixedSize(32, 32)
-        self.redownloadButton.setToolTip("重新下载")
         self.redownloadButton.clicked.connect(self._onRedownloadClicked)
 
         # 获取按钮布局并添加重新下载按钮
@@ -292,7 +290,6 @@ class DownloadCard(CardWidget):
         self.pauseButton.setEnabled(False)
         # 取消按钮改为打开文件夹按钮
         self.cancelButton.setIcon(FluentIcon.FOLDER)
-        self.cancelButton.setToolTip("打开文件夹")
         self.cancelButton.clicked.disconnect()
         self.cancelButton.clicked.connect(self._onOpenFolderClicked)
         # 添加重新下载按钮

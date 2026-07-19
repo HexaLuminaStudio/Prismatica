@@ -71,7 +71,7 @@ from loguru import logger
 _NODE_HIGHLIGHT_COLOR = QColor("#FFF7B0")
 
 
-def _makeCleanSwitchButton(text: str, toolTip: str, parent: QWidget) -> "SwitchButton":
+def _makeCleanSwitchButton(text: str, parent: QWidget) -> "SwitchButton":
     """SwitchButton 工厂：开关文字始终保持不变
 
     SwitchButton 默认在勾选后切换为内置的 "On"/"Off" 文本，
@@ -80,7 +80,6 @@ def _makeCleanSwitchButton(text: str, toolTip: str, parent: QWidget) -> "SwitchB
     btn = SwitchButton(text, parent)
     btn.setOnText(text)
     btn.setOffText(text)
-    btn.setToolTip(toolTip)
     return btn
 
 
@@ -591,9 +590,6 @@ class ConcordanceWidget(QWidget):
         self.secondaryOffsetSpin = SpinBox(card)
         self.secondaryOffsetSpin.setRange(-10, 10)
         self.secondaryOffsetSpin.setValue(0)
-        self.secondaryOffsetSpin.setToolTip(
-            "0=节点词本身; 正数=节点词右侧第N词; 负数=左侧第N词"
-        )
         row4.addWidget(self.secondaryOffsetSpin)
         self.secondaryRegexCheck = CheckBox("正则", card)
         row4.addWidget(self.secondaryRegexCheck)
@@ -924,7 +920,6 @@ class ConcordanceWidget(QWidget):
         self.resultTable.setRowCount(len(result.hits))
         for i, hit in enumerate(result.hits):
             fileItem = QTableWidgetItem(hit.sourceFile)
-            fileItem.setToolTip(hit.sourceFile)
             self.resultTable.setItem(i, 0, fileItem)
 
             leftItem = QTableWidgetItem(hit.leftText)
