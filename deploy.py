@@ -10,18 +10,18 @@ from distutils.sysconfig import get_python_lib
 #    $ python deploy.py
 
 args = [
-    'nuitka',
-    '--standalone',
-    '--assume-yes-for-downloads',
-    '--mingw64',
-    '--windows-icon-from-ico=C:/Users/dell/AppData/Local/Temp/icon.ico',
-    '--enable-plugins=pyside6',
-    '--clean-cache=all',
-    '--show-progress',
-    '--show-memory',
+    "nuitka",
+    "--standalone",
+    "--assume-yes-for-downloads",
+    "--mingw64",
+    "--windows-icon-from-ico=E:/Prismatica/app/view/resource/images/logo.ico",
+    "--enable-plugins=pyside6",
+    "--clean-cache=all",
+    "--show-progress",
+    "--show-memory",
     "--include-module=ctypes",
-    '--output-dir=E:/Prismatica/build',
-    'E:/Prismatica/main.py'
+    "--output-dir=E:/Prismatica/build",
+    "E:/Prismatica/main.py",
 ]
 
 dist_folder = Path("E:/Prismatica/build/main.dist")

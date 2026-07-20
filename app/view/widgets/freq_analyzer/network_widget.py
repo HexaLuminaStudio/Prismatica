@@ -375,12 +375,15 @@ class NetworkWidget(QWidget):
 
         layout.addLayout(row1)
 
-        # 行 2:关键词 + 停用词 + 社区发现 + 大小写
+        # 行 2:统一过滤模式(FR-CON-010 P0-fix 2026-07-20)
+        # 合并旧版「关键词过滤」与「词性组合」,用户可在同一输入框中表达复合筛选
         row2 = QHBoxLayout()
-        row2.addWidget(BodyLabel("关键词过滤:", card))
-        self.keywordEdit = LineEdit(card)
-        self.keywordEdit.setPlaceholderText("可选:仅显示与该词共现的关系,留空则全量")
-        row2.addWidget(self.keywordEdit, 1)
+        row2.addWidget(BodyLabel("过滤模式:", card))
+        self.filterExprEdit = LineEdit(card)
+        self.filterExprEdit.setPlaceholderText(
+            "留空 = 全量。示例:「学习」/「V 都 V 了」/「学习:V 都 V 了」/「学习,工作」"
+        )
+        row2.addWidget(self.filterExprEdit, 1)
 
         self.communityCheck = _makeSwitch("社区发现着色", card)
         self.communityCheck.setChecked(True)
@@ -390,6 +393,43 @@ class NetworkWidget(QWidget):
         row2.addWidget(self.caseCheck)
 
         layout.addLayout(row2)
+
+        # 行 2.5:边权方案(FR-CON-008 P0-fix 2026-07-20)
+        row25 = QHBoxLayout()
+        row25.addWidget(BodyLabel("边权方案:", card))
+        from app.view.widgets.freq_analyzer.network_engine import EdgeWeight
+
+        self.edgeWeightCombo = ComboBox(card)
+        self.edgeWeightCombo.addItem(
+            "共现频次 (Frequency)", userData=EdgeWeight.FREQUENCY.value
+        )
+        self.edgeWeightCombo.addItem("PMI", userData=EdgeWeight.PMI.value)
+        self.edgeWeightCombo.addItem(
+            "NPMI (Bouma 2009)", userData=EdgeWeight.NPMI.value
+        )
+        self.edgeWeightCombo.addItem("Dice 系数", userData=EdgeWeight.DICE.value)
+        self.edgeWeightCombo.addItem(
+            "LogDice (Rychlý 2008)", userData=EdgeWeight.LOG_DICE.value
+        )
+        self.edgeWeightCombo.addItem("Jaccard", userData=EdgeWeight.JACCARD.value)
+        self.edgeWeightCombo.setCurrentIndex(0)
+        self.edgeWeightCombo.setToolTip(
+            "选择边权重计算方式:\n"
+            "• Frequency:绝对共现频次(默认,受高频词偏置)\n"
+            "• PMI/NPMI:信息论指标,识别非偶然共现\n"
+            "• Dice/LogDice/Jaccard:归一化相似度\n"
+            "归一化方案能显著降低功能词 hub 偏置"
+        )
+        row25.addWidget(self.edgeWeightCombo)
+
+        self.biasHintLabel = CaptionLabel(
+            "⚠️ Frequency 模式受高频词偏置,建议学术分析使用 PMI/LogDice",
+            card,
+        )
+        self.biasHintLabel.setStyleSheet("color: #c97a00; font-size: 11px;")
+        row25.addWidget(self.biasHintLabel, 1)
+
+        layout.addLayout(row25)
 
         # 行 3:操作按钮
         row3 = QHBoxLayout()
@@ -535,8 +575,12 @@ class NetworkWidget(QWidget):
             useJieba=True,
             caseSensitive=self.caseCheck.isChecked(),
             stopwords=stopwords,
-            keyword=self.keywordEdit.text().strip(),
+            keyword="",  # 向后兼容,filterExpr 接管
             enableCommunity=self.communityCheck.isChecked(),
+            # FR-CON-008 P0-fix 2026-07-20:边权方案
+            edgeWeight=self.edgeWeightCombo.currentData(),
+            # FR-CON-010 P0-fix 2026-07-20:统一过滤模式
+            filterExpr=self.filterExprEdit.text().strip(),
         )
 
     def _onBuildProgress(self, msg: str):
@@ -696,12 +740,12 @@ class NetworkWidget(QWidget):
                 ("密度", f"{density:.3f}", MetricColor.NEUTRAL),
             ]
         )
-        kw = n.params.keyword or "(无)"
+        filterExpr = n.params.filterExpr or n.params.keyword or "(无)"
         self._resultSummary.setDetail(
             f"🕸️ 窗口 <b>±{n.params.windowSize}</b> &nbsp;|&nbsp; "
             f"最小词频 <b>{n.params.minWordFreq}</b> &nbsp;|&nbsp; "
             f"最小共现 <b>{n.params.minCoFreq}</b> &nbsp;|&nbsp; "
-            f"关键词 <b>{kw}</b>"
+            f"过滤模式 <b>{filterExpr}</b>"
         )
         self.summaryLabel.setText("")  # 兼容旧引用
         self.statusLabel.setText(

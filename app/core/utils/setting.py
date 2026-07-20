@@ -17,8 +17,21 @@ APP_NAME = "Prismatica"
 
 # =====================================================================
 # 内测版 / 正式版 开关(P0-fix 2026-07-18)
+#
+# 控制方式（优先级从高到低）：
+#   1. 环境变量 PRISMATICA_BETA_MODE=1      → 强制打开内测模式
+#   2. 环境变量 PRISMATICA_BETA_MODE=0      → 强制关闭内测模式
+#   3.    未设置环境变量                        → 默认 False（正式版）
+#
+# 示例：
+#   PowerShell: $env:PRISMATICA_BETA_MODE=1; python main.py
+#   CMD:        set PRISMATICA_BETA_MODE=1 && python main.py
+#   PyInstaller: PRISMATICA_BETA_MODE=1 Prismatica.exe
 # =====================================================================
-IS_BETA = False
+
+
+
+IS_BETA: bool = True
 BETA_FEATURES = [
     (
         "Check.svg",

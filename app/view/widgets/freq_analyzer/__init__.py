@@ -97,10 +97,18 @@ from .network_engine import (
     CooccurrenceEdge,
     CooccurrenceEngine,
     CooccurrenceNetwork,
+    EdgeWeight,
     NetworkBuildParams,
     colorForCommunity,
 )
 from .network_widget import NetworkBuildWorker, NetworkWidget
+from .pos_pattern import (
+    NetworkFilter,
+    NetworkFilterClause,
+    PosPattern,
+    PatternMatch,
+    tokenizeForPos,
+)
 from .ngram_cluster_engine import NgramClusterEngine, NgramClusterResult
 from .ngram_cluster_widget import NgramClusterDialog, NgramClusterWorker
 from .result_summary import MetricCard, MetricColor, ResultSummary
@@ -152,6 +160,7 @@ __all__ = [
     "CorpusSwitcherWidget",
     "CooccurrenceEdge",
     "CooccurrenceEngine",
+    "EdgeWeight",
     "CooccurrenceNetwork",
     "CleanPreviewDialog",
     "CleanRule",
@@ -209,6 +218,11 @@ __all__ = [
     "availablePosBackend",
     "backendModelVersion",
     "colorForCommunity",
+    "NetworkFilter",
+    "NetworkFilterClause",
+    "tokenizeForPos",
+    "PosPattern",
+    "PatternMatch",
     "computeFileTokenCounts",
     "defaultStopwords",
     "extractHitPositions",

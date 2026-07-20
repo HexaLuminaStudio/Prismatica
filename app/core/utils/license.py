@@ -497,6 +497,12 @@ class LicenseManager:
     def _isBetaActiveOrExpired(self) -> dict:
         """检测内测模式当前状态
 
+        安全检查层级:
+            1. BETA_HARD_DEADLINE 绝对硬上限
+            2. 系统时间回拨检测(latsSeen 单调递增)
+            3. 签名校验失败 → 篡改检测
+            4. startDate + BETA_MAX_VALID_DAYS 上限
+
         Returns:
             dict:
                 status: "in_beta" | "expired_hard" | "expired_30d"
@@ -505,6 +511,7 @@ class LicenseManager:
                 startDate: 首次启动日期(若有)
         """
         today = datetime.now().strftime("%Y-%m-%d")
+        todayDt = datetime.now()
 
         # 1. 绝对硬上限:超过 2026-7-30 立即失效
         if today > BETA_HARD_DEADLINE:
@@ -528,6 +535,46 @@ class LicenseManager:
             startDate = betaRecord.get("startDate")
             deadline = betaRecord.get("deadline", BETA_HARD_DEADLINE)
             signature = betaRecord.get("signature", "")
+
+            # 2a. 系统时间回拨检测:lastSeen 必须单调递增
+            lastSeen = betaRecord.get("lastSeen", "")
+            if lastSeen:
+                try:
+                    lastSeenDt = datetime.strptime(lastSeen, "%Y-%m-%d")
+                    # 允许最多 1 天的时钟漂移（跨时区/夏令时）
+                    from datetime import timedelta
+
+                    if todayDt < lastSeenDt - timedelta(days=1):
+                        logger.warning(
+                            f"[License] 检测到系统时间回拨: "
+                            f"lastSeen={lastSeen}, today={today}"
+                        )
+                        return {
+                            "status": "expired_hard",
+                            "daysRemaining": 0,
+                            "deadline": BETA_HARD_DEADLINE,
+                            "startDate": startDate,
+                            "reason": "检测到系统时间异常(时钟回拨),内测已失效",
+                        }
+                except Exception as e:
+                    logger.warning(f"[License] lastSeen 解析失败: {e}")
+
+            # 2b. 验证 startDate 不在未来(防止写入时系统时间已错误)
+            try:
+                startDt = datetime.strptime(startDate, "%Y-%m-%d")
+                if startDt > todayDt + timedelta(days=1):
+                    logger.warning(f"[License] startDate({startDate}) 在未来,可疑")
+                    return {
+                        "status": "expired_hard",
+                        "daysRemaining": 0,
+                        "deadline": BETA_HARD_DEADLINE,
+                        "startDate": startDate,
+                        "reason": "内测时间锁数据异常(startDate 在未来)",
+                    }
+            except Exception:
+                pass
+
+            # 2c. 签名校验:HMAC-SHA256(设备特征派生密钥)
             secret = self._getBetaSecret()
             expectedSig = self._computeBetaSignature(startDate, deadline, secret)
 
@@ -625,12 +672,20 @@ class LicenseManager:
                 "reason": None,
             }
 
-        # 3. 已有内测记录 → 校验
+        # 3. 已有内测记录 → 校验 + 更新 lastSeen
         betaRecord = (
             self.activationData.get("betaLock") if self.activationData else None
         )
         if betaRecord:
-            return self._isBetaActiveOrExpired()
+            result = self._isBetaActiveOrExpired()
+            # 校验通过 → 更新 lastSeen(防止后续时间回拨绕过)
+            if result.get("status") == "in_beta" and self.activationData:
+                self.activationData["betaLock"]["lastSeen"] = today
+                try:
+                    self._saveActivationData()
+                except Exception as e:
+                    logger.warning(f"[License] 更新 lastSeen 失败: {e}")
+            return result
 
         # 4. 首次启动:写入内测时间锁记录
         if self.activationData is None:
@@ -644,6 +699,7 @@ class LicenseManager:
             "deadline": deadline,
             "maxValidDays": BETA_MAX_VALID_DAYS,
             "signature": signature,
+            "lastSeen": today,  # 首次记录 lastSeen,用于后续回拨检测
             "createdAt": datetime.now().isoformat(),
         }
         # 同时记录激活类型

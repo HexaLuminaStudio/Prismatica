@@ -83,20 +83,26 @@ app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 
 # =====================================================================
 # 内测时间锁校验:首次启动记录 start_date,后续验证签名/截止日/有效期
+#
+# 行为规则:
+#   - IS_BETA=True  → 时间锁全量生效:超出 BETA_HARD_DEADLINE 或 30 天则阻止启动
+#   - IS_BETA=False → 不阻止启动(正式版通过激活码授权,时间锁仅做后台追踪)
 # =====================================================================
 from app.core.utils.license import getLicenseManager
+from app.core.utils.setting import IS_BETA
 
 _betaStatus = getLicenseManager().ensureBetaTimelock()
 # P0-fix:用于在过期时持有非模态弹窗的强引用,防止 Python GC 回收。
 # 模块级全局变量,生命周期等同进程。
 _betaExpiredDialog = None
 logger.info(
-    f"[BetaTimelock] status={_betaStatus.get('status')}, "
+    f"[BetaTimelock] IS_BETA={IS_BETA}, "
+    f"status={_betaStatus.get('status')}, "
     f"daysRemaining={_betaStatus.get('daysRemaining')}, "
     f"deadline={_betaStatus.get('deadline')}"
 )
 
-if _betaStatus.get("status") in ("expired_hard", "expired_30d"):
+if IS_BETA and _betaStatus.get("status") in ("expired_hard", "expired_30d"):
     # P0-fix 2026-07-18:内测已过期时**仅显示提示弹窗**,不显示主窗口。
     # - 弹窗用 modal 模式阻塞主事件循环(直到用户激活成功 / 退出程序)
     # - 不创建 MainWindow,避免用户绕过弹窗进入主程序
