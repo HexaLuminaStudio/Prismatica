@@ -19,6 +19,7 @@ from .global_interface import GlobalInterface
 from .bias_interface import BiasInterface
 from .freq_analyzer_interface import FreqAnalyzerInterface
 from .task_interface import TaskInterface
+from .chat_interface import ChatInterface
 from .setting_interface import SettingInterface
 
 
@@ -36,6 +37,7 @@ class MainWindow(MSFluentWindow):
         self.biasInterface = BiasInterface(self)
         self.freqAnalyzerInterface = FreqAnalyzerInterface(self)
         self.taskInterface = TaskInterface(self)
+        self.chatInterface = ChatInterface(self)
         self.settingInterface = SettingInterface(self)
 
         self.connectSignalToSlot()
@@ -72,6 +74,12 @@ class MainWindow(MSFluentWindow):
             "语料分析",
             position=NavigationItemPosition.TOP,
         )
+        self.addSubInterface(
+            self.chatInterface,
+            QIcon(":app/icons/Chat.svg"),
+            "AI 聊天",
+            position=NavigationItemPosition.SCROLL,
+        )
 
         self.addSubInterface(
             self.taskInterface,
@@ -79,6 +87,7 @@ class MainWindow(MSFluentWindow):
             "任务管理",
             position=NavigationItemPosition.BOTTOM,
         )
+
         self.addSubInterface(
             self.settingInterface,
             QIcon(":app/icons/Setting.svg"),
@@ -90,7 +99,7 @@ class MainWindow(MSFluentWindow):
 
     def initWindow(self):
         logger.info("[MainWindow] 开始初始化窗口设置")
-        self.resize(1250, 750)
+        self.resize(1250, 900)
         self.setMinimumWidth(900)
         self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))

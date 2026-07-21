@@ -9,6 +9,7 @@ from .global_service import GlobalTokenRefreshThread
 from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
 from .task_manager import TaskManager, taskManager
 from .hsk_download import HSKDownloadWorker
+from .chat_service import ChatService, LLMThread
 
 __all__ = [
     "HskTokenRefreshThread",
@@ -19,4 +20,6 @@ __all__ = [
     "taskManager",
     "HSKDownloadWorker",
     "GlobalDownloadWorker",
+    "ChatService",
+    "LLMThread",
 ]

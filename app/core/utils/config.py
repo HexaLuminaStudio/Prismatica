@@ -77,6 +77,31 @@ class Config(QConfig):
         restart=True,
     )
 
+    # ============================================================
+    # AI 聊天设置(参考 qfluentwidgetspro chat demo)
+    # ApiKey / BaseUrl / Model 默认支持 DeepSeek,用户可在设置页切换
+    # Chat 模型改为自由输入,支持任意 OpenAI 兼容服务的模型 ID
+    # ============================================================
+    AiApiKey = ConfigItem("AiChat", "AiApiKey", os.getenv("AI_API_KEY", ""))
+    AiBaseUrl = ConfigItem(
+        "AiChat", "AiBaseUrl", os.getenv("AI_BASE_URL", "https://api.deepseek.com")
+    )
+    AiModelChat = ConfigItem("AiChat", "AiModelChat", "deepseek-chat")
+    # 系统提示词文件路径。运行时会读取该文件作为 system prompt;
+    # 为空或读取失败则使用默认提示词。早期版本该字段存的是提示词正文,
+    # 兼容策略:如果是多行文本则视为旧数据,运行时同样当作 prompt 直接使用。
+    AiSystemPrompt = ConfigItem(
+        "AiChat",
+        "AiSystemPrompt",
+        "",
+    )
+    AiMaxHistory = OptionsConfigItem(
+        "AiChat",
+        "AiMaxHistory",
+        10,
+        OptionsValidator([5, 10, 20, 50]),
+    )
+
 
 cfg = Config()
 cfg.themeMode.value = Theme.AUTO

@@ -29,5 +29,9 @@
         <file>icons/ModelSetting.svg</file>
         <file>icons/Model.svg</file>
         <file>icons/Contact.svg</file>
+        <file>icons/Chat.svg</file>
+        <file>icons/Robot.svg</file>
+        <file>icons/Erase.svg</file>
+        <file>icons/Paperclip.svg</file>
     </qresource>
 </RCC>

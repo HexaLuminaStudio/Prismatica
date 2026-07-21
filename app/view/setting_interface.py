@@ -4,6 +4,8 @@
 提供软件设置、关于信息、激活码管理和用户协议等功能
 """
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
@@ -20,7 +22,7 @@ from qfluentwidgets import (
     PushButton,
     ScrollArea,
     VerticalSeparator,
-    HyperlinkButton
+    HyperlinkButton,
 )
 
 from app.core.services import HskTokenRefreshThread, GlobalTokenRefreshThread
@@ -302,6 +304,219 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
 
         logger.error(f"[Setting] Global Token刷新失败: {error}")
         self._showErrorMessage("刷新失败", error)
+
+
+class AiChatSettingWidget(GroupHeaderCardWidget):
+    """AI 聊天设置组件
+
+    允许用户配置:
+        - API Key (DeepSeek / OpenAI 等 OpenAI 兼容服务)
+        - Base URL
+        - Chat 模型(自由输入)
+        - 多轮上下文轮数
+        - 系统提示词
+
+    所有配置项通过 ``qconfig`` 持久化,与 ``cfg`` 中对应键双向同步,
+    设置变更后底部状态条实时刷新摘要。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("AI 聊天设置")
+        logger.info("[Setting] AiChatSettingWidget 初始化")
+
+        # ---- 表单字段 ----
+        self.apiKeyEdit = LineEdit()
+        self.apiKeyEdit.setPlaceholderText("请输入 API Key(支持 DeepSeek / OpenAI 等)")
+        self.apiKeyEdit.setEchoMode(LineEdit.EchoMode.Password)
+        self.apiKeyEdit.setText(qconfig.get(cfg.AiApiKey) or "")
+        self.apiKeyEdit.textChanged.connect(
+            lambda v: qconfig.set(cfg.AiApiKey, v.strip())
+        )
+
+        self.baseUrlEdit = LineEdit()
+        self.baseUrlEdit.setPlaceholderText("https://api.deepseek.com")
+        self.baseUrlEdit.setText(
+            qconfig.get(cfg.AiBaseUrl) or "https://api.deepseek.com"
+        )
+        self.baseUrlEdit.textChanged.connect(
+            lambda v: qconfig.set(cfg.AiBaseUrl, v.strip())
+        )
+
+        # Chat 模型:自由输入框,用户可填任意模型 ID
+        self.chatModelEdit = LineEdit()
+        self.chatModelEdit.setPlaceholderText("如 deepseek-chat / gpt-4o / qwen-max …")
+        self.chatModelEdit.setText(qconfig.get(cfg.AiModelChat) or "deepseek-chat")
+        self.chatModelEdit.textChanged.connect(
+            lambda v: qconfig.set(cfg.AiModelChat, v.strip())
+        )
+
+        self.maxHistoryCombo = ComboBox()
+        for n in (5, 10, 20, 50):
+            self.maxHistoryCombo.addItem(str(n))
+        self.maxHistoryCombo.setCurrentText(str(qconfig.get(cfg.AiMaxHistory) or 10))
+        self.maxHistoryCombo.currentTextChanged.connect(
+            lambda v: qconfig.set(cfg.AiMaxHistory, int(v))
+        )
+
+        # 系统提示词:不再用输入框,改为本地文件上传(.txt / .md / .json 等文本文件)
+        self.systemPromptFileLabel = CaptionLabel(self._systemPromptText())
+        self.systemPromptFileLabel.setWordWrap(True)
+        self.systemPromptFileLabel.setStyleSheet("color: #888;")
+        self.systemPromptFileButton = PushButton("选择提示词文件…")
+        self.systemPromptClearButton = PushButton("清除")
+        self.systemPromptFileButton.clicked.connect(self._chooseSystemPromptFile)
+        self.systemPromptClearButton.clicked.connect(self._clearSystemPromptFile)
+
+        # ---- 状态展示 ----
+        self.statusLabel = CaptionLabel(self._summaryText())
+        self.statusLabel.setStyleSheet("color: #888;")
+
+        # ---- 添加设置组 ----
+        self.addGroup(
+            ":app/icons/Setting.svg",
+            "API Key",
+            "用于调用大模型 API,请妥善保管。留空则「AI 聊天」页无法发送。",
+            self.apiKeyEdit,
+        )
+        self.addGroup(
+            ":app/icons/Information.svg",
+            "API Base URL",
+            "支持任意 OpenAI 兼容服务,默认 DeepSeek。",
+            self.baseUrlEdit,
+        )
+        self.addGroup(
+            ":app/icons/Chat.svg",
+            "Chat 模型",
+            "普通对话使用的模型 ID,需与 API 提供方一致。",
+            self.chatModelEdit,
+        )
+        self.addGroup(
+            ":app/icons/Status.svg",
+            "历史轮数",
+            "保留最近多少轮对话作为上下文,数值越大越费 token。",
+            self.maxHistoryCombo,
+        )
+        self.addGroup(
+            ":app/icons/Write.svg",
+            "系统提示词",
+            "所有对话开头的 system 消息,用于设定角色与风格。上传本地文本文件作为提示词内容。",
+            self._buildSystemPromptWidget(),
+        )
+
+        # ---- 状态组(底部)----
+        statusRow = QWidget(self)
+        statusRowLayout = QHBoxLayout(statusRow)
+        statusRowLayout.setContentsMargins(0, 4, 0, 0)
+        statusRowLayout.addWidget(self.statusLabel)
+        statusRowLayout.addStretch(1)
+        self.addGroup(
+            ":app/icons/SystemInfo.svg",
+            "当前状态",
+            "",
+            statusRow,
+        )
+
+        # 字段变更 → 刷新状态条
+        for sig in (
+            self.apiKeyEdit.textChanged,
+            self.chatModelEdit.textChanged,
+            self.maxHistoryCombo.currentTextChanged,
+        ):
+            sig.connect(self._refreshStatus)
+
+    def _refreshStatus(self, *_args) -> None:
+        self.statusLabel.setText(self._summaryText())
+
+    def _summaryText(self) -> str:
+        if not qconfig.get(cfg.AiApiKey):
+            return "未配置 API Key"
+        chatModel = qconfig.get(cfg.AiModelChat) or "deepseek-chat"
+        maxHist = qconfig.get(cfg.AiMaxHistory) or 10
+        return f"Chat 模型: {chatModel}  ·  历史: {maxHist} 轮"
+
+    # ---- 系统提示词(文件上传)----
+    def _buildSystemPromptWidget(self) -> QWidget:
+        """组装系统提示词控件:状态标签 + 选择/清除按钮"""
+        wrapper = QWidget(self)
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.systemPromptFileLabel)
+
+        btnRow = QWidget(wrapper)
+        btnLayout = QHBoxLayout(btnRow)
+        btnLayout.setContentsMargins(0, 0, 0, 0)
+        btnLayout.setSpacing(8)
+        btnLayout.addWidget(self.systemPromptFileButton)
+        btnLayout.addWidget(self.systemPromptClearButton)
+        btnLayout.addStretch(1)
+        layout.addWidget(btnRow)
+        return wrapper
+
+    def _systemPromptText(self) -> str:
+        """当前已选择的提示词文件路径(简短描述)"""
+        raw = (qconfig.get(cfg.AiSystemPrompt) or "").strip()
+        if not raw:
+            return "未选择提示词文件,将使用默认提示词。"
+        if "\n" in raw or not Path(raw).is_file():
+            # 早期版本残留的纯文本,提示用户清除或重新选择
+            firstLine = raw.splitlines()[0][:60]
+            return f"检测到旧版文本提示词(首行:{firstLine}…),建议清除后重新选择文件。"
+        return f"已选择:{raw}"
+
+    def _chooseSystemPromptFile(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择系统提示词文件",
+            "",
+            "文本文件 (*.txt *.md *.json *.yaml *.yml);;所有文件 (*)",
+        )
+        if not path:
+            return
+        try:
+            # 读取一次以校验可访问性(以及提前排除空文件)
+            content = Path(path).read_text(encoding="utf-8", errors="ignore").strip()
+            if not content:
+                InfoBar.warning(
+                    title="",
+                    content="所选文件为空,将使用默认提示词。",
+                    position=InfoBarPosition.TOP,
+                    parent=self.window(),
+                    duration=2500,
+                )
+        except OSError as e:
+            logger.error(f"[Setting] 读取提示词文件失败: {e}")
+            InfoBar.error(
+                title="读取失败",
+                content=str(e),
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                duration=3000,
+                position=InfoBarPosition.TOP,
+                parent=self.window(),
+            )
+            return
+        qconfig.set(cfg.AiSystemPrompt, path)
+        self.systemPromptFileLabel.setText(self._systemPromptText())
+        InfoBar.success(
+            title="",
+            content=f"已设置提示词文件:{Path(path).name}",
+            position=InfoBarPosition.TOP,
+            parent=self.window(),
+            duration=2500,
+        )
+
+    def _clearSystemPromptFile(self) -> None:
+        qconfig.set(cfg.AiSystemPrompt, "")
+        self.systemPromptFileLabel.setText(self._systemPromptText())
+        InfoBar.success(
+            title="",
+            content="已清除提示词文件,将使用默认提示词。",
+            position=InfoBarPosition.TOP,
+            parent=self.window(),
+            duration=2500,
+        )
 
 
 class LicenseDialog(MessageBoxBase):
@@ -926,12 +1141,14 @@ class SettingInterface(ScrollArea):
         # 软件设置组件
         self.softwareSettingWidget = SoftwareSettingWidget(self.scrollWidget)
 
+        # AI 聊天设置组件
+        self.aiChatSettingWidget = AiChatSettingWidget(self.scrollWidget)
+
         # 激活码设置组件
         self.licenseSettingWidget = LicenseSettingWidget(self.scrollWidget)
 
         # 关于设置组件
         self.aboutSettingWidget = AboutSettingWidget(self.scrollWidget)
-
 
         # 用户协议组件
         self.agreementLabelWidget = AgreementLabelWidget(self.scrollWidget)
@@ -965,6 +1182,10 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addSpacing(20)
         self.expandLayout.addWidget(
             self.softwareSettingWidget, 0, Qt.AlignmentFlag.AlignTop
+        )
+        self.expandLayout.addSpacing(20)
+        self.expandLayout.addWidget(
+            self.aiChatSettingWidget, 0, Qt.AlignmentFlag.AlignTop
         )
         self.expandLayout.addSpacing(20)
         self.expandLayout.addWidget(
