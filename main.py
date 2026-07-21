@@ -49,7 +49,7 @@ from PySide6.QtGui import QImageReader
 from PySide6.QtWidgets import QApplication
 from qfluentwidgetspro import setLicense
 
-from app.core.utils import cfg, autoSetup, logger
+from app.core.utils import cfg, qconfig, autoSetup, logger
 from app.core.utils.setting import MODE
 from app.view.main_window import MainWindow
 from app.view.resource.resource import *
@@ -115,6 +115,35 @@ if IS_BETA and _betaStatus.get("status") in ("expired_hard", "expired_30d"):
     # 暂存到模块级变量,避免弹窗被 GC
     _betaExpiredDialog = showBetaExpiredWarning(_betaStatus, parent=None, modal=True)
 else:
+    # ============================================================
+    # 首次启动引导(2026-07-21 新增)
+    # - 读取 cfg.FirstLaunch;为 True 时先弹出引导窗口
+    # - 引导完成后 cfg.FirstLaunch 被置为 False,下次启动不再弹出
+    # - 若用户在未完成时点关闭按钮,引导窗口拒绝关闭并请求退出主程序
+    # ============================================================
+    _guideWindow = None
+    if qconfig.get(cfg.FirstLaunch):
+        try:
+            from app.view.widgets.guide_window import GuideWindow
+
+            logger.info("[Main] 检测到首次启动,显示引导窗口")
+            _guideWindow = GuideWindow()
+            _guideCompleted = _guideWindow.exec()
+            if not _guideCompleted:
+                # 用户在未完成时尝试关闭引导 -> 退出整个程序
+                # cfg.FirstLaunch 保持 True,下次启动仍会引导
+                logger.warning("[Main] 引导未完成,退出程序,保留 FirstLaunch=True")
+                # 释放引导窗口,避免悬挂引用
+                _guideWindow = None
+                # 走正常 Qt 退出流程,确保资源回收
+                from PySide6.QtWidgets import QApplication
+
+                QApplication.instance().quit()
+                # 跳过后续主窗口创建逻辑(用 sys.exit 跳出整个模块底部)
+                sys.exit(0)
+        except Exception as _guideErr:
+            logger.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
+
     mainWindow = MainWindow()
     mainWindow.show()
 

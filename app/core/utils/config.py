@@ -67,6 +67,8 @@ class Config(QConfig):
     )
 
     MicaEnabled = ConfigItem("MainWindow", "MicaEnabled", isWin11(), BoolValidator())
+    # 是否首次启动(用于决定是否弹出引导窗口)
+    FirstLaunch = ConfigItem("MainWindow", "FirstLaunch", True, BoolValidator())
     DpiScale = OptionsConfigItem(
         "MainWindow",
         "DpiScale",

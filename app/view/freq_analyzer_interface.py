@@ -114,8 +114,10 @@ from qfluentwidgets import (
     StrongBodyLabel,
     SubtitleLabel,
     SwitchButton,
+    ToolButton,
     TransparentPushButton,
     TransparentToggleToolButton,
+    ToolTipPosition,
 )
 from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 import matplotlib  # noqa: E402
@@ -476,9 +478,24 @@ class FreqAnalyzerInterface(QWidget):
         outer.setContentsMargins(16, 12, 16, 12)
         outer.setSpacing(8)
 
-        # 分段控件（中心对齐）
+        # 顶部导航行:中间 SegmentedWidget + 右侧「?」帮助按钮
+        self._currentRouteKey = "corpusImport"  # 默认面板 key
+        navRow = QHBoxLayout()
+        navRow.setContentsMargins(0, 0, 0, 0)
+        navRow.setSpacing(12)
+
+        # 分段控件(居中、可伸展)
         self.segmented = SegmentedWidget(self)
-        outer.addWidget(self.segmented, 0, Qt.AlignmentFlag.AlignCenter)
+        navRow.addWidget(self.segmented, 1, Qt.AlignmentFlag.AlignCenter)
+
+        # 帮助按钮(右侧):显示当前面板的术语解释
+        self.helpButton = ToolButton(FluentIcon.QUESTION, self)
+        self.helpButton.setToolTip("查看当前子页面的术语解释")
+        self.helpButton.setFixedSize(28, 28)
+        self.helpButton.clicked.connect(self._onHelpClicked)
+        navRow.addWidget(self.helpButton, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        outer.addLayout(navRow)
 
         # 面板容器
         panelContainer = QWidget(self)
@@ -539,6 +556,9 @@ class FreqAnalyzerInterface(QWidget):
         self.segmented.currentItemChanged.connect(self._onItemChanged)
 
     def _onItemChanged(self, routeKey: str) -> None:
+        # 记录当前面板 key(供 _onHelpClicked 使用)
+        self._currentRouteKey = routeKey
+
         for key, panel in self._panels.items():
             if key == routeKey:
                 panel.show()
@@ -550,6 +570,20 @@ class FreqAnalyzerInterface(QWidget):
                     panel._refreshBackendCombo()
             else:
                 panel.hide()
+
+    def _onHelpClicked(self):
+        """点击帮助按钮:弹出当前子面板的术语解释弹窗"""
+        try:
+            from app.view.widgets.freq_analyzer.glossary_dialog import (
+                showGlossaryDialog,
+            )
+
+            logger.info(
+                f"[FreqAnalyzerInterface] 用户点击帮助按钮,面板={self._currentRouteKey}"
+            )
+            showGlossaryDialog(self._currentRouteKey, parent=self.window())
+        except Exception as e:
+            logger.error(f"[FreqAnalyzerInterface] 弹出术语解释弹窗失败: {e}")
 
     # ------------------------------------------------------------------
     # 多语料库:活动语料库切换处理

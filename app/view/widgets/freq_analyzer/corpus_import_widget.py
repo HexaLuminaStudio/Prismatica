@@ -228,7 +228,7 @@ class CorpusImportWidget(QWidget):
 
         # 顶部说明（L3：提示文案 12px）
         hint = CaptionLabel(
-            "导入一次语料 + 配置一次清洗，「词频分析」与「语境分析」即可共同使用。",
+            "导入一次语料 + 配置一次清洗，后续分析即可共同使用。",
             self,
         )
         hint.setStyleSheet("color: #888; font-size: 12px;")
