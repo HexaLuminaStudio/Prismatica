@@ -399,6 +399,7 @@ from app.view.widgets.freq_analyzer.network_widget import NetworkWidget
 from app.view.widgets.freq_analyzer.sentiment_widget import SentimentWidget
 from app.view.widgets.freq_analyzer.word_analysis_widget import WordAnalysisWidget
 from app.view.widgets.freq_analyzer.collocation_widget import CollocationWidget
+from app.view.widgets.freq_analyzer.construction_widget import ConstructionWidget
 from app.view.widgets.freq_analyzer.word_cloud_widget import WordCloudWidget
 from app.view.widgets.freq_analyzer.dependency_widget import DependencyWidget
 from app.view.widgets.freq_analyzer.keyword_list_widget import KeywordListWidget
@@ -525,6 +526,9 @@ class FreqAnalyzerInterface(QWidget):
             "collocation": CollocationWidget(
                 panelContainer, corpusStore=self.corpusStore
             ),
+            "construction": ConstructionWidget(
+                panelContainer, corpusStore=self.corpusStore
+            ),
             "wordCloud": WordCloudWidget(panelContainer, corpusStore=self.corpusStore),
             "dependency": DependencyWidget(
                 panelContainer, corpusStore=self.corpusStore
@@ -547,6 +551,7 @@ class FreqAnalyzerInterface(QWidget):
         self.segmented.addItem("concordance", "语境分析")
         self.segmented.addItem("sentiment", "情感分析")
         self.segmented.addItem("collocation", "搭配分析")
+        self.segmented.addItem("construction", "构式搭配强度")
         self.segmented.addItem("wordCloud", "词语云图")
         self.segmented.addItem("network", "共现网络图")
         self.segmented.addItem("dependency", "句法依存图")

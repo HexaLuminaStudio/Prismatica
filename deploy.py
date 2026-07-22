@@ -19,17 +19,14 @@ args = [
     "--clean-cache=all",
     "--show-progress",
     "--show-memory",
-    "--include-module=ctypes",
+    "--include-module=ctypes,qframelesswindow.webengine",
     "--output-dir=E:/Prismatica/build",
     "E:/Prismatica/main.py",
 ]
 
 dist_folder = Path("E:/Prismatica/build/main.dist")
 
-copied_site_packages = [
-    "urllib3",
-    "Crypto"
-]
+copied_site_packages = ["urllib3", "Crypto"]
 
 copied_standard_packages = [
     "ctypes",
@@ -38,7 +35,7 @@ copied_standard_packages = [
     "uuid.py",
     "queue.py",
     "random.py",
-    "hmac.py"
+    "hmac.py",
 ]
 
 # run nuitka

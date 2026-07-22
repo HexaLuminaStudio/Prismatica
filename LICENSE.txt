@@ -1,0 +1,378 @@
+================================================================================
+                        Prismatica 最终用户许可协议（EULA）
+                          （中文版 / Simplified Chinese）
+================================================================================
+
+软件名称：Prismatica
+版本：1.0.0
+版权所有：Copyright 2026 猫叁零。All Rights Reserved.
+许可协议：Apache License, Version 2.0
+官方许可地址：http://www.apache.org/licenses/LICENSE-2.0
+
+本《最终用户许可协议》（以下简称"本协议"）是您（以下简称"用户"）与本软
+件著作权人"猫叁零"（以下简称"作者"）之间就使用 Prismatica（以下简称
+"本软件"）所订立的具有法律效力的协议。安装、复制、下载、访问或以其他方式
+使用本软件，即表示您已阅读、理解并同意接受本协议全部条款的约束。如您不同
+意本协议的任何条款，请勿安装或使用本软件，并按照相关说明从您的设备中移除
+本软件的全部组件。
+
+--------------------------------------------------------------------------------
+第一条 定义
+--------------------------------------------------------------------------------
+1.1 "软件"指 Prismatica 主程序、随附文档、图标、图像、配置模板、脚本及
+    一切由作者提供的相关组件（统称"本软件"）。
+1.2 "作者"指本软件著作权人"猫叁零"。
+1.3 "用户"指下载、安装、复制或以其他方式使用本软件的个人或法人实体。
+1.4 "修改版本"指用户对本软件源代码进行修改、翻译、适配或合并后形成的软件
+    版本。
+1.5 "分发"指向第三方提供本软件或修改版本的复制件，包括但不限于上传、发布
+    销售、赠送、出租、网络共享等行为。
+
+--------------------------------------------------------------------------------
+第二条 知识产权
+--------------------------------------------------------------------------------
+2.1 本软件及其一切副本的所有权、著作权、专利权、商标权及其他一切知识产
+    权，均归属于作者及/或合法授权方，受中华人民共和国及国际知识产权法律
+    保护。
+2.2 本协议不构成对作者知识产权的任何转让，用户仅在本协议明示授权的范围内
+    享有使用权。
+
+--------------------------------------------------------------------------------
+第三条 许可授予
+--------------------------------------------------------------------------------
+在用户持续遵守本协议各项条款的前提下，作者授予用户以下权利：
+3.1 在用户自有设备上安装、使用本软件的非排他性、不可转让、全球性、可撤销
+    的许可。
+3.2 出于学习、研究、评估、内部使用等目的，使用本软件的全部功能。
+3.3 出于商业目的使用本软件，包括但不限于对输入数据的分析、研究结果的内
+    部分享及向客户交付服务结果，但不得再分发本软件本身或修改版本，除非
+    符合本协议第四条的约定。
+3.4 对本软件进行修改、翻译、定制以满足用户的内部使用需求，但需以本协议
+    第四条为限。
+
+--------------------------------------------------------------------------------
+第四条 再分发与修改
+--------------------------------------------------------------------------------
+4.1 用户可将本软件或经修改的版本再分发给第三方，但须同时满足下列全部条
+    件：
+    （1）随分发件附带本协议完整文本（包含中文版与英文版）；
+    （2）在显著位置标注原作者及版权信息"Copyright 2026 猫叁零"；
+    （3）如对源代码进行了修改，应在修改过的文件中以显著方式注明修改内容
+         及修改人；
+    （4）保留本软件中所有原作者的版权、商标、专利及归属声明；
+    （5）不得使用作者名称、Logo 或品牌为用户的衍生作品进行背书或推广，
+         除非事先获得作者书面许可。
+4.2 用户再分发的修改版本必须使用 Apache License 2.0 或与之兼容的许可证
+    进行授权，并保留完整的许可证文本。
+4.3 用户不得将本软件用于再许可、共享源代码托管以外的网络服务（SaaS）方
+    式向不特定多数用户提供本软件的核心功能，除非另行获得作者书面授权。
+
+--------------------------------------------------------------------------------
+第五条 禁止行为
+--------------------------------------------------------------------------------
+用户不得从事下列行为：
+5.1 从事违反中华人民共和国法律法规或国际通行法律准则的活动。
+5.2 利用本软件从事任何侵害他人合法权益、危害网络安全或公共秩序的活动。
+5.3 删除、隐藏或修改本软件中包含的版权声明、商标、许可证信息或其他归属
+    标识。
+5.4 对本软件进行反向工程、反编译、反汇编以重现源代码，但适用法律明示允
+    许的例外情况除外。
+5.5 将本软件用于任何军事、武器、监控、核设施等高风险领域，或用于开发与
+    上述用途相关的系统。
+5.6 提交虚假或误导性的贡献内容、举报或反馈。
+
+--------------------------------------------------------------------------------
+第六条 数据与隐私
+--------------------------------------------------------------------------------
+6.1 本软件涉及的功能可能在用户设备本地进行数据处理与缓存。作者承诺不主
+    动收集、上传或传输用户的个人数据，除非用户在明确知情的状态下主动启
+    用相关同步功能。
+6.2 用户使用本软件连接第三方接口或服务时，相关数据的处理以该第三方服务
+    方的隐私政策为准，作者不对第三方行为承担责任。
+6.3 用户应自行对其存储在本软件中的内容（包括语料、分析结果、聊天记录
+    等）进行备份与保护，作者不对因设备故障、误操作或其他原因造成的数
+    据丢失承担责任。
+
+--------------------------------------------------------------------------------
+第七条 无担保声明
+--------------------------------------------------------------------------------
+7.1 本软件按"原状"提供，作者不对本软件作任何形式的明示或暗示担保，包
+    括但不限于对适销性、特定用途适用性、不侵犯第三方权利的担保。
+7.2 用户须自行评估本软件是否满足其需求，并承担使用本软件所产生的全部
+    风险。
+7.3 作者不保证本软件能够持续可用、不间断运行、不发生错误或缺陷，或所
+    有缺陷均会被修正。
+
+--------------------------------------------------------------------------------
+第八条 责任限制
+--------------------------------------------------------------------------------
+8.1 在适用法律允许的最大范围内，无论依据何种法律理论（包括但不限于合同
+    责任、侵权责任、严格责任等），作者及贡献者均不对用户因使用或无法使
+    用本软件而产生的任何直接、间接、偶然、特殊、惩罚性或衍生性损失承担
+    责任，包括但不限于利润损失、商誉损失、数据丢失、业务中断等。
+8.2 如适用法律不允许对部分责任进行排除或限制，前述限制应以该法律所允
+    许的最小范围内适用。
+
+--------------------------------------------------------------------------------
+第九条 协议终止
+--------------------------------------------------------------------------------
+9.1 若用户违反本协议任何条款，作者有权立即终止本协议并撤销用户的全部使
+    用许可。
+9.2 协议终止后，用户应立即停止使用本软件，销毁其持有的全部副本及衍生
+    作品（除适用法律要求保留的部分外）。
+9.3 协议终止不影响作者已经发生的损害赔偿请求权。
+
+--------------------------------------------------------------------------------
+第十条 法律适用与争议解决
+--------------------------------------------------------------------------------
+10.1 本协议的订立、执行和解释均适用中华人民共和国（为本协议之目的，不
+     包括香港特别行政区、澳门特别行政区和台湾地区）法律法规。
+10.2 因本协议产生的或与本协议有关的任何争议，双方应首先通过友好协商解
+     决；协商不成的，任一方有权将争议提交作者所在地有管辖权的人民法院
+     通过诉讼方式解决。
+
+--------------------------------------------------------------------------------
+第十一条 其他
+--------------------------------------------------------------------------------
+11.1 本协议的任何条款被认定无效或不可执行时，不影响其他条款的效力。
+11.2 作者未行使或迟延行使本协议项下任何权利，不构成对该权利的放弃。
+11.3 本协议构成双方就本软件许可事项达成的完整协议，取代此前任何口头或
+     书面约定。
+11.4 作者保留随时更新本协议条款的权利，更新版本将通过官方网站或软件内
+     更新渠道发布。继续使用本软件即视为接受更新后的协议。
+
+================================================================================
+特别提示
+================================================================================
+本协议中文版为方便用户阅读而提供的中文译本。如中文版与英文版之间存在任
+何不一致或歧义，以英文原版（Apache License 2.0）为准。完整英文条款请参
+见下文。
+
+================================================================================
+                        Prismatica END-USER LICENSE AGREEMENT (EULA)
+                          （English Version / Reference Text）
+================================================================================
+
+This software (including but not limited to the Prismatica application,
+accompanying documentation, icons, images, and related components,
+collectively the "Software") is licensed under the Apache License,
+Version 2.0 (the "License"). You may obtain a copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+implied. See the License for the specific language governing permissions
+and limitations under the License.
+
+Copyright 2026 猫叁零 (Maosanling)
+Licensed under the Apache License, Version 2.0.
+
+--------------------------------------------------------------------------------
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+--------------------------------------------------------------------------------
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+
+   "Licensor" shall mean the copyright owner or entity authorized by
+   the copyright owner that is granting the License.
+
+   "Legal Entity" shall mean the union of the acting entity and all
+   other entities that control, are controlled by, or are under common
+   control with that entity. For the purposes of this definition,
+   "control" means (i) the power, direct or indirect, to cause the
+   direction or management of such entity, whether by contract or
+   otherwise, or (ii) ownership of fifty percent (50%) or more of the
+   outstanding shares, or (iii) beneficial ownership of such entity.
+
+   "You" (or "Your") shall mean an individual or Legal Entity
+   exercising permissions granted by this License.
+
+   "Source" form shall mean the preferred form for making modifications,
+   including but not limited to software source code, documentation
+   source, and configuration files.
+
+   "Object" form shall mean any form resulting from mechanical
+   transformation or translation of a Source form, including but
+   not limited to compiled object code, generated documentation,
+   and conversions to other media types.
+
+   "Work" shall mean the work of authorship, whether in Source or
+   Object form, made available under the License, as indicated by a
+   copyright notice that is included in or attached to the work
+   (an example is provided in the Appendix below).
+
+   "Derivative Works" shall mean any work, whether in Source or Object
+   form, that is based on (or derived from) the Work and for which the
+   editorial revisions, annotations, elaborations, or other modifications
+   represent, as a whole, an original work of authorship. For the purposes
+   of this License, Derivative Works shall not include works that remain
+   separable from, or merely link (or bind by name) to the interfaces of,
+   the Work and Derivative Works thereof.
+
+   "Contribution" shall mean any work of authorship, including
+   the original version of the Work and any modifications or additions
+   to that Work or Derivative Works thereof, that is intentionally
+   submitted to Licensor for inclusion in the Work by the copyright owner
+   or by an individual or Legal Entity authorized to submit on behalf of
+   the copyright owner. For the purposes of this definition, "submitted"
+   means any form of electronic, verbal, or written communication sent
+   to the Licensor or its representatives, including but not limited to
+   communication on electronic mailing lists, source code control systems,
+   and issue tracking systems that are managed by, or on behalf of, the
+   Licensor for the purpose of discussing and improving the Work, but
+   excluding communication that is conspicuously marked or otherwise
+   designated in writing by the copyright owner as "Not a Contribution."
+
+   "Contributor" shall mean Licensor and any individual or Legal Entity
+   on behalf of whom a Contribution has been received by Licensor and
+   subsequently incorporated within the Work.
+
+2. Grant of Copyright License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   copyright license to reproduce, prepare Derivative Works of,
+   publicly display, publicly perform, sublicense, and distribute the
+   Work and such Derivative Works in Source or Object form.
+
+3. Grant of Patent License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   (except as stated in this section) patent license to make, have made,
+   use, offer to sell, sell, import, and otherwise transfer the Work,
+   where such license applies only to those patent claims licensable
+   by such Contributor that are necessarily infringed by their
+   Contribution(s) alone or by combination of their Contribution(s)
+   with the Work to which such Contribution(s) was submitted. If You
+   institute patent litigation against any entity (including a
+   cross-claim or counterclaim in a lawsuit) alleging that the Work
+   or a Contribution incorporated within the Work constitutes direct
+   or contributory patent infringement, then any patent licenses
+   granted to You under this License for that Work shall terminate
+   as of the date such litigation is filed.
+
+4. Redistribution. You may reproduce and distribute copies of the
+   Work or Derivative Works thereof in any medium, with or without
+   modifications, and in Source or Object form, provided that You
+   meet the following conditions:
+
+   (a) You must give any other recipients of the Work or
+       Derivative Works a copy of this License; and
+
+   (b) You must cause any modified files to carry prominent notices
+       stating that You changed the files; and
+
+   (c) You must retain, in the Source form of any Derivative Works
+       that You distribute, all copyright, patent, trademark, and
+       attribution notices from the Source form of the Work,
+       excluding those notices that do not pertain to any part of
+       the Derivative Works; and
+
+   (d) If the Work includes a "NOTICE" text file as part of its
+       distribution, then any Derivative Works that You distribute must
+       include a readable copy of the attribution notices contained
+       within such NOTICE file, excluding those notices that do not
+       pertain to any part of the Derivative Works, in at least one
+       of the following places: within a NOTICE text file distributed
+       as part of the Derivative Works; within the Source form or
+       documentation, if provided along with the Derivative Works; or,
+       within a display generated by the Derivative Works, if and
+       wherever such third-party notices normally appear. The contents
+       of the NOTICE file are for informational purposes only and
+       do not modify the License. You may add Your own attribution
+       notices within Derivative Works that You distribute, alongside
+       or as an addendum to the NOTICE text from the Work, provided
+       that such additional attribution notices cannot be construed
+       as modifying the License.
+
+   You may add Your own copyright statement to Your modifications and
+   may provide additional or different license terms and conditions
+   for use, reproduction, or distribution of Your modifications, or
+   for any such Derivative Works as a whole, provided Your use,
+   reproduction, and distribution of the Work otherwise complies with
+   the conditions stated in this License.
+
+5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+
+6. Trademarks. This License does not grant permission to use the trade
+   names, trademarks, service marks, or product names of the Licensor,
+   except as required for describing the origin of the Work and
+   reproducing the content of the NOTICE file.
+
+7. Disclaimer of Warranty. Unless required by applicable law or
+   agreed to in writing, Licensor provides the Work (and each
+   Contributor provides its Contributions) on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied, including, without limitation, any warranties or conditions
+   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+   PARTICULAR PURPOSE. You are solely responsible for determining the
+   appropriateness of using or redistributing the Work and assume any
+   risks associated with Your exercise of permissions under this License.
+
+8. Limitation of Liability. In no event and under no legal theory,
+   whether in tort (including negligence), contract, or otherwise,
+   unless required by applicable law (such as deliberate and grossly
+   negligent acts) or agreed to in writing, shall any Contributor be
+   liable to You for damages, including any direct, indirect, special,
+   incidental, or consequential damages of any character arising as a
+   result of this License or out of the use or inability to use the
+   Work (including but not limited to damages for loss of goodwill,
+   work stoppage, computer failure or malfunction, or any and all
+   other commercial damages or losses), even if such Contributor
+   has been advised of the possibility of such damages.
+
+9. Accepting Warranty or Support. While redistributing the Work or
+   Derivative Works thereof, You may choose to offer, and charge a
+   fee for, acceptance of support, warranty, indemnity, or other
+   liability obligations and/or rights consistent with this License.
+   However, in accepting such obligations, You may act only on Your
+   own behalf and on Your sole responsibility, not on behalf of any
+   other Contributor, and only if You agree to indemnify, defend,
+   and hold each Contributor harmless for any liability incurred by,
+   or claims asserted against, such Contributor by reason of your
+   accepting any such warranty or support.
+
+END OF TERMS AND CONDITIONS
+
+APPENDIX: How to apply the Apache License to your work.
+
+   To apply the Apache License to your work, attach the following
+   boilerplate notice, with the fields enclosed by brackets "[]"
+   replaced with your own identifying information. (Don't include
+   the brackets!)  The text should be enclosed in the appropriate
+   comment syntax for the file format. We also recommend that a
+   file name and extension be included on the same line as the
+   copyright notice for each file to facilitate identification within
+   archives.
+
+Copyright 2026 猫叁零 (Maosanling)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
+                       END OF LICENSE FILE
+================================================================================
