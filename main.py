@@ -3,45 +3,33 @@ import os
 import sys
 import warnings
 
-# =====================================================================
-# 必须在所有 matplotlib 相关 import 之前设置后端
-# ---------------------------------------------------------------------
-# 修复 VSCode Python 调试扩展(debugpy)的 IPython matplotlib 集成
-# 在 PySide6 环境下的崩溃问题:
-#
-#     AttributeError: module 'PySide6.QtGui' has no attribute 'QApplication'
-#
+# 注意:已移除 app.core.utils.matplotlib_backend.installAll() 调用。
 # 原因:
-#     debugpy 在调试会话中会激活 IPython-style 的 matplotlib inputhook,
-#     但其内部实现仍使用 PyQt4 时代的 QtGui.QApplication(应位于 QtWidgets),
-#     而我们的环境是 PySide6,因此触发 AttributeError。
+#   1. 它会无条件切换 matplotlib 后端到 QtAgg 并触发 PySide6 后端加载链,
+#      在 Nuitka 打包的 Win10 环境中可能找不到 shiboken6 路径,
+#      报 "D:shiboken6\libshiboken does not exist"。
+#   2. 它会拖慢启动时间(QtAgg 后端加载本身较重)。
+# 各 view(bias_interface / freq_analyzer_interface / network_widget 等)
+# 在内部已按需调用 matplotlib.use("QtAgg", force=True),且执行时机在
+# QApplication 创建之后,shiboken6 路径已就绪,不受上述问题影响。
 #
-# 解决:
-#     1. 设置 MPLBACKEND = "Agg"(非交互后端),让 IPython 跳过 GUI 集成
-#     2. 设置 PYDEVD_IPYTHON_COMPATIBLE_SOMETHING = 0 (旧版兼容标志)
-#     3. 后续在 freq_analyzer_interface.py 中会强制切换到 QtAgg
-#
-# 这样做的好处:
-#     - 即使在 VSCode 调试器下,程序也能正常启动
-#     - 不影响运行时(matplotlib 实际使用的是 freq_analyzer_interface
-#       里设置的 QtAgg)
-# =====================================================================
-os.environ.setdefault("MPLBACKEND", "Agg")
-
-# 应用 matplotlib 兼容性补丁(必须在任何 matplotlib / pyplot import 之前)
-try:
-    from app.core.utils.matplotlib_backend import installAll
-
-    installAll()
-except Exception as _mplErr:
-    # 即使补丁失败也不应阻止程序启动
-    print(f"[warn] matplotlib backend 初始化失败: {_mplErr}", file=sys.stderr)
+# 若需要在调试环境下让 IPython 跳过 GUI 集成,
+# 可在外部环境变量中显式设置 MPLBACKEND=Agg(此处不再强制)。
 
 # 静默 torch.cuda 内部的 pynvml deprecation 警告(由 PyTorch 触发,非本项目问题)
 warnings.filterwarnings(
     "ignore",
     category=FutureWarning,
     module=r"torch\.cuda",
+)
+
+# 静默 jieba 内部 pkg_resources 弃用警告(由 setuptools>=81 触发,非本项目问题)
+# 警告来源:jieba/_compat.py:18 的 `import pkg_resources`
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    module=r"jieba[\\.\/]?.*",
+    message=r".*pkg_resources is deprecated.*",
 )
 
 from PySide6.QtCore import Qt
