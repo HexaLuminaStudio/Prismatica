@@ -68,7 +68,6 @@ if _dpi_scale != "Auto":
 app = QApplication(sys.argv)
 app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 
-
 # =====================================================================
 # 内测时间锁校验:首次启动记录 start_date,后续验证签名/截止日/有效期
 #

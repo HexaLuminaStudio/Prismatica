@@ -35,7 +35,7 @@ import shutil
 from pathlib import Path
 from typing import Final
 
-from .setting import DATA_FOLDER, INSTALL_DIR
+from .setting import CONFIG_FOLDER, DATA_FOLDER, INSTALL_DIR
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -96,6 +96,7 @@ _LEGACY_CORPORA_DIR: Final[Path] = _LEGACY_APP_DATA_DIR / "corpora"
 # 目录初始化 + 自动迁移
 # ---------------------------------------------------------------------------
 
+
 def ensureDataDirs() -> None:
     """确保所有数据目录存在(幂等,可重复调用)
 
@@ -104,8 +105,14 @@ def ensureDataDirs() -> None:
         2. 检测旧路径并自动迁移数据到新位置
     """
     # 1. 确保新目录存在
-    for d in (DATA_DIR, CORPORA_DIR, EXPORTS_DIR,
-              EXPORT_REPORTS_DIR, EXPORT_CHARTS_DIR, EXPORT_CSV_DIR):
+    for d in (
+        DATA_DIR,
+        CORPORA_DIR,
+        EXPORTS_DIR,
+        EXPORT_REPORTS_DIR,
+        EXPORT_CHARTS_DIR,
+        EXPORT_CSV_DIR,
+    ):
         d.mkdir(parents=True, exist_ok=True)
 
     # 2. 自动迁移(如果有旧数据)
@@ -173,9 +180,7 @@ def _migrateLegacyData() -> None:
                 src = Path(str(_LEGACY_SINGLE_DB) + suffix)
                 if src.exists():
                     shutil.copy2(str(src), str(DEFAULT_CORPUS_FILE) + suffix)
-            migrated.append(
-                f"single-db: {_LEGACY_SINGLE_DB} → {DEFAULT_CORPUS_FILE}"
-            )
+            migrated.append(f"single-db: {_LEGACY_SINGLE_DB} → {DEFAULT_CORPUS_FILE}")
         except Exception as e:
             logger.warning(f"[DataPaths] 迁移旧单库失败: {e}")
 
