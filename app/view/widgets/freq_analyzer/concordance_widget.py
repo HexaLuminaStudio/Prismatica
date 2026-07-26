@@ -73,6 +73,8 @@ from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001�
 
 # AI 解读 Mixin（PRD-001 REQ-AI-001）
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.core.models.project import RESOURCE_TYPE_KWIC
 
 # P0-fix:统一使用 loguru,与项目其它模块保持一致
 from loguru import logger
@@ -439,7 +441,10 @@ class CorpusStatusCard(CardWidget):
 # ===========================================================================
 # 主面板
 # ===========================================================================
-class ConcordanceWidget(AiInsightMixin, QWidget):
+class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_KWIC
+    _RESOURCE_TITLE_PREFIX = "KWIC 检索"
     """语境分析（KWIC）主面板
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
@@ -981,6 +986,58 @@ class ConcordanceWidget(AiInsightMixin, QWidget):
             f"[ConcordanceWidget] 节点词={result.searchWord!r} "
             f"命中={result.totalMatches} 展示={len(result.hits)}"
         )
+
+        # PRD-002:归档到当前激活项目(若有)
+        self.notifyResourceCreated()
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """KWIC 检索结果 → 项目资源 payload"""
+        result = getattr(self, "_currentResult", None)
+        if result is None or len(getattr(result, "hits", [])) == 0:
+            return None
+        try:
+            totalMatches = result.totalMatches
+            shown = len(result.hits)
+            query = result.searchWord
+            summary = (
+                f"KWIC 检索「{query}」:命中 {totalMatches:,} 条," f"本次展示 {shown} 条"
+            )
+        except Exception:
+            summary = f"KWIC 检索结果"
+        # 保留前 5 条 sample
+        try:
+            samples = []
+            for hit in result.hits[:5]:
+                samples.append(
+                    {
+                        "left": hit.leftText,
+                        "node": hit.nodeText,
+                        "right": hit.rightText,
+                        "source": hit.sourceFile,
+                    }
+                )
+        except Exception:
+            samples = []
+        snapshotData = {
+            "query": result.searchWord,
+            "totalMatches": result.totalMatches,
+            "samples": samples,
+        }
+        parameters = {
+            "query": result.searchWord,
+            "leftWidth": self.leftSpin.value(),
+            "rightWidth": self.rightSpin.value(),
+            "sortMode": getattr(self, "sortMode", "left"),
+        }
+        return {
+            "title": f"KWIC「{result.searchWord}」({self._buildDefaultTitle().split(' ', 1)[1]})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     def _refreshTableFromResult(self, result: ConcordanceResult):
         # 摘要(FR-KWC-007,使用统一大指标卡)

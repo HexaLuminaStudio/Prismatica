@@ -11,6 +11,7 @@ from .task_manager import TaskManager, taskManager
 from .hsk_download import HSKDownloadWorker
 from .chat_service import ChatService, LLMThread
 from .ai_insight_service import AiInsightService
+from .project_manager import ProjectManager, projectManager
 
 __all__ = [
     "HskTokenRefreshThread",
@@ -24,4 +25,6 @@ __all__ = [
     "ChatService",
     "LLMThread",
     "AiInsightService",
+    "ProjectManager",
+    "projectManager",
 ]

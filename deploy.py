@@ -19,6 +19,7 @@ args = [
     "--clean-cache=all",
     "--show-progress",
     "--show-memory",
+    "--windows-console-disable",
     "--include-module=ctypes,qframelesswindow.webengine",
     "--output-dir=E:/Prismatica/build",
     "E:/Prismatica/main.py",

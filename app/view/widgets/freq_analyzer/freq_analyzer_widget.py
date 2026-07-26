@@ -13,6 +13,8 @@ from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001�
 
 # AI 解读 Mixin（PRD-001 REQ-AI-001）— 全部分析子页面统一接入
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.core.models.project import RESOURCE_TYPE_FREQ
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -70,7 +72,10 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
 # 为避免循环 import，在 _runAnalysis 方法内延迟导入。
 
 
-class FreqAnalyzerWidget(AiInsightMixin, QWidget):
+class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_FREQ
+    _RESOURCE_TITLE_PREFIX = "词频分析"
     """词频分析主界面（对标 AntConc）
 
     设计：
@@ -676,6 +681,61 @@ class FreqAnalyzerWidget(AiInsightMixin, QWidget):
             self,
             duration=2000,
         )
+
+        # PRD-002:归档到当前激活项目(若有)
+        self.notifyResourceCreated()
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """词频分析结果 → 项目资源 payload"""
+        unigramDf = getattr(self, "unigramDf", None)
+        ngramDf = getattr(self, "ngramDf", None)
+        if unigramDf is None or len(unigramDf) == 0:
+            return None
+        # 摘要:Top-10 高频词 + token 总数
+        try:
+            topRows = unigramDf.head(10)
+            topList = [f"{r['Word']}({int(r['Freq'])})" for _, r in topRows.iterrows()]
+            topText = "、".join(topList)
+            totalTokens = int(unigramDf["Freq"].sum())
+            ngramCount = len(ngramDf) if ngramDf is not None else 0
+            ngramLabel = "Bigram" if self.ngramN == 2 else f"{self.ngramN}-gram"
+            summary = (
+                f"{len(unigramDf)} 个不同词,{totalTokens:,} tokens,"
+                f"{ngramCount} 个 {ngramLabel}。"
+                f"Top 10:{topText}"
+            )
+        except Exception:
+            summary = f"{len(unigramDf)} 个不同词"
+        # 快照:仅保留 Top-200 + 总数(避免大表)
+        try:
+            topForSnapshot = unigramDf.head(200).to_dict(orient="records")
+        except Exception:
+            topForSnapshot = []
+        snapshotData = {
+            "unigramTop": topForSnapshot,
+            "ngramCount": len(ngramDf) if ngramDf is not None else 0,
+        }
+        parameters = {
+            "minLength": self.minSpin.value(),
+            "maxLength": self.maxSpin.value(),
+            "caseSensitive": self.caseSwitch.isChecked(),
+            "useStopwords": self.stopSwitch.isChecked(),
+            # useJieba 在 _runAnalysis 里固定传 True(暂未暴露开关),这里同步写死
+            "useJieba": True,
+            "ngramN": self.ngramN,
+            "unigramMinFreq": self.unigramMinFreq,
+            "excludeNumbers": self.numberSwitch.isChecked(),
+        }
+        title = f"词频分析 ({self._buildDefaultTitle().split(' ', 1)[1]})"
+        return {
+            "title": title,
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     def _populateTable(self, df):
         self.table.setRowCount(len(df))

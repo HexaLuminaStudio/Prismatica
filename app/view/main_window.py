@@ -21,6 +21,7 @@ from .freq_analyzer_interface import FreqAnalyzerInterface
 from .task_interface import TaskInterface
 from .chat_interface import ChatInterface
 from .setting_interface import SettingInterface
+from .project_interface import ProjectInterface
 
 
 class MainWindow(MSFluentWindow):
@@ -39,6 +40,11 @@ class MainWindow(MSFluentWindow):
         self.taskInterface = TaskInterface(self)
         self.chatInterface = ChatInterface(self)
         self.settingInterface = SettingInterface(self)
+        # PRD-002:项目管理子界面(REQ-PROJ-001)
+        self.projectInterface = ProjectInterface(self)
+        # 仪表盘的「跳转分析模块」信号 → 切到对应分析页(目前所有资源类型
+        # 都映射到 FreqAnalyzerInterface,后续按 moduleKey 分流)
+        self.projectInterface.jumpToModule.connect(self._onProjectJumpToModule)
 
         self.connectSignalToSlot()
 
@@ -47,6 +53,141 @@ class MainWindow(MSFluentWindow):
 
     def connectSignalToSlot(self):
         logger.debug("[MainWindow] 连接信号和槽")
+        # PRD-002:顶栏项目切换器的「项目管理」入口 → 切到项目管理页
+        # 「新建项目」入口 → 弹出 NewProjectDialog
+        try:
+            from app.view.widgets.project_manager_dialogs import NewProjectDialog
+            from qfluentwidgets import InfoBar, InfoBarPosition
+
+            switcher = getattr(self.titleBar, "projectSwitcher", None)
+            if switcher is not None:
+                switcher.manageRequested.connect(self._onProjectManageRequested)
+                switcher.newRequested.connect(self._onProjectNewRequested)
+        except Exception as e:
+            logger.warning(f"[MainWindow] 连接项目切换器信号失败: {e}")
+
+    def _onProjectManageRequested(self) -> None:
+        """用户从顶栏下拉选「项目管理」入口 — 切到项目管理页"""
+        try:
+            self.switchTo(self.projectInterface)
+        except Exception:
+            # 旧版本 qfluentwidgets 可能没有 switchTo,改用 stackedWidget 路由
+            try:
+                self.stackedWidget.setCurrentWidget(self.projectInterface)
+            except Exception as e:
+                logger.warning(f"[MainWindow] 切换到项目管理页失败: {e}")
+
+    def _onProjectNewRequested(self) -> None:
+        """用户从顶栏下拉选「新建项目」入口 — 弹窗 + 创建"""
+        try:
+            from app.view.widgets.project_manager_dialogs import NewProjectDialog
+            from app.core.services import projectManager
+            from qfluentwidgets import InfoBar, InfoBarPosition
+
+            dialog = NewProjectDialog(self)
+            if not dialog.exec():
+                return
+            result = dialog.getResult()
+            name = result["name"]
+            template = result["template"]
+            description = result["description"]
+            # 进入「创建中」状态
+            self._setProjectCreatingState(True, name)
+            # 异步创建(磁盘 I/O 在子线程,不阻塞 UI)
+            projectManager.createProjectAsync(
+                name=name,
+                template=template,
+                description=description,
+                onSuccess=self._onMainProjectCreated,
+                onError=self._onMainProjectCreateFailed,
+            )
+        except Exception as e:
+            logger.warning(f"[MainWindow] 新建项目入口失败: {e}")
+            self._setProjectCreatingState(False)
+
+    def _setProjectCreatingState(self, creating: bool, name: str = "") -> None:
+        """切换顶栏入口的「创建中」状态(避免重复触发)。"""
+        try:
+            switcher = getattr(self.titleBar, "projectSwitcher", None)
+            if switcher is not None and hasattr(switcher, "setBusy"):
+                switcher.setBusy(creating)
+            if creating:
+                from qfluentwidgets import InfoBar, InfoBarPosition
+
+                self._creatingInfoBar = InfoBar.info(
+                    title="正在创建",
+                    content=f"正在创建项目「{name}」,请稍候…",
+                    parent=self,
+                    duration=-1,
+                    position=InfoBarPosition.TOP,
+                )
+            else:
+                bar = getattr(self, "_creatingInfoBar", None)
+                if bar is not None:
+                    try:
+                        bar.close()
+                    except Exception:
+                        pass
+                    self._creatingInfoBar = None
+        except Exception as e:
+            logger.warning(f"[MainWindow] _setProjectCreatingState 异常: {e}")
+
+    def _onMainProjectCreated(self, project) -> None:
+        """异步创建成功回调(主线程)。"""
+        from qfluentwidgets import InfoBar, InfoBarPosition
+
+        self._setProjectCreatingState(False)
+        InfoBar.success(
+            title="已创建",
+            content=f"项目「{project.name}」已创建并自动激活",
+            parent=self,
+            duration=2500,
+            position=InfoBarPosition.TOP,
+        )
+        # 创建后自动切到项目管理页查看
+        self._onProjectManageRequested()
+
+    def _onMainProjectCreateFailed(self, errMsg: str) -> None:
+        """异步创建失败回调(主线程)。"""
+        from qfluentwidgets import InfoBar, InfoBarPosition
+
+        self._setProjectCreatingState(False)
+        logger.warning(f"[MainWindow] 新建项目失败: {errMsg}")
+        InfoBar.error(
+            title="创建失败",
+            content=errMsg,
+            parent=self,
+            duration=3000,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _onProjectJumpToModule(self, moduleKey: str) -> None:
+        """仪表盘点击「跳转分析模块」 → 路由到对应分析子界面。
+
+        MVP 阶段所有分析资源都映射到 FreqAnalyzerInterface;
+        后续按 moduleKey 分流(如 "bias" → BiasInterface 等)。
+        """
+        try:
+            if moduleKey == "freq_analyzer" or not moduleKey:
+                target = self.freqAnalyzerInterface
+            elif moduleKey == "bias":
+                target = self.biasInterface
+            elif moduleKey == "hsk":
+                target = self.hskInterface
+            elif moduleKey == "global":
+                target = self.globalInterface
+            else:
+                # 未知 moduleKey — fallback 到 freq_analyzer
+                target = self.freqAnalyzerInterface
+            try:
+                self.switchTo(target)
+            except Exception:
+                try:
+                    self.stackedWidget.setCurrentWidget(target)
+                except Exception as e:
+                    logger.warning(f"[MainWindow] 跳转到 {moduleKey} 失败: {e}")
+        except Exception as e:
+            logger.warning(f"[MainWindow] _onProjectJumpToModule 失败: {e}")
 
     def initNavigation(self):
         logger.info("[MainWindow] 开始初始化导航界面")
@@ -78,6 +219,16 @@ class MainWindow(MSFluentWindow):
             self.chatInterface,
             QIcon(":app/icons/Chat.svg"),
             "AI 聊天",
+            position=NavigationItemPosition.SCROLL,
+        )
+
+        # PRD-002:项目管理(REQ-PROJ-001)— 低频操作,放 SCROLL
+        # 注:MVP 阶段复用 Save.svg 作为项目图标(项目 = 已保存的研究单元),
+        # 后续若新增 Folder.svg 图标可在此替换。
+        self.addSubInterface(
+            self.projectInterface,
+            QIcon(":app/icons/Save.svg"),
+            "项目管理",
             position=NavigationItemPosition.SCROLL,
         )
 

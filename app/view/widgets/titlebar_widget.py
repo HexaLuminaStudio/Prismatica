@@ -5,6 +5,7 @@ from qfluentwidgets import BodyLabel, CardWidget, ImageLabel
 from qframelesswindow import TitleBar
 
 from app.core.utils import cfg, qconfig, signalBus
+from app.view.widgets.project_switcher_widget import ProjectSwitcher
 
 
 class UserStatusWidget(CardWidget):
@@ -106,6 +107,24 @@ class CustomTitleBar(TitleBar):
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
         )
         self.hBoxLayout.addSpacing(50)
+
+        # PRD-002:项目切换器(插入到 userTokenCard 左侧)
+        # 复用 TitleBar 现有 hBoxLayout,在 userTokenCard 之前插入,
+        # 借助 addStretch(0) 把项目切换器推到 userTokenCard 左边。
+        # 注:由于 userTokenCard 已经设置了 stretch=1 把卡片推到最右,
+        # 这里用 insertWidget 在 titleLabel 之后插一个 stretch 槽 + 切换器。
+        self.projectSwitcher = ProjectSwitcher(self)
+        # 先加一个 stretch 让切换器推到 userTokenCard 之前
+        self.hBoxLayout.insertStretch(
+            self.hBoxLayout.indexOf(self.userTokenCard),
+            0,
+        )
+        self.hBoxLayout.insertWidget(
+            self.hBoxLayout.indexOf(self.userTokenCard),
+            self.projectSwitcher,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
 
         self.vBoxLayout = QVBoxLayout()
         self.buttonLayout = QHBoxLayout()

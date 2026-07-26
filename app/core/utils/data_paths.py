@@ -70,6 +70,15 @@ EXPORT_REPORTS_DIR: Final[Path] = EXPORTS_DIR / "reports"
 EXPORT_CHARTS_DIR: Final[Path] = EXPORTS_DIR / "charts"
 EXPORT_CSV_DIR: Final[Path] = EXPORTS_DIR / "csv"
 
+# PRD-002 研究项目(REQ-PROJ-001)
+# - 项目元数据 + 资源索引 SQLite(单一权威)
+# - 每个项目的物理快照文件夹(便于备份/分享/.prisma 导出)
+PROJECTS_DB: Final[Path] = DATA_DIR / "projects.db"
+PROJECTS_DIR: Final[Path] = DATA_DIR / "projects"
+
+# 当前激活项目 id 记忆(JSON)
+PROJECT_STATE_FILE: Final[Path] = DATA_DIR / "project_state.json"
+
 
 # ---------------------------------------------------------------------------
 # 旧路径(用于迁移)
@@ -112,6 +121,8 @@ def ensureDataDirs() -> None:
         EXPORT_REPORTS_DIR,
         EXPORT_CHARTS_DIR,
         EXPORT_CSV_DIR,
+        # PRD-002:研究项目目录
+        PROJECTS_DIR,
     ):
         d.mkdir(parents=True, exist_ok=True)
 

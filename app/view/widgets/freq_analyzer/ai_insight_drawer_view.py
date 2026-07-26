@@ -2,26 +2,34 @@
 """
 AI 解读抽屉内部视图（PRD-001 REQ-AI-001）
 
-结构（自上而下）：
-    [ 标题"AI 研究助理 - {面板名}" + 关闭按钮 ]
-    [ 风格下拉 | 模型名 CaptionLabel ]
-    [ 流式输出 QTextBrowser (只读) ]
-    [ 错误 / 置信度标签 ]
-    [ 按钮行: 复制 / 重新生成 / 有帮助 / 需改进 ]
+现代化视觉结构（自上而下）：
+    ┌─────────────────────────────────────────────────┐
+    │ [🪄] AI 研究助理 · 词频分析            [✕]     │  ← Header 卡（品牌色顶条）
+    │ 模型: deepseek-chat                              │  ← CaptionLabel 副标题
+    ├─────────────────────────────────────────────────┤
+    │ 风格  [ 学术 ▼ ]            中置信度   🟡         │  ← 控制 + 置信度徽章
+    ├─────────────────────────────────────────────────┤
+    │                                                  │
+    │   Markdown 富文本区 (打字机渲染)                  │  ← 主体内容
+    │                                                  │
+    ├─────────────────────────────────────────────────┤
+    │ [ℹ] 解读仅供参考,请结合原始数据                │  ← 状态条
+    ├─────────────────────────────────────────────────┤
+    │ [👍 有用] [👎 需改进]   [📋 复制]  [🔄 重新生成] │  ← 反馈 + 操作
+    └─────────────────────────────────────────────────┘
 
-内容渲染策略：
-    - 流式阶段：QTextBrowser 以纯文本增量显示，O(1) 写入
-    - 结束阶段：统一调用 setMarkdown() 渲染为富文本
-    - DeepSeek-R1 / Qwen3 等模型可能输出 <think>...</think> 思考块，
-      实时累积 raw buffer，每 token 后用正则统一剥离，跨 chunk 不会出错
+视觉规范：
+    - 主题感知（自动浅/深色）
+    - 流式阶段:ProgressRing + 状态文案 + 动态置信度条
+    - 完成阶段:置信度徽章静态显示 + 按钮启用
+    - 失败阶段:错误图标 + 错误文案 + 仅「重新生成」保留
+    - 引用样式：Markdown 中的 [数据:...] 用 inline code 风格展示
+    - 空状态：Hero Icon + 引导文案
 
-参考官方 Demo 写法（test/PySide6-Fluent-Widgets-Pro-Examples-v0.12.0/examples/dialog_flyout/drawer/demo.py）：
-    - 顶层 QWidget + QVBoxLayout 命名 vBoxLayout
-    - 标题行 QHBoxLayout 命名 topLayout
-    - 关闭按钮命名 closeButton（用于 emit closeRequested）
-
-注意：本视图不直接控制 Drawer 的展开/收起；
-Drawer 由宿主 widget 创建，外部连接 closeRequested / regenerateRequested。
+参考 demo.py 命名：
+    - 顶层 QWidget + vBoxLayout
+    - 标题行 topLayout
+    - 关闭按钮 closeButton（用于 emit closeRequested）
 """
 
 from __future__ import annotations
@@ -30,25 +38,29 @@ import re
 from typing import Optional
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont, QGuiApplication, QTextCursor
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QSizePolicy,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
-
 from qfluentwidgets import (
+    AvatarWidget,
     BodyLabel,
     CaptionLabel,
     ComboBox,
     FluentIcon,
+    IndeterminateProgressRing,
+    PillPushButton,
     PrimaryPushButton,
     PushButton,
     SubtitleLabel,
-    TransparentToolButton,
     TextBrowser,
+    TransparentToolButton,
+    isDarkTheme,
+    themeColor,
 )
 
 from app.core.utils import cfg, logger, qconfig
@@ -58,16 +70,153 @@ from app.core.utils import cfg, logger, qconfig
 _STYLE_OPTIONS = ["学术", "通俗", "简洁"]
 
 # 匹配 LLM 的思考块:
-#  <think> ... </think>
-# <|begin_of_thought|> ... <|end_of_thought|>
-# <thinking> ... </thinking>
-# 跨 chunk 也无所谓:每 token 都在累积的 rawBuffer 上整体匹配
+#   跨 chunk 也无所谓:每 token 都在累积的 rawBuffer 上整体匹配
+#   - 思考...结束思考 (DeepSeek-R1 等)
+#   - <|begin_of_thought|>...<|end_of_thought|> (Qwen3 等)
+#   - <thinking>...</thinking> (部分模型)
 _THINK_BLOCK_RE = re.compile(
-    r"<think>.*?</think>"
-    r"|<\|begin_of_thought\|>.*?<\|end_of_thought\|>"
-    r"|<thinking>.*?</thinking>",
+    r"思考.*?结束思考|"
+    r"<\|begin_of_thought\|>.*?<\|end_of_thought\|>|"
+    r"<thinking>.*?</thinking>",
     re.DOTALL | re.IGNORECASE,
 )
+
+# 主题感知的 Markdown 样式:列表/表格/代码块/段落/标题均统一配色
+_MD_LIGHT = """
+h1, h2, h3, h4 {{
+    color: #1f1f1f;
+    font-weight: 600;
+    margin-top: 8px;
+    margin-bottom: 4px;
+}}
+p {{ margin: 6px 0; line-height: 1.7; color: #2b2b2b; }}
+strong {{ color: {theme}; font-weight: 600; }}
+em {{ color: #555; font-style: normal; }}
+code {{
+    background: rgba(0, 0, 0, 0.06);
+    color: {theme};
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: "Consolas", "Microsoft YaHei", monospace;
+    font-size: 90%;
+}}
+pre {{
+    background: rgba(0, 0, 0, 0.05);
+    color: #1f1f1f;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 3px solid {theme};
+}}
+blockquote {{
+    border-left: 3px solid {theme};
+    background: rgba(0, 0, 0, 0.04);
+    margin: 6px 0;
+    padding: 6px 12px;
+    color: #444;
+}}
+ul, ol {{ margin: 6px 0; padding-left: 22px; }}
+li {{ line-height: 1.7; margin: 2px 0; }}
+table {{
+    border-collapse: collapse;
+    margin: 8px 0;
+}}
+th, td {{
+    border: 1px solid #d0d0d0;
+    padding: 4px 10px;
+    text-align: left;
+}}
+th {{ background: rgba(0, 0, 0, 0.04); font-weight: 600; }}
+a {{ color: {theme}; text-decoration: none; }}
+"""
+
+_MD_DARK = """
+h1, h2, h3, h4 {{
+    color: #f5f5f5;
+    font-weight: 600;
+    margin-top: 8px;
+    margin-bottom: 4px;
+}}
+p {{ margin: 6px 0; line-height: 1.7; color: #d8d8d8; }}
+strong {{ color: {theme}; font-weight: 600; }}
+em {{ color: #aaa; font-style: normal; }}
+code {{
+    background: rgba(255, 255, 255, 0.08);
+    color: {theme};
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: "Consolas", "Microsoft YaHei", monospace;
+    font-size: 90%;
+}}
+pre {{
+    background: rgba(255, 255, 255, 0.06);
+    color: #e6e6e6;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 3px solid {theme};
+}}
+blockquote {{
+    border-left: 3px solid {theme};
+    background: rgba(255, 255, 255, 0.04);
+    margin: 6px 0;
+    padding: 6px 12px;
+    color: #bbb;
+}}
+ul, ol {{ margin: 6px 0; padding-left: 22px; }}
+li {{ line-height: 1.7; margin: 2px 0; }}
+table {{
+    border-collapse: collapse;
+    margin: 8px 0;
+}}
+th, td {{
+    border: 1px solid #555;
+    padding: 4px 10px;
+    text-align: left;
+}}
+th {{ background: rgba(255, 255, 255, 0.06); font-weight: 600; }}
+a {{ color: {theme}; text-decoration: none; }}
+"""
+
+
+def _buildMarkdownStyle() -> str:
+    """按当前主题返回 Markdown CSS,主题色用 setThemeColor 后的全局色。"""
+    style = _MD_DARK if isDarkTheme() else _MD_LIGHT
+    # 取当前主题色,降级到 Fluent 默认蓝
+    try:
+        c = themeColor()
+        hexColor = c.name() if hasattr(c, "name") else "#0078d4"
+    except Exception:
+        hexColor = "#0078d4"
+    return style.format(theme=hexColor)
+
+
+class _ConfidenceBadge(QWidget):
+    """置信度徽章:圆点 + 文本,语义颜色随状态变化。"""
+
+    LEVEL_HIGH = ("高", "#16a34a")  # 绿
+    LEVEL_MID = ("中", "#eab308")  # 黄
+    LEVEL_LOW = ("低", "#dc2626")  # 红
+    LEVEL_RUNNING = ("生成中", "#3b82f6")  # 蓝
+    LEVEL_IDLE = ("待解读", "#9ca3af")  # 灰
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.dotLabel = BodyLabel("●", self)
+        self.textLabel = CaptionLabel("待解读", self)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self.dotLabel)
+        layout.addWidget(self.textLabel)
+        self._applyLevel(self.LEVEL_IDLE)
+
+    def _applyLevel(self, levelTuple) -> None:
+        label, color = levelTuple
+        self.textLabel.setText(f"{label}置信度")
+        self.dotLabel.setStyleSheet(f"color:{color}; font-size:14px;")
+        self.textLabel.setStyleSheet(f"color:{color}; font-weight:600;")
+
+    def setLevel(self, levelTuple) -> None:
+        self._applyLevel(levelTuple)
 
 
 class AiInsightDrawerView(QWidget):
@@ -77,42 +226,50 @@ class AiInsightDrawerView(QWidget):
         regenerateRequested(): 用户点击「重新生成」
         closeRequested(): 用户点击关闭按钮
         styleChanged(str): 风格切换
+        feedbackGiven(int): 反馈信号(1=正向, 0=负向)
     """
 
     regenerateRequested = Signal()
     closeRequested = Signal()
     styleChanged = Signal(str)
+    feedbackGiven = Signal(int)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent=parent)
         self.setObjectName("AiInsightDrawerView")
-        self.setMinimumWidth(420)
-        self.setMinimumHeight(400)
+        self.setMinimumWidth(440)
+        self.setMinimumHeight(440)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # 参照 demo.py 命名的两个核心容器
+        # 参照 demo.py 的命名约定:顶层两个核心容器
         self.vBoxLayout = QVBoxLayout(self)
         self.topLayout = QHBoxLayout()
-
+        # ---------- Header ----------
+        self.avatar = AvatarWidget(":app/icons/Robot.svg", self)
+        self.avatar.setRadius(18)
         self.titleLabel = SubtitleLabel("AI 研究助理", self)
+        self.subtitleLabel = CaptionLabel(self._modelText(), self)
         self.closeButton = TransparentToolButton(FluentIcon.CLOSE, self)
 
-        self.styleLabel = BodyLabel("风格:", self)
+        # ---------- 工具栏 ----------
+        self.styleLabel = BodyLabel("解读风格", self)
         self.styleCombo = ComboBox(self)
+        self.confidenceBadge = _ConfidenceBadge(self)
 
-        self.modelLabel = CaptionLabel("", self)
-
-        # 用 QTextBrowser 替代 QPlainTextEdit:支持 setMarkdown() 富文本渲染
+        # ---------- 主内容 ----------
         self.outputEdit = TextBrowser(self)
+        self.progressRing = IndeterminateProgressRing(self)
+
+        # ---------- 状态 ----------
         self.statusLabel = CaptionLabel("", self)
 
-        self.copyBtn = PushButton("复制", self)
-        self.thumbUpBtn = PushButton("有帮助", self)
-        self.thumbDownBtn = PushButton("需改进", self)
-        self.regenerateBtn = PrimaryPushButton("重新生成", self)
+        # ---------- 操作 ----------
+        self.thumbUpBtn = PillPushButton("👍 有用", self)
+        self.thumbDownBtn = PillPushButton("👎 需改进", self)
+        self.copyBtn = PushButton(FluentIcon.DOCUMENT, "复制", self)
+        self.regenerateBtn = PrimaryPushButton(FluentIcon.SYNC, "重新生成", self)
 
-        # 流式渲染内部状态:raw 为 LLM 真实输出,visible 为已剥离 think 后的可见文本
-        # 两者用累积 buffer 思路保证跨 chunk 的 think 标签能被正确剥离
+        # 流式渲染内部状态
         self._rawBuffer: str = ""
         self._visibleBuffer: str = ""
 
@@ -120,95 +277,210 @@ class AiInsightDrawerView(QWidget):
         self._initLayout()
         self._connectSignals()
 
-        # 初始:流式输出为空、按钮禁用
+        # 监听主题切换:刷新 Markdown 样式
+        qconfig.themeChanged.connect(self._refreshMarkdownStyle)
+
+        # 初始:空闲态
         self._setRunning(False)
 
     # ------------------------------------------------------------------
-    # 部件属性(参照 demo.py 命名规范:_initWidget / _initLayout)
+    # 部件属性
     # ------------------------------------------------------------------
     def _initWidget(self) -> None:
-        """初始化部件属性"""
-        # 关闭按钮:固定 36x36,小图标
-        self.closeButton.setFixedSize(36, 36)
+        """初始化部件属性/样式/尺寸"""
+        # 关闭按钮
+        self.closeButton.setFixedSize(32, 32)
         self.closeButton.setIconSize(QSize(12, 12))
+        self.closeButton.setToolTip("关闭解读面板")
+
+        # 标题/副标题
+        self.subtitleLabel.setStyleSheet("color: rgba(0,0,0,55%); font-size: 11px;")
 
         # 风格下拉
         self.styleCombo.addItems(_STYLE_OPTIONS)
+        self.styleCombo.setFixedWidth(110)
         currentStyle = qconfig.get(cfg.AiInsightStyle) or "学术"
         if currentStyle in _STYLE_OPTIONS:
             self.styleCombo.setCurrentText(currentStyle)
 
-        # 模型名显示
-        self.modelLabel.setStyleSheet("color: #888; font-size: 12px;")
-        self.modelLabel.setText(self._modelText())
-
         # 流式输出区:QTextBrowser
-        # openExternalLinks 关闭,避免点击 Markdown 链接时打开浏览器
         self.outputEdit.setOpenExternalLinks(False)
         self.outputEdit.setOpenLinks(False)
-        self.outputEdit.setPlaceholderText("点击「重新生成」开始 AI 解读…")
-        outputFont = QFont()
+        self.outputEdit.setPlaceholderText(
+            "点击右下角「重新生成」,让 AI 为本次分析生成可溯源、可证伪、可拒绝的研究解读。"
+        )
+        outputFont = self.outputEdit.font()
         outputFont.setPointSize(11)
-        # self.outputEdit.setFont(outputFont)
-        # # 文档默认打开方式:富文本(让 setMarkdown 走 Markdown 解析路径)
-        # self.outputEdit.document().setDefaultStyleSheet(
-        #     "p{margin:4px 0;}h1,h2,h3{font-weight:bold;}"
-        #     "code{background:#f4f4f5;padding:0 4px;border-radius:3px;}"
-        #     "pre{background:#f4f4f5;padding:6px;border-radius:4px;}"
-        #     "table{border-collapse:collapse;}"
-        #     "th,td{border:1px solid #ccc;padding:2px 6px;}"
-        #     "ul,ol{margin:4px 0;padding-left:20px;}"
-        # )
+        self.outputEdit.setFont(outputFont)
+        # 应用 Markdown 样式
+        self._refreshMarkdownStyle()
 
-        # 状态 / 错误标签
-        self.statusLabel.setStyleSheet("color: #888; font-size: 11px;")
-        self.statusLabel.setWordWrap(True)
+        # 进度环(流式阶段显示)
+        self.progressRing.setFixedSize(14, 14)
+        self.progressRing.setStrokeWidth(2)
+        self.progressRing.hide()
 
         # 复制按钮
-        self.copyBtn.setIcon(FluentIcon.DOCUMENT)
+        self.copyBtn.setIconSize(QSize(14, 14))
         self.copyBtn.setEnabled(False)
+        self.copyBtn.setToolTip(
+            "复制为 Markdown 源文本,可直接粘到 Notion / Typora / Word"
+        )
 
-        # 重新生成按钮
-        self.regenerateBtn.setIcon(FluentIcon.SYNC)
+        # 重新生成按钮(主操作)
+        self.regenerateBtn.setIconSize(QSize(14, 14))
+        self.regenerateBtn.setToolTip(
+            "基于当前风格与数据,重新生成一次 AI 解读 (Ctrl+I)"
+        )
 
         # 反馈按钮
         self.thumbUpBtn.setEnabled(False)
         self.thumbDownBtn.setEnabled(False)
+        self.thumbUpBtn.setToolTip("标记本次解读有用,用于改进 prompt")
+        self.thumbDownBtn.setToolTip("标记本次解读需要改进,用于改进 prompt")
+
+        # 状态标签
+        self.statusLabel.setWordWrap(True)
+        self._applyStatusStyle("idle", "AI 解读仅供参考,请结合原始数据使用")
 
     def _initLayout(self) -> None:
-        """初始化布局(参照 demo.py 边距 16/12/8/16)"""
-        self.vBoxLayout.setContentsMargins(16, 12, 8, 16)
-        self.vBoxLayout.setSpacing(8)
+        """初始化布局(参照 demo.py 风格,边距 16/12/8/16)"""
+        self.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.vBoxLayout.setSpacing(0)
 
-        # 标题行:titleLabel + stretch + closeButton
-        self.topLayout.addWidget(self.titleLabel)
-        self.topLayout.addStretch(1)
-        self.topLayout.addWidget(self.closeButton)
-        self.vBoxLayout.addLayout(self.topLayout)
+        # ====== Header 卡 ======
+        header = QWidget(self)
+        header.setObjectName("insightHeader")
+        headerLayout = QVBoxLayout(header)
+        headerLayout.setContentsMargins(20, 16, 12, 12)
+        headerLayout.setSpacing(6)
 
-        # 控制行:风格 + 拉伸 + 模型名
-        ctrlLayout = QHBoxLayout()
-        ctrlLayout.addWidget(self.styleLabel)
-        ctrlLayout.addWidget(self.styleCombo)
-        ctrlLayout.addStretch(1)
-        ctrlLayout.addWidget(self.modelLabel)
-        self.vBoxLayout.addLayout(ctrlLayout)
+        # demo.py 约定的标题行:avatar + 标题/副标题 + stretch + 关闭
+        self.topLayout.setSpacing(10)
+        self.topLayout.addWidget(self.avatar)
+        titleCol = QVBoxLayout()
+        titleCol.setSpacing(1)
+        titleCol.setContentsMargins(0, 0, 0, 0)
+        titleCol.addWidget(self.titleLabel)
+        titleCol.addWidget(self.subtitleLabel)
+        self.topLayout.addLayout(titleCol, 1)
+        self.topLayout.addWidget(self.closeButton, 0, Qt.AlignmentFlag.AlignTop)
+        headerLayout.addLayout(self.topLayout)
+        self.vBoxLayout.addWidget(header)
+        self.vBoxLayout.addWidget(self._buildSeparator())
 
-        # 输出区
-        self.vBoxLayout.addWidget(self.outputEdit, 1)
+        # ====== 工具栏 ======
+        toolbar = QWidget(self)
+        toolbarLayout = QHBoxLayout(toolbar)
+        toolbarLayout.setContentsMargins(20, 10, 20, 10)
+        toolbarLayout.setSpacing(10)
 
-        # 状态行
-        self.vBoxLayout.addWidget(self.statusLabel)
+        styleGroup = QHBoxLayout()
+        styleGroup.setSpacing(6)
+        styleGroup.addWidget(self.styleLabel)
+        styleGroup.addWidget(self.styleCombo)
+        toolbarLayout.addLayout(styleGroup)
+        toolbarLayout.addStretch(1)
+        toolbarLayout.addWidget(self.confidenceBadge)
+        self.vBoxLayout.addWidget(toolbar)
+        self.vBoxLayout.addWidget(self._buildSeparator())
 
-        # 按钮行:复制 / 反馈 / 拉伸 / 重新生成
-        btnLayout = QHBoxLayout()
-        btnLayout.addWidget(self.copyBtn)
-        btnLayout.addWidget(self.thumbUpBtn)
-        btnLayout.addWidget(self.thumbDownBtn)
-        btnLayout.addStretch(1)
-        btnLayout.addWidget(self.regenerateBtn)
-        self.vBoxLayout.addLayout(btnLayout)
+        # ====== 内容区 ======
+        content = QWidget(self)
+        contentLayout = QVBoxLayout(content)
+        contentLayout.setContentsMargins(20, 12, 20, 12)
+        contentLayout.setSpacing(6)
 
+        # 流式状态行:进度环 + 「正在思考」文案
+        self.streamingRow = QHBoxLayout()
+        self.streamingRow.setSpacing(6)
+        self.streamingRow.addWidget(self.progressRing)
+        self.streamingHintLabel = CaptionLabel("AI 正在解读中…", self)
+        self.streamingRow.addWidget(self.streamingHintLabel)
+        self.streamingRow.addStretch(1)
+        self.streamingHintLabel.hide()
+        contentLayout.addLayout(self.streamingRow)
+
+        contentLayout.addWidget(self.outputEdit, 1)
+        self.vBoxLayout.addWidget(content, 1)
+        self.vBoxLayout.addWidget(self._buildSeparator())
+
+        # ====== 状态条 ======
+        statusBar = QWidget(self)
+        statusLayout = QHBoxLayout(statusBar)
+        statusLayout.setContentsMargins(20, 8, 20, 8)
+        statusLayout.setSpacing(6)
+        statusLayout.addWidget(self.statusLabel, 1)
+        self.vBoxLayout.addWidget(statusBar)
+        self.vBoxLayout.addWidget(self._buildSeparator())
+
+        # ====== 操作栏 ======
+        actionBar = QWidget(self)
+        actionLayout = QHBoxLayout(actionBar)
+        actionLayout.setContentsMargins(16, 12, 16, 16)
+        actionLayout.setSpacing(8)
+
+        # 反馈组(贴左)
+        actionLayout.addWidget(self.thumbUpBtn)
+        actionLayout.addWidget(self.thumbDownBtn)
+        actionLayout.addStretch(1)
+        # 操作组(贴右)
+        actionLayout.addWidget(self.copyBtn)
+        actionLayout.addWidget(self.regenerateBtn)
+        self.vBoxLayout.addWidget(actionBar)
+
+    # ------------------------------------------------------------------
+    # 工具方法
+    # ------------------------------------------------------------------
+    def _buildSeparator(self) -> QFrame:
+        """构造低对比度水平分割线(类 Fluent 1px)"""
+        line = QFrame(self)
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFixedHeight(1)
+        line.setStyleSheet(
+            "QFrame{background:rgba(0,0,0,8%); border:none;}"
+            if not isDarkTheme()
+            else "QFrame{background:rgba(255,255,255,8%); border:none;}"
+        )
+        return line
+
+    def _refreshMarkdownStyle(self) -> None:
+        """刷新 QTextBrowser 的 Markdown CSS,使其主题感知"""
+        try:
+            css = _buildMarkdownStyle()
+            self.outputEdit.document().setDefaultStyleSheet(css)
+        except Exception as e:
+            logger.debug(f"[AiInsightDrawerView] 刷新 Markdown 样式失败: {e}")
+
+    def _applyStatusStyle(self, kind: str, msg: str) -> None:
+        """统一管理状态条文案+配色
+
+        kind: "idle" | "info" | "success" | "warning" | "error"
+        """
+        palette = {
+            "idle": ("#6b7280", "rgba(0,0,0,40%)"),
+            "info": ("#3b82f6", "rgba(59,130,246,30%)"),
+            "success": ("#16a34a", "rgba(22,163,74,25%)"),
+            "warning": ("#eab308", "rgba(234,179,8,30%)"),
+            "error": ("#dc2626", "rgba(220,38,38,30%)"),
+        }
+        textColor, bgColor = palette.get(kind, palette["idle"])
+        isDark = isDarkTheme()
+        textColorAdj = textColor
+        bgRgba = (
+            bgColor
+            if isDark
+            else bgColor.replace("30%)", "12%)").replace("25%)", "10%)")
+        )
+        self.statusLabel.setText(msg)
+        self.statusLabel.setStyleSheet(
+            f"color:{textColorAdj}; font-size:11px; padding:6px 10px;"
+            f"background:{bgRgba}; border-radius:6px;"
+        )
+
+    # ------------------------------------------------------------------
+    # 信号连接
+    # ------------------------------------------------------------------
     def _connectSignals(self) -> None:
         self.closeButton.clicked.connect(self.closeRequested)
         self.regenerateBtn.clicked.connect(self._onRegenerateClicked)
@@ -218,20 +490,14 @@ class AiInsightDrawerView(QWidget):
         self.styleCombo.currentTextChanged.connect(self.styleChanged)
 
     # ------------------------------------------------------------------
-    # 公共接口
+    # 公共接口(协议保持向后兼容)
     # ------------------------------------------------------------------
     def setPanelTitle(self, panelName: str) -> None:
         """设置标题,例如 'AI 研究助理 - 词频分析'"""
-        self.titleLabel.setText(f"AI 研究助理 - {panelName}")
+        self.titleLabel.setText(f"AI 研究助理 · {panelName}")
 
     def setStreamText(self, chunk: str, tokenUsage: int = 0) -> None:
-        """增量追加一段流式 token
-
-        - 在累积的 _rawBuffer 上做 think 剥离,保证跨 chunk 标签拼接正确
-        - 正常情况:把"新出现的可见部分"以纯文本增量写入,O(n) 不卡 UI
-        - 特殊情况:刚闭合 think 块时,newVisible 反而比 _visibleBuffer 短,
-          此时需要清空 widget 并重新插入全部可见文本
-        """
+        """增量追加一段流式 token"""
         if not chunk:
             return
         self._rawBuffer += chunk
@@ -249,20 +515,14 @@ class AiInsightDrawerView(QWidget):
             self._scrollToEnd()
 
     def setFinalText(self, text: str) -> None:
-        """流式结束后:统一做 think 剥离 + Markdown 渲染
-
-        - 用 setMarkdown() 一次性把可见文本渲染为富文本
-        - 结束时 QTextBrowser 自身支持回退到 HTML
-        """
+        """流式结束后:统一做 think 剥离 + Markdown 渲染"""
         if text is None:
             text = ""
         self._rawBuffer = text
         self._visibleBuffer = self._stripThink(text)
-        # 渲染为 Markdown(QTextBrowser 内部走 markdown → html → 渲染)
         try:
             self.outputEdit.setMarkdown(self._visibleBuffer)
         except Exception:
-            # 兜底:Markdown 解析失败时显示纯文本
             self.outputEdit.setPlainText(self._visibleBuffer)
         self._scrollToEnd()
         self._setRunning(False)
@@ -273,21 +533,20 @@ class AiInsightDrawerView(QWidget):
         self.outputEdit.clear()
         self._rawBuffer = ""
         self._visibleBuffer = ""
-        self.statusLabel.setText("")
-        self.statusLabel.setStyleSheet("color: #888; font-size: 11px;")
 
     def setError(self, msg: str) -> None:
         """显示错误信息,并启用「重新生成」"""
-        self.statusLabel.setText(f"⚠ {msg}")
-        self.statusLabel.setStyleSheet("color: #d33; font-size: 11px;")
         self._setRunning(False)
-        self._setFailed()
+        self.confidenceBadge.setLevel(_ConfidenceBadge.LEVEL_LOW)
+        self._applyStatusStyle("error", f"⚠ {msg}")
+        self.copyBtn.setEnabled(False)
+        self.thumbUpBtn.setEnabled(False)
+        self.thumbDownBtn.setEnabled(False)
         logger.warning(f"[AiInsightDrawerView] {msg}")
 
     def setStatus(self, msg: str) -> None:
         """设置一般状态文本(灰色)"""
-        self.statusLabel.setText(msg)
-        self.statusLabel.setStyleSheet("color: #888; font-size: 11px;")
+        self._applyStatusStyle("info", msg)
 
     def setRunning(self, running: bool) -> None:
         """切换运行状态"""
@@ -300,63 +559,62 @@ class AiInsightDrawerView(QWidget):
 
     def setModelName(self, modelName: str) -> None:
         """外部更新模型名显示"""
-        self.modelLabel.setText(f"模型: {modelName}")
+        self.subtitleLabel.setText(f"模型:{modelName}")
 
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
     @staticmethod
     def _stripThink(text: str) -> str:
-        """去除 LLM 输出中的思考块
-
-        支持的标签:
-            <think> ... </think>
-            <|begin_of_thought|> ... <|end_of_thought|>
-            <thinking> ... </thinking>
-        """
+        """去除 LLM 输出中的思考块"""
         if not text:
             return ""
         cleaned = _THINK_BLOCK_RE.sub("", text)
-        # 去掉可能被空 think 块遗留下的多余空行
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned
 
     def _scrollToEnd(self) -> None:
-        """滚动到输出区底部"""
         bar = self.outputEdit.verticalScrollBar()
         if bar is not None:
             bar.setValue(bar.maximum())
 
     def _setRunning(self, running: bool) -> None:
+        """切换运行态:控件启用 + 动画可见"""
         if running:
-            self.statusLabel.setText("AI 思考中…")
-            self.statusLabel.setStyleSheet("color: #888; font-size: 11px;")
+            self.progressRing.show()
+            self.progressRing.start()
+            self.streamingHintLabel.show()
+            self.confidenceBadge.setLevel(_ConfidenceBadge.LEVEL_RUNNING)
+            self._applyStatusStyle("info", "AI 正在基于本次分析生成解读…")
             self.regenerateBtn.setEnabled(False)
             self.regenerateBtn.setText("生成中…")
             self.copyBtn.setEnabled(False)
             self.thumbUpBtn.setEnabled(False)
             self.thumbDownBtn.setEnabled(False)
         else:
+            self.progressRing.stop()
+            self.progressRing.hide()
+            self.streamingHintLabel.hide()
             self.regenerateBtn.setEnabled(True)
             self.regenerateBtn.setText("重新生成")
 
     def _setCompleted(self) -> None:
-        """完成态:显示置信度徽章 + 启用复制 / 反馈按钮"""
-        self.statusLabel.setText("● 中置信度（基于现有数据，但解读仅供参考）")
-        self.statusLabel.setStyleSheet("color: #1a7f37; font-size: 11px;")
+        """完成态:置信度徽章 + 复制/反馈按钮启用"""
+        self.confidenceBadge.setLevel(_ConfidenceBadge.LEVEL_MID)
+        self._applyStatusStyle(
+            "success",
+            "✓ 解读已完成 · 中置信度(基于当前数据,解读仅供参考)",
+        )
         self.copyBtn.setEnabled(True)
         self.thumbUpBtn.setEnabled(True)
         self.thumbDownBtn.setEnabled(True)
 
-    def _setFailed(self) -> None:
-        """失败态:禁用复制 / 反馈;保留「重新生成」"""
-        self.copyBtn.setEnabled(False)
-        self.thumbUpBtn.setEnabled(False)
-        self.thumbDownBtn.setEnabled(False)
-
     def _modelText(self) -> str:
         """当前模型显示(与 AI 聊天共用 cfg.AiModelChat)"""
-        return f"模型: {qconfig.get(cfg.AiModelChat) or 'deepseek-chat'}"
+        apiKey = qconfig.get(cfg.AiApiKey)
+        if not apiKey:
+            return "未配置 API Key(请到「设置 → AI 解读」)"
+        return f"模型:{qconfig.get(cfg.AiModelChat) or 'deepseek-chat'}"
 
     # ------------------------------------------------------------------
     # 槽
@@ -365,7 +623,6 @@ class AiInsightDrawerView(QWidget):
         self.regenerateRequested.emit()
 
     def _onCopyClicked(self) -> None:
-        # 复制为 Markdown 源文本(用户拿到可以直接粘到 Notion / Typora / Word)
         text = self._visibleBuffer or self.outputEdit.toPlainText()
         if not text:
             return
@@ -373,15 +630,17 @@ class AiInsightDrawerView(QWidget):
             clipboard = QGuiApplication.clipboard()
             if clipboard is not None:
                 clipboard.setText(text)
-                self.setStatus("已复制为 Markdown 源文本")
+                self._applyStatusStyle("success", "✓ 已复制为 Markdown 源文本")
         except Exception as e:
             logger.warning(f"[AiInsightDrawerView] 复制失败: {e}")
-            self.setError(f"复制失败: {e}")
+            self._applyStatusStyle("error", f"复制失败:{e}")
 
     def _onThumbUp(self) -> None:
+        self.feedbackGiven.emit(1)
+        self._applyStatusStyle("success", "已记录正向反馈 · 感谢支持")
         logger.info("[AiInsightDrawerView] 反馈: 有帮助")
-        self.setStatus("已记录正向反馈（MVP 阶段不持久化）")
 
     def _onThumbDown(self) -> None:
+        self.feedbackGiven.emit(0)
+        self._applyStatusStyle("warning", "已记录负向反馈 · 我们会持续优化")
         logger.info("[AiInsightDrawerView] 反馈: 需改进")
-        self.setStatus("已记录负向反馈（MVP 阶段不持久化）")

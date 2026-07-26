@@ -93,6 +93,8 @@ from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001�
 
 # AI 解读 Mixin（PRD-001 REQ-AI-001）
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.core.models.project import RESOURCE_TYPE_NETWORK
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -248,7 +250,10 @@ class HoverAnnotation:
 # ===========================================================================
 # 主面板
 # ===========================================================================
-class NetworkWidget(AiInsightMixin, QWidget):
+class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_NETWORK
+    _RESOURCE_TITLE_PREFIX = "共现网络"
     """词语共现网络图主面板
 
     用法:
@@ -642,6 +647,48 @@ class NetworkWidget(AiInsightMixin, QWidget):
                 self,
                 duration=2500,
             )
+
+        # PRD-002:归档到当前激活项目(若有)
+        self.notifyResourceCreated()
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """共现网络结果 → 项目资源 payload"""
+        network = getattr(self, "_network", None)
+        if network is None or getattr(network, "nodeCount", 0) == 0:
+            return None
+        try:
+            # 收集 Top-10 节点(按 degree)
+            import networkx as nx
+
+            graph = network.graph
+            degrees = sorted(graph.degree(), key=lambda x: x[1], reverse=True)[:10]
+            topText = "、".join(f"{n}({d})" for n, d in degrees)
+            summary = (
+                f"网络 {network.nodeCount} 节点 / {network.edgeCount} 边。"
+                f"Top 度数:{topText}"
+            )
+        except Exception:
+            summary = f"网络 {network.nodeCount} 节点 / {network.edgeCount} 边"
+        snapshotData = {
+            "nodeCount": network.nodeCount,
+            "edgeCount": network.edgeCount,
+            "metric": network.edgeMetric,
+        }
+        parameters = {
+            "windowSize": getattr(self, "windowSize", 5),
+            "metric": getattr(self, "metric", "LogDice"),
+            "threshold": getattr(self, "threshold", 0),
+            "topK": getattr(self, "topK", 50),
+        }
+        return {
+            "title": f"共现网络 ({self._buildDefaultTitle().split(' ', 1)[1]})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     # ------------------------------------------------------------------
     # 行为:绘制网络图
