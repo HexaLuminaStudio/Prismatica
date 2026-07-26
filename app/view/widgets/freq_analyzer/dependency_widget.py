@@ -60,6 +60,7 @@ from app.view.widgets.freq_analyzer.dependency_engine import (
     toConllU,
 )
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -130,14 +131,18 @@ class DependencyAnalysisWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主控件
 # ---------------------------------------------------------------------------
-class DependencyWidget(QWidget):
+class DependencyWidget(AiInsightMixin, QWidget):
     """句法依存分析子页面
 
     复用项目标准 UI 模式:
         - 顶部参数卡(输入 + 操作按钮)
         - 中部结果卡(图 + 摘要 + 视图切换)
+        - 继承 AiInsightMixin 提供「AI 解读」抽屉能力
         - 主线程不阻塞,使用 QThread 后台分析
     """
+
+    _AI_INSIGHT_PANEL_NAME = "依存分析"
+    _AI_INSIGHT_TYPE = "dependency"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -263,6 +268,11 @@ class DependencyWidget(QWidget):
         self.runBtn.setIcon(FIF.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         opRow.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FIF.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        opRow.addWidget(self._aiInsightBtn)
 
         layout.addLayout(opRow)
         return card
@@ -411,6 +421,19 @@ class DependencyWidget(QWidget):
             self.summaryLabel.setText(f"分析完成 — 共 {len(results)} 句,后端:{backend}")
         else:
             self.summaryLabel.setText("分析完成 — 无结果")
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
+
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        return bool(getattr(self, "_results", []))
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("dependency", {"result": self._results})
 
     def _onFailed(self, err: str) -> None:
         self.runBtn.setEnabled(True)

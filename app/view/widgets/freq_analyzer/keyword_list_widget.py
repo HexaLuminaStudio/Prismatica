@@ -84,6 +84,7 @@ from app.view.widgets.freq_analyzer.keyword_list_engine import (
     KeywordListResult,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor, ResultSummary
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeSwitchButton,
@@ -828,8 +829,10 @@ class KeywordListWorker(CancellableWorker):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class KeywordListWidget(QWidget, WorkerMixin):
+class KeywordListWidget(AiInsightMixin, QWidget, WorkerMixin):
     """Keyword List(主题词 / Keyness)分析面板。
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
 
     UI 布局:
         [ 标题 ]
@@ -845,6 +848,9 @@ class KeywordListWidget(QWidget, WorkerMixin):
             - 关键词表(Rank/Keyword/ObsFreq/RefFreq/LL/LogRatio/%DIFF)
             - 显著度图表(LL 分布直方图)
     """
+
+    _AI_INSIGHT_PANEL_NAME = "关键词列表"
+    _AI_INSIGHT_TYPE = "keyword_list"
 
     def __init__(
         self,
@@ -1261,6 +1267,12 @@ class KeywordListWidget(QWidget, WorkerMixin):
         self.runBtn.clicked.connect(self._onRunClicked)
         self.runBtn.setEnabled(False)
         row5.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FluentIcon.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        row5.addWidget(self._aiInsightBtn)
 
         layout.addLayout(row5)
 
@@ -1321,7 +1333,7 @@ class KeywordListWidget(QWidget, WorkerMixin):
         exportBtn.setIcon(FluentIcon.SAVE)
         exportBtn.clicked.connect(self._exportCsv)
         actionRow.addWidget(exportBtn)
-
+        actionRow.addStretch(1)
         layout.addLayout(actionRow)
 
         # 关键词表
@@ -1664,6 +1676,18 @@ class KeywordListWidget(QWidget, WorkerMixin):
         self._summary.setPlaceholder("分析失败")
         _showInfoBar("error", "分析失败", err[:100], self, duration=4000)
 
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        r = getattr(self, "_result", None)
+        return r is not None and getattr(r, "df", None) is not None and not r.df.empty
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("keyword_list", {"result": self._result})
+
     def _onFinished(self, result: KeywordListResult) -> None:
         self._result = result
         self.runBtn.setEnabled(True)
@@ -1671,6 +1695,8 @@ class KeywordListWidget(QWidget, WorkerMixin):
 
         # 渲染结果
         self._renderResults(result)
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
 
         _showInfoBar(
             "success",

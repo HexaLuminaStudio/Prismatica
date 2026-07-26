@@ -164,6 +164,13 @@ class LLMThread(QThread):
             )
 
             for chunk in response:
+                # 流式循环里检查中断标记:UI 主动 stop() 时能快速退出,
+                # 否则 isRunning() 会一直返回 True,导致用户重新打开抽屉时被拒
+                if self.isInterruptionRequested():
+                    logger.info("[LLMThread] 检测到中断请求,提前结束流式")
+                    # 走 chatFinished 路径,UI 端按"被中断"语义处理
+                    self.chatFinished.emit()
+                    return
                 if not chunk.choices:
                     continue
                 data = chunk.choices[0].delta
@@ -246,10 +253,19 @@ class ChatService(QObject):
         self._thread.clearHistory()
 
     def stop(self) -> None:
-        """请求中断当前对话(UI 主动调用,如关闭页签)"""
+        """请求中断当前对话(UI 主动调用,如关闭页签)
+
+        流程:
+        1. requestInterruption(): 触发 LLMThread.run() 内的循环检查点
+        2. wait(3000): 等待线程退出(流式 chunk 之间的间隔通常 < 1s,3s 足够)
+        3. 仍不退则 terminate() 强制结束(罕见情况:网络阻塞/SDK 卡死)
+        """
         if self._thread.isRunning():
             self._thread.requestInterruption()
-            self._thread.wait(2000)
+            if not self._thread.wait(3000):
+                logger.warning("[ChatService] LLMThread 在 3s 内未退出,强制 terminate")
+                self._thread.terminate()
+                self._thread.wait(1000)
             logger.info("[ChatService] 已请求中断 LLMThread")
 
     def _onThreadFinished(self) -> None:

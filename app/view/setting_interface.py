@@ -306,6 +306,69 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
         self._showErrorMessage("刷新失败", error)
 
 
+class AiInsightSettingWidget(GroupHeaderCardWidget):
+    """AI 解读设置组件（PRD-001 REQ-AI-001）
+
+    与「AI 聊天设置」共用同一套 LLM 配置（API Key / Base URL / 模型 ID），
+    本卡只暴露解读独有的设置项:
+        - 解读风格（学术 / 通俗 / 简洁）
+
+    注意：API Key / Base URL / 模型 请在「AI 聊天设置」中配置，本卡不重复。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setTitle("AI 解读设置")
+        logger.info("[Setting] AiInsightSettingWidget 初始化")
+
+        # ---- 字段 ----
+        self.styleCombo = ComboBox()
+        for s in ("学术", "通俗", "简洁"):
+            self.styleCombo.addItem(s)
+        currentStyle = qconfig.get(cfg.AiInsightStyle) or "学术"
+        if currentStyle in ("学术", "通俗", "简洁"):
+            self.styleCombo.setCurrentText(currentStyle)
+        self.styleCombo.currentTextChanged.connect(
+            lambda v: qconfig.set(cfg.AiInsightStyle, v)
+        )
+
+        # ---- 状态展示 ----
+        self.statusLabel = CaptionLabel(self._summaryText())
+        self.statusLabel.setStyleSheet("color: #888;")
+
+        # ---- 添加设置组 ----
+        self.addGroup(
+            ":app/icons/Write.svg",
+            "解读风格",
+            "默认解读风格，生成 Prompt 时注入。",
+            self.styleCombo,
+        )
+        self.addGroup(
+            ":app/icons/SystemInfo.svg",
+            "当前 LLM 配置",
+            "AI 解读与 AI 聊天共用同一套 LLM，请到「AI 聊天设置」中配置。",
+            self.statusLabel,
+        )
+
+        # 字段变化 → 刷新状态条
+        self.styleCombo.currentTextChanged.connect(self._refreshStatus)
+        # 监听共用 LLM 配置变化（API Key / 模型 / Base URL 改完时即时刷新）
+        cfg.AiApiKey.valueChanged.connect(self._refreshStatus)
+        cfg.AiModelChat.valueChanged.connect(self._refreshStatus)
+        cfg.AiBaseUrl.valueChanged.connect(self._refreshStatus)
+
+    def _refreshStatus(self, *_args) -> None:
+        self.statusLabel.setText(self._summaryText())
+
+    def _summaryText(self) -> str:
+        apiKey = qconfig.get(cfg.AiApiKey) or ""
+        if not apiKey:
+            return "未配置 API Key(请到「AI 聊天设置」中填写)"
+        model = qconfig.get(cfg.AiModelChat) or "deepseek-chat"
+        style = qconfig.get(cfg.AiInsightStyle) or "学术"
+        return f"Chat 模型: {model}  ·  解读风格: {style}"
+
+
 class AiChatSettingWidget(GroupHeaderCardWidget):
     """AI 聊天设置组件
 
@@ -1144,6 +1207,9 @@ class SettingInterface(ScrollArea):
         # AI 聊天设置组件
         self.aiChatSettingWidget = AiChatSettingWidget(self.scrollWidget)
 
+        # AI 解读设置组件（PRD-001 REQ-AI-001）
+        self.aiInsightSettingWidget = AiInsightSettingWidget(self.scrollWidget)
+
         # 激活码设置组件
         self.licenseSettingWidget = LicenseSettingWidget(self.scrollWidget)
 
@@ -1186,6 +1252,10 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addSpacing(20)
         self.expandLayout.addWidget(
             self.aiChatSettingWidget, 0, Qt.AlignmentFlag.AlignTop
+        )
+        self.expandLayout.addSpacing(20)
+        self.expandLayout.addWidget(
+            self.aiInsightSettingWidget, 0, Qt.AlignmentFlag.AlignTop
         )
         self.expandLayout.addSpacing(20)
         self.expandLayout.addWidget(

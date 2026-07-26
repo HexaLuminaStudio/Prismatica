@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import csv
 import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtGui import QColor
@@ -69,6 +69,10 @@ from app.view.widgets.freq_analyzer.concordance_plot_widget import (
     extractHitPositions,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
+from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001）
+
+# AI 解读 Mixin（PRD-001 REQ-AI-001）
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 
 # P0-fix:统一使用 loguru,与项目其它模块保持一致
 from loguru import logger
@@ -435,8 +439,14 @@ class CorpusStatusCard(CardWidget):
 # ===========================================================================
 # 主面板
 # ===========================================================================
-class ConcordanceWidget(QWidget):
-    """语境分析（KWIC）主面板"""
+class ConcordanceWidget(AiInsightMixin, QWidget):
+    """语境分析（KWIC）主面板
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    """
+
+    _AI_INSIGHT_PANEL_NAME = "KWIC 检索"
+    _AI_INSIGHT_TYPE = "kwic"
 
     def __init__(self, parent=None, corpusStore=None):
         super().__init__(parent)
@@ -622,6 +632,13 @@ class ConcordanceWidget(QWidget):
         self.searchBtn.setIcon(FluentIcon.SEARCH)
         self.searchBtn.clicked.connect(self._runSearch)
         btnRow.addWidget(self.searchBtn)
+
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始检索」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FluentIcon.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        btnRow.addWidget(self._aiInsightBtn)
 
         self.resetSecondaryBtn = PushButton("清除二次筛选", card)
         self.resetSecondaryBtn.setIcon(FluentIcon.CANCEL)
@@ -957,6 +974,9 @@ class ConcordanceWidget(QWidget):
         self.searchBtn.setEnabled(True)
         self._currentResult = result
         self._refreshTableFromResult(result)
+        # AI 解读入口：有命中时启用
+        if hasattr(self, "_aiInsightBtn"):
+            self._aiInsightBtn.setEnabled(result is not None and len(result.hits) > 0)
         logger.info(
             f"[ConcordanceWidget] 节点词={result.searchWord!r} "
             f"命中={result.totalMatches} 展示={len(result.hits)}"
@@ -1111,6 +1131,44 @@ class ConcordanceWidget(QWidget):
             except Exception as e:
                 logger.error(f"[ConcordanceWidget] CSV 导出失败: {e}")
                 _showInfoBar("error", "导出失败", str(e), self, duration=3000)
+
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        return self._currentResult is not None and bool(self._currentResult.hits)
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        query = self._currentResult.searchWord or self.searchEdit.text().strip()
+        return (
+            "kwic",
+            {
+                "hits": self._currentResult.hits,
+                "query": query,
+            },
+        )
+
+    def _collectCorpusMeta(self) -> Dict[str, Any]:
+        meta: Dict[str, Any] = {
+            "corpusName": "当前语料",
+            "fileCount": 0,
+            "totalChars": 0,
+        }
+        if self._corpusStore is not None:
+            try:
+                meta["fileCount"] = self._corpusStore.fileCount()
+                meta["totalChars"] = self._corpusStore.totalChars()
+            except Exception:
+                pass
+            try:
+                from pathlib import Path as _Path
+
+                meta["corpusName"] = _Path(self._corpusStore.dbPath).stem or "当前语料"
+            except Exception:
+                pass
+        return meta
 
 
 # ===========================================================================

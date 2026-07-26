@@ -67,6 +67,7 @@ from app.view.widgets.freq_analyzer.construction_engine import (
     CollocateEntry,
     InternalSlotPair,
 )
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import (
@@ -223,8 +224,14 @@ class ConstructionWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class ConstructionWidget(QWidget):
-    """构式搭配强度分析面板"""
+class ConstructionWidget(AiInsightMixin, QWidget):
+    """构式搭配强度分析面板
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    """
+
+    _AI_INSIGHT_PANEL_NAME = "构式分析"
+    _AI_INSIGHT_TYPE = "construction"
 
     # POS Pattern 常用示例(下拉框可选)
     PATTERN_PRESETS: List[str] = [
@@ -504,6 +511,12 @@ class ConstructionWidget(QWidget):
         self.runBtn.setIcon(FIF.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         row3.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FIF.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        row3.addWidget(self._aiInsightBtn)
 
         layout.addLayout(row3)
 
@@ -769,6 +782,8 @@ class ConstructionWidget(QWidget):
         self._result = result
         self._resetUi()
         self._renderResults(result)
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
         if result.matchCount == 0:
             _showInfoBar(
                 "warning",
@@ -793,6 +808,20 @@ class ConstructionWidget(QWidget):
 
     # ------------------------------------------------------------------
     # 结果渲染
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        r = getattr(self, "_result", None)
+        return r is not None and (
+            bool(getattr(r, "slotEntries", [])) or bool(getattr(r, "collocates", []))
+        )
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("construction", {"result": self._result})
+
     # ------------------------------------------------------------------
     def _renderResults(self, r: ConstructionResult):
         # 顶部摘要

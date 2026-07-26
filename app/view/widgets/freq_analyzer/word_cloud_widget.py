@@ -55,6 +55,7 @@ from matplotlib.backends.backend_qtagg import (  # noqa: E402
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.word_analysis_engine import (
     DEFAULT_CONTENT_POS,
     WordAnalysisEngine,
@@ -214,8 +215,14 @@ class WordCloudWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class WordCloudWidget(QWidget):
-    """词语云图主面板"""
+class WordCloudWidget(AiInsightMixin, QWidget):
+    """词语云图主面板
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    """
+
+    _AI_INSIGHT_PANEL_NAME = "词云"
+    _AI_INSIGHT_TYPE = "word_cloud"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -528,6 +535,12 @@ class WordCloudWidget(QWidget):
         self.runBtn.setIcon(FIF.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         rowBtn.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「生成词云」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FIF.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        rowBtn.addWidget(self._aiInsightBtn)
 
         self.exportPngBtn = PushButton("导出 PNG", card)
         self.exportPngBtn.setIcon(FIF.SAVE)
@@ -650,6 +663,18 @@ class WordCloudWidget(QWidget):
     def _onProgress(self, pct: int, msg: str):
         self.statusLabel.setText(f"[{pct}%] {msg}")
 
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        r = getattr(self, "_result", None)
+        return r is not None and r.wordFreqs and not r.errorMessage
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("word_cloud", {"result": self._result})
+
     def _onFailed(self, err: str):
         self._resetUi()
         _showInfoBar("error", "生成失败", err[:200], self, duration=4000)
@@ -670,6 +695,8 @@ class WordCloudWidget(QWidget):
         self._result = result
         self._resetUi()
         self._renderCloud(result)
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
         placedN = result.placedCount
         skippedN = result.skippedCount
         self.summaryLabel.setText(

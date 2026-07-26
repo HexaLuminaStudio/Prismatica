@@ -26,7 +26,7 @@ from __future__ import annotations
 import math
 import os
 import traceback
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
@@ -88,6 +88,11 @@ from app.view.widgets.freq_analyzer.network_engine import (
     colorForCommunity,
 )
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
+
+from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001）
+
+# AI 解读 Mixin（PRD-001 REQ-AI-001）
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -243,13 +248,17 @@ class HoverAnnotation:
 # ===========================================================================
 # 主面板
 # ===========================================================================
-class NetworkWidget(QWidget):
+class NetworkWidget(AiInsightMixin, QWidget):
     """词语共现网络图主面板
 
     用法:
         - 与 FreqAnalyzerWidget / ConcordanceWidget 共用 CorpusStore
         - 顶层 FreqAnalyzerInterface 负责将其加入 segmented 面板
+        - 继承 AiInsightMixin 提供「AI 解读」抽屉能力
     """
+
+    _AI_INSIGHT_PANEL_NAME = "共现网络"
+    _AI_INSIGHT_TYPE = "network"
 
     def __init__(self, parent=None, corpusStore=None):
         super().__init__(parent)
@@ -437,6 +446,12 @@ class NetworkWidget(QWidget):
         self.buildBtn.setIcon(FluentIcon.SEARCH)
         self.buildBtn.clicked.connect(self._onBuildClicked)
         row3.addWidget(self.buildBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「构建网络」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FluentIcon.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        row3.addWidget(self._aiInsightBtn)
 
         self.stopwordsBtn = PushButton("停用词...", card)
         self.stopwordsBtn.setIcon(FluentIcon.SETTING)
@@ -606,6 +621,10 @@ class NetworkWidget(QWidget):
             self.exportGraphMLBtn,
         ):
             btn.setEnabled(True)
+
+        # AI 解读入口：网络非空时启用
+        if hasattr(self, "_aiInsightBtn"):
+            self._aiInsightBtn.setEnabled(network is not None and network.nodeCount > 0)
 
         if network.nodeCount == 0:
             _showInfoBar(
@@ -912,6 +931,50 @@ class NetworkWidget(QWidget):
         except Exception as e:
             logger.error(f"[NetworkWidget] 打开停用词对话框失败: {e}")
             _showInfoBar("error", "打开失败", str(e), self, duration=2500)
+
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        return self._network is not None and self._network.nodeCount > 0
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        params = {
+            "windowSize": self.windowSpin.value(),
+            "metric": str(self.edgeWeightCombo.currentData()),
+        }
+        return (
+            "network",
+            {
+                "network": self._network,
+                "windowSize": params["windowSize"],
+                "metric": params["metric"],
+            },
+        )
+
+    def _collectCorpusMeta(self) -> Dict[str, Any]:
+        """汇总语料元信息"""
+        meta: Dict[str, Any] = {
+            "corpusName": "当前语料",
+            "fileCount": 0,
+            "totalChars": 0,
+        }
+        store = getattr(self, "_corpusStore", None)
+        if store is not None:
+            try:
+                meta["fileCount"] = store.fileCount()
+                meta["totalChars"] = store.totalChars()
+            except Exception:
+                pass
+            try:
+                from pathlib import Path as _Path
+
+                meta["corpusName"] = _Path(store.dbPath).stem or "当前语料"
+            except Exception:
+                pass
+        return meta
 
     # ------------------------------------------------------------------
     # 关闭

@@ -93,6 +93,7 @@ plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["axes.unicode_minus"] = False
 
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -145,8 +146,14 @@ class SentimentWorker(QThread):
 # ===========================================================================
 # 主面板
 # ===========================================================================
-class SentimentWidget(QWidget):
-    """情感分析主面板"""
+class SentimentWidget(AiInsightMixin, QWidget):
+    """情感分析主面板
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    """
+
+    _AI_INSIGHT_PANEL_NAME = "情感分析"
+    _AI_INSIGHT_TYPE = "sentiment"
 
     def __init__(self, parent=None, corpusStore=None):
         super().__init__(parent)
@@ -242,6 +249,12 @@ class SentimentWidget(QWidget):
         self.runBtn.setIcon(FluentIcon.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         row.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FluentIcon.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        row.addWidget(self._aiInsightBtn)
 
         self.importDictBtn = PushButton("导入情感词典...", card)
         self.importDictBtn.setIcon(FluentIcon.DOWNLOAD)
@@ -395,6 +408,18 @@ class SentimentWidget(QWidget):
     def _onProgress(self, pct: int, msg: str):
         self.statusLabel.setText(f"{msg} ({pct}%)")
 
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        r = getattr(self, "_result", None)
+        return r is not None and r.totalDocuments > 0
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("sentiment", {"result": self._result})
+
     def _onFailed(self, err: str):
         self.runBtn.setEnabled(True)
         self.statusLabel.setText("分析失败")
@@ -418,6 +443,8 @@ class SentimentWidget(QWidget):
         self._updateSummary()
         self._updateCharts()
         self._updateDocCombo()
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
         self._updateSentenceTable()
         self.exportReportBtn.setEnabled(True)
         InfoBar.success(

@@ -9,6 +9,10 @@ import traceback
 from typing import Any, Dict, List, Optional
 
 from app.core.utils.data_paths import FREQ_ANALYZER_SETTINGS_FILE
+from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001）
+
+# AI 解读 Mixin（PRD-001 REQ-AI-001）— 全部分析子页面统一接入
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -66,13 +70,17 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
 # 为避免循环 import，在 _runAnalysis 方法内延迟导入。
 
 
-class FreqAnalyzerWidget(QWidget):
+class FreqAnalyzerWidget(AiInsightMixin, QWidget):
     """词频分析主界面（对标 AntConc）
 
     设计：
         - 语料与清洗由顶层 CorpusStore 提供，本面板只负责分析与展示
         - 接收 corpusStore（可选）以响应语料变化
+        - 继承 AiInsightMixin 提供「AI 解读」抽屉能力
     """
+
+    _AI_INSIGHT_PANEL_NAME = "词频分析"
+    _AI_INSIGHT_TYPE = "freq"
 
     def __init__(self, parent=None, corpusStore: Optional["CorpusStore"] = None):
         super().__init__(parent)
@@ -129,6 +137,9 @@ class FreqAnalyzerWidget(QWidget):
         self._resetAnalysisResults()
         if hasattr(self, "_updateFileCount"):
             self._updateFileCount()
+        if hasattr(self, "_resultSummary"):
+            self._resultSummary.setPlaceholder("请加载语料并点击「开始分析」")
+        self._currentFileNames: List[str] = []
         # _refreshCleanSummary 已废弃：原用于更新清洗规则摘要 UI 标签，
         # 当前页面已移除该 UI 元素，对应方法不再存在。如未来重新引入
         # 清洗摘要展示，请在此处调用新方法。
@@ -146,11 +157,53 @@ class FreqAnalyzerWidget(QWidget):
             self.clusterBtn.setEnabled(False)
         if hasattr(self, "exportBtn"):
             self.exportBtn.setEnabled(False)
+        if hasattr(self, "_aiInsightBtn"):
+            self._aiInsightBtn.setEnabled(False)
         if hasattr(self, "statusLabel"):
             self.statusLabel.setText("语料已变更，请重新分析")
-        if hasattr(self, "_resultSummary"):
-            self._resultSummary.setPlaceholder("请加载语料并点击「开始分析」")
-        self._currentFileNames: List[str] = []
+
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        return self.unigramDf is not None and not self.unigramDf.empty
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("freq", {"rows": self.unigramDf})
+
+    def _collectCorpusMeta(self) -> Dict[str, Any]:
+        """汇总语料元信息，喂给 AI 服务"""
+        meta: Dict[str, Any] = {
+            "corpusName": "当前语料",
+            "fileCount": 0,
+            "totalChars": 0,
+            "tokenCount": 0,
+        }
+        if self._corpusStore is not None:
+            try:
+                fileCount = self._corpusStore.fileCount()
+                totalChars = self._corpusStore.totalChars()
+            except Exception:
+                fileCount, totalChars = 0, 0
+            meta["fileCount"] = fileCount
+            meta["totalChars"] = totalChars
+            # 词种数 = 当前 unigramDf 行数
+            if self.unigramDf is not None:
+                try:
+                    meta["tokenCount"] = int(len(self.unigramDf))
+                except Exception:
+                    pass
+            # 用 dbPath 末段作为语料名
+            try:
+                dbPath = self._corpusStore.dbPath
+                from pathlib import Path as _Path
+
+                meta["corpusName"] = _Path(dbPath).stem or "当前语料"
+            except Exception:
+                pass
+        return meta
 
     def _initUi(self):
         # 外层布局：与其他两个面板保持一致（边距 20px、间距 12px）
@@ -266,6 +319,12 @@ class FreqAnalyzerWidget(QWidget):
         self.exportBtn.clicked.connect(self._exportCsv)
         self.exportBtn.setEnabled(False)
 
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", self)
+        self._aiInsightBtn.setIcon(FluentIcon.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+
         # N-gram 聚簇分析按钮(N>=3 时可见)
         self.clusterBtn = PushButton("聚簇分析", self)
         self.clusterBtn.setIcon(FluentIcon.SEARCH)
@@ -281,6 +340,7 @@ class FreqAnalyzerWidget(QWidget):
         self.pctModeBtn.clicked.connect(self._togglePctMode)
 
         opRow.addWidget(self.analyzeBtn)
+        opRow.addWidget(self._aiInsightBtn)
         opRow.addWidget(self.zipfBtn)
         opRow.addWidget(self.ngramBtn)
         opRow.addWidget(self.clusterBtn)
@@ -571,6 +631,9 @@ class FreqAnalyzerWidget(QWidget):
             clusterOk = ngramDf is not None and not ngramDf.empty and self.ngramN >= 3
             self.clusterBtn.setEnabled(clusterOk)
         self.exportBtn.setEnabled(unigramDf is not None and not unigramDf.empty)
+        # AI 解读入口：仅在主词频表有结果时启用
+        if hasattr(self, "_aiInsightBtn"):
+            self._aiInsightBtn.setEnabled(unigramDf is not None and not unigramDf.empty)
 
         nTypes = len(unigramDf) if unigramDf is not None else 0
         totalTokens = int(unigramDf["Freq"].sum()) if nTypes > 0 else 0

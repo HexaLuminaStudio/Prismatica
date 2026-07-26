@@ -102,6 +102,18 @@ class Config(QConfig):
         OptionsValidator([5, 10, 20, 50]),
     )
 
+    # ============================================================
+    # AI 解读（PRD-001 REQ-AI-001）专属配置
+    # - 与 AI 聊天共用 AiApiKey / AiBaseUrl / AiModelChat（同一套 LLM）
+    # - 仅 AiInsightStyle（Prompt 风格）是解读独有
+    # ============================================================
+    AiInsightStyle = OptionsConfigItem(
+        "AiInsight",
+        "AiInsightStyle",
+        "学术",
+        OptionsValidator(["学术", "通俗", "简洁"]),
+    )
+
 
 cfg = Config()
 cfg.themeMode.value = Theme.AUTO

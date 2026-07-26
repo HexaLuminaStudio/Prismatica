@@ -29,7 +29,9 @@ matplotlib.use("QtAgg", force=True)
 import matplotlib.font_manager as fm  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas  # noqa: E402
+from matplotlib.backends.backend_qtagg import (
+    FigureCanvasQTAgg as FigureCanvas,
+)  # noqa: E402
 
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QColor
@@ -46,6 +48,7 @@ from qfluentwidgets import (
     CaptionLabel,
     FluentIcon,
     MessageBoxBase,
+    PrimaryPushButton,
     PushButton,
     StrongBodyLabel,
 )
@@ -54,6 +57,7 @@ from app.view.widgets.freq_analyzer.ngram_cluster_engine import (
     NgramClusterEngine,
     NgramClusterResult,
 )
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeDialogHeader,
     _makeScrollArea,
@@ -91,7 +95,9 @@ def _availableCjkFonts() -> List[str]:
         if name in installed:
             result.append(name)
     if not result:
-        logger.warning("[NgramClusterDialog] 系统未安装 CJK 字体，中文标签可能无法正常显示")
+        logger.warning(
+            "[NgramClusterDialog] 系统未安装 CJK 字体，中文标签可能无法正常显示"
+        )
     return result
 
 
@@ -197,8 +203,10 @@ class NgramClusterWorker(QThread):
 # ---------------------------------------------------------------------------
 
 
-class NgramClusterDialog(MessageBoxBase):
+class NgramClusterDialog(AiInsightMixin, MessageBoxBase):
     """N-gram 聚簇分析可视化弹窗
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
 
     功能：
         - 后台线程执行聚类分析，UI 全程不阻塞
@@ -214,6 +222,9 @@ class NgramClusterDialog(MessageBoxBase):
             ngramDf, n=3, parent=parentWindow
         )
     """
+
+    _AI_INSIGHT_PANEL_NAME = "N-gram 聚类"
+    _AI_INSIGHT_TYPE = "ngram_cluster"
 
     def __init__(
         self,
@@ -258,9 +269,7 @@ class NgramClusterDialog(MessageBoxBase):
         self._progressLabel.setWordWrap(True)
 
         # ---- 图表区域（占位） ----
-        self._chartPlaceholder = CaptionLabel(
-            "聚类分析进行中，请稍候...", self
-        )
+        self._chartPlaceholder = CaptionLabel("聚类分析进行中，请稍候...", self)
         self._chartPlaceholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._chartPlaceholder.setStyleSheet(
             "color: #999; font-size: 14px; padding: 40px;"
@@ -298,6 +307,12 @@ class NgramClusterDialog(MessageBoxBase):
         self._exportSvgBtn.clicked.connect(lambda: self._export("svg"))
         self._exportSvgBtn.setEnabled(False)
         btnLayout.addWidget(self._exportSvgBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「重新分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", self)
+        self._aiInsightBtn.setIcon(FluentIcon.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        btnLayout.addWidget(self._aiInsightBtn)
 
         # ---- 整体布局 ----
         self.viewLayout.setContentsMargins(20, 16, 20, 12)
@@ -378,6 +393,8 @@ class NgramClusterDialog(MessageBoxBase):
         """分析完成，渲染可视化"""
         self._result = result
         self._hasValidResult = True
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
 
         self._progressBar.setValue(100)
         self._progressBar.setFormat("完成")
@@ -415,13 +432,26 @@ class NgramClusterDialog(MessageBoxBase):
             f"{result.k} 个簇  ·  语料 {result.file_count} 个文件"
         )
 
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        return getattr(self, "_hasValidResult", False) and self._result is not None
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("ngram_cluster", {"result": self._result})
+
     def _onFailed(self, errMsg: str) -> None:
         """分析失败"""
         self._progressBar.setValue(0)
         self._progressBar.setFormat("失败")
         self._progressLabel.setText(f"分析失败：{errMsg}")
         self._chartPlaceholder.setText(f"分析失败\n{errMsg}")
-        self._chartPlaceholder.setStyleSheet("color: #C44E52; font-size: 13px; padding: 40px;")
+        self._chartPlaceholder.setStyleSheet(
+            "color: #C44E52; font-size: 13px; padding: 40px;"
+        )
         self._rerunBtn.setEnabled(True)
         _showInfoBar("error", "聚类分析失败", errMsg, self, duration=5000)
 
@@ -504,9 +534,7 @@ class NgramClusterDialog(MessageBoxBase):
         self._hoverAnnotation.set_visible(False)
 
         fig.canvas.mpl_connect("pick_event", self._onPick)
-        fig.canvas.mpl_connect(
-            "motion_notify_event", self._onHover
-        )
+        fig.canvas.mpl_connect("motion_notify_event", self._onHover)
 
         # 样式
         ax.set_title(
@@ -580,9 +608,7 @@ class NgramClusterDialog(MessageBoxBase):
         nearestDist = float(dists[nearestIdx])
 
         # 阈值：点大小平均值对应半径约 10 像素
-        threshold = (
-            (points[:, 0].max() - points[:, 0].min()) * 0.04
-        )
+        threshold = (points[:, 0].max() - points[:, 0].min()) * 0.04
         if nearestDist < threshold and 0 <= nearestIdx < len(labels):
             if self._hoverAnnotation is not None:
                 self._hoverAnnotation.xy = (

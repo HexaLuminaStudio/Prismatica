@@ -57,6 +57,7 @@ from app.view.widgets.freq_analyzer.collocation_engine import (
     CollocationEngine,
     CollocationResult,
 )
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import (
@@ -227,8 +228,10 @@ class CollocationWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class CollocationWidget(QWidget):
+class CollocationWidget(AiInsightMixin, QWidget):
     """搭配分析面板
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
 
     UI 布局:
         [ 参数区 ]
@@ -244,6 +247,9 @@ class CollocationWidget(QWidget):
             - 跨距位置分布
             - 网络图数据
     """
+
+    _AI_INSIGHT_PANEL_NAME = "搭配分析"
+    _AI_INSIGHT_TYPE = "collocation"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -497,6 +503,12 @@ class CollocationWidget(QWidget):
         self.runBtn.setIcon(FIF.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         row3.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", card)
+        self._aiInsightBtn.setIcon(FIF.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        row3.addWidget(self._aiInsightBtn)
 
         layout.addLayout(row3)
 
@@ -727,9 +739,25 @@ class CollocationWidget(QWidget):
             self,
             duration=2500,
         )
+        # AI 解读:结果出来后启用按钮
+        self.refreshAiInsightButton()
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)
+        # 语料清空时禁用 AI 解读
+        self.disableAiInsightButton()
+
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        r = getattr(self, "_result", None)
+        return r is not None and bool(getattr(r, "collocates", []))
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("collocation", {"result": self._result})
 
     # ------------------------------------------------------------------
     # 结果渲染

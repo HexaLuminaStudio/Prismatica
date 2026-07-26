@@ -32,6 +32,18 @@ warnings.filterwarnings(
     message=r".*pkg_resources is deprecated.*",
 )
 
+# 静默 PySide6 内部 QMouseEvent.globalPos() 弃用警告
+# 警告来源:qfluentwidgetspro.Drawer / 其他组件在事件处理中调用了已被弃用的
+# globalPos() API（PySide6 6.5+ 推荐用 globalPosition().toPoint() 替代）。
+# 第三方库升级滞后,本项目无法直接修复,统一静默。
+# 注意:此警告由 PySide6 在 C++ 层触发,无法用 module 匹配;
+# 只用 message 匹配,避免误伤其他弃用警告。
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message=r".*QMouseEvent\.globalPos.*",
+)
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImageReader
 from PySide6.QtWidgets import QApplication

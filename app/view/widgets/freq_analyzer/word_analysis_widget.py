@@ -68,6 +68,7 @@ from app.view.widgets.freq_analyzer.freq_engine import (
     posTag,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor, ResultSummary
+from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import _makeSwitchButton, _showInfoBar
 from app.view.widgets.freq_analyzer.word_analysis_engine import (
@@ -220,8 +221,10 @@ class WordAnalysisWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class WordAnalysisWidget(QWidget):
+class WordAnalysisWidget(AiInsightMixin, QWidget):
     """词语分析面板
+
+    继承 AiInsightMixin 提供「AI 解读」抽屉能力
 
     UI 布局:
         [ 参数区 ]
@@ -230,13 +233,16 @@ class WordAnalysisWidget(QWidget):
             - 最小频次 (SpinBox 1-100)
             - 词性过滤 (多选 ComboBox)
             - 包含 POS 标注 (SwitchButton)
-            - [开始分析] 按钮
+            - [开始分析] [AI 解读] 按钮
         [ 结果摘要卡 ] 4 个指标(总词数 / Type / TTR / 词汇密度)
         [ 选项卡 ]
             - 词汇指标(指标卡 + 词汇增长曲线图)
             - 高频词列表(Top-N + 累计 % + 覆盖率)
             - 词汇分布(子库对比)
     """
+
+    _AI_INSIGHT_PANEL_NAME = "词语分析"
+    _AI_INSIGHT_TYPE = "word_analysis"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -496,6 +502,12 @@ class WordAnalysisWidget(QWidget):
         self.runBtn.setIcon(FIF.PLAY)
         self.runBtn.clicked.connect(self._onRunClicked)
         row3.addWidget(self.runBtn)
+        # AI 解读按钮（PRD-001 REQ-AI-001）— 通过 Mixin 一行接入
+        # 统一为 PrimaryPushButton,放在「开始分析」旁边
+        self._aiInsightBtn = PrimaryPushButton("AI 解读", paramCard)
+        self._aiInsightBtn.setIcon(FIF.HEART)
+        self.setupAiInsightButton(self._aiInsightBtn)
+        row3.addWidget(self._aiInsightBtn)
 
         paramLayout.addLayout(row3)
 
@@ -748,9 +760,25 @@ class WordAnalysisWidget(QWidget):
             self,
             duration=2500,
         )
+        # AI 解读:有结果后启用按钮
+        self.refreshAiInsightButton()
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)
+        # 语料清空时禁用 AI 解读
+        self.disableAiInsightButton()
+
+    # ------------------------------------------------------------------
+    # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
+    # ------------------------------------------------------------------
+    def _aiHasResult(self) -> bool:
+        m = getattr(self, "_metrics", None)
+        return m is not None and getattr(m, "totalTokens", 0) > 0
+
+    def _aiCollectExplainArgs(self):
+        if not self._aiHasResult():
+            return None
+        return ("word_analysis", {"result": self._metrics})
 
     # ------------------------------------------------------------------
     # 结果渲染
