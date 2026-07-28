@@ -12,6 +12,7 @@ from qfluentwidgets import (
 )
 
 from app.core.utils import signalBus, logger
+from app.core.utils.config import cfg, qconfig
 from app.core.services import taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
@@ -412,8 +413,47 @@ class MainWindow(MSFluentWindow):
             # 再 processEvents 一次,确保事件循环消化后窗口层级稳定
             QApplication.processEvents()
             logger.info("[MainWindow] 启动彻底完成,窗口已显示")
+            # 主窗口首次进入引导遮罩:用半透明黑幕遮住主窗口,
+            # 突出关键控件 + 展示说明文字,引导用户认识主界面。
+            # - 仅当 cfg.MainTourShown=False 时弹出(默认未展示)
+            # - 用户完成/跳过引导后由 MainTourOverlay 自身写 True,后续不再弹出
+            # - 用 QTimer.singleShot 延迟到下一轮事件循环,确保主窗口布局完全稳定
+            self._maybeStartMainTour()
         except Exception as e:
             logger.exception(f"[MainWindow] _showAfterStartup 显示失败: {e}")
+
+    def _maybeStartMainTour(self) -> None:
+        """检查并启动主窗口引导遮罩(若用户尚未完成)。"""
+        try:
+            shown = bool(qconfig.get(cfg.MainTourShown))
+        except Exception as e:
+            logger.warning(f"[MainWindow] 读取 MainTourShown 失败: {e}")
+            shown = False
+
+        if shown:
+            logger.debug("[MainWindow] MainTourShown=True,跳过引导遮罩")
+            return
+
+        try:
+            from PySide6.QtCore import QTimer
+
+            from app.view.widgets.main_tour_overlay import MainTourOverlay
+
+            def _start():
+                try:
+                    # 再次校验(防止用户在极小延迟内手动关闭了引导)
+                    if bool(qconfig.get(cfg.MainTourShown)):
+                        return
+                    overlay = MainTourOverlay(self)
+                    overlay.start()
+                    logger.info("[MainWindow] 主窗口引导遮罩已弹出")
+                except Exception as e:
+                    logger.warning(f"[MainWindow] 启动引导遮罩失败: {e}")
+
+            # 延迟 600ms,让主窗口布局稳定 + 用户视觉过渡
+            QTimer.singleShot(600, _start)
+        except Exception as e:
+            logger.warning(f"[MainWindow] 调度引导遮罩失败: {e}")
 
     def closeEvent(self, event):
         """窗口关闭事件"""

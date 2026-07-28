@@ -1062,6 +1062,11 @@ class AboutSettingWidget(GroupHeaderCardWidget):
         self.feedbackButton = PushButton("提交反馈", self)
         self.feedbackButton.clicked.connect(self._openFeedback)
 
+        # 重新查看引导按钮(2026-07-28 新增)
+        # - 点击后会重置 cfg.MainTourShown=False,并在主窗口上重新弹出引导遮罩
+        self.retourButton = PushButton("重新查看引导", self)
+        self.retourButton.clicked.connect(self._restartMainTour)
+
         # 获取系统信息
         systemInfo = self._getSystemInfo()
 
@@ -1079,6 +1084,15 @@ class AboutSettingWidget(GroupHeaderCardWidget):
             "软件反馈",
             "遇到问题或有建议？点击提交反馈",
             self.feedbackButton,
+        )
+
+        # 添加「重新查看引导」组(2026-07-28 新增)
+        # 与软件反馈放在同一卡片内,逻辑相近(都是软件内的辅助入口)
+        self.addGroup(
+            ":app/icons/Hsk.svg",  # 复用现有图标资源,引导无专属图标
+            "主窗口引导",
+            "重新展示首次进入主窗口时的引导遮罩",
+            self.retourButton,
         )
 
         # 系统信息组
@@ -1099,6 +1113,88 @@ class AboutSettingWidget(GroupHeaderCardWidget):
         import webbrowser
 
         webbrowser.open("https://wj.qq.com/s2/27350075/d71d/")
+
+    def _restartMainTour(self):
+        """重新启动主窗口引导遮罩(2026-07-28 新增)。
+
+        流程:
+            1) 把 cfg.MainTourShown 设为 False(允许下次启动也弹)
+            2) 在主窗口上构造并启动 MainTourOverlay
+            3) 提示用户引导已开始,可在「跳过引导」中提前结束
+        """
+        try:
+            # 1) 重置持久化标记
+            qconfig.set(cfg.MainTourShown, False)
+            logger.info("[Setting] 用户点击「重新查看引导」,重置 cfg.MainTourShown")
+
+            # 2) 找到顶层主窗口(向上查找 QWidget 链)
+            mainWindow = self.window()
+            # window() 在 widget 尚未 show 时可能返回 None,
+            # 退而求其次查找 QApplication.activeWindow()
+            if mainWindow is None or not isinstance(mainWindow, QWidget):
+                try:
+                    from PySide6.QtWidgets import QApplication
+
+                    mainWindow = QApplication.activeWindow()
+                except Exception:
+                    pass
+            if mainWindow is None:
+                # 最后的兜底:遍历 topLevelWidgets
+                try:
+                    from PySide6.QtWidgets import QApplication
+
+                    for w in QApplication.topLevelWidgets():
+                        if w.isVisible():
+                            mainWindow = w
+                            break
+                except Exception:
+                    pass
+
+            if mainWindow is None:
+                logger.warning("[Setting] 重启引导失败:找不到顶层主窗口")
+                InfoBar.warning(
+                    title="无法启动引导",
+                    content="请重新打开主窗口后再试。",
+                    parent=self,
+                    duration=2500,
+                    position=InfoBarPosition.TOP,
+                )
+                return
+
+            # 3) 检查 MainTourOverlay 是否已经存在(避免重复叠加)
+            try:
+                from app.view.widgets.main_tour_overlay import MainTourOverlay
+
+                existing = mainWindow.findChild(MainTourOverlay)
+                if existing is not None:
+                    logger.info("[Setting] 已存在引导遮罩,先关闭再重启")
+                    existing._completeTour(writeCfg=False)
+            except Exception as e:
+                logger.warning(f"[Setting] 检查已有引导遮罩失败: {e}")
+
+            # 4) 构造并启动新引导
+            try:
+                overlay = MainTourOverlay(mainWindow)
+                overlay.start()
+                logger.info("[Setting] 主窗口引导遮罩已重新弹出")
+                InfoBar.success(
+                    title="引导已重新启动",
+                    content="跟随卡片提示浏览全部主窗口功能。",
+                    parent=self,
+                    duration=2000,
+                    position=InfoBarPosition.TOP,
+                )
+            except Exception as e:
+                logger.warning(f"[Setting] 启动引导遮罩失败: {e}")
+                InfoBar.error(
+                    title="启动引导失败",
+                    content=str(e),
+                    parent=self,
+                    duration=3000,
+                    position=InfoBarPosition.TOP,
+                )
+        except Exception as e:
+            logger.exception(f"[Setting] 重新查看引导失败: {e}")
 
     def _getSystemInfo(self) -> str:
         """获取系统信息"""

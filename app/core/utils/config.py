@@ -67,8 +67,13 @@ class Config(QConfig):
     )
 
     MicaEnabled = ConfigItem("MainWindow", "MicaEnabled", isWin11(), BoolValidator())
-    # 是否首次启动(用于决定是否弹出引导窗口)
+    # 是否首次启动(用于决定是否弹出启动期引导窗口)
     FirstLaunch = ConfigItem("MainWindow", "FirstLaunch", True, BoolValidator())
+    # 是否已在主窗口展示过「主界面引导遮罩」(Tour Overlay)
+    # - 默认 True:首次进入主窗口自动弹出引导遮罩,介绍导航栏/工作区/项目切换器等
+    # - 用户完成或跳过引导后写入 False,后续启动不再弹出
+    # - 与 FirstLaunch 互不影响:即便清空 FirstLaunch,只要 MainTourShown=True 就跳过
+    MainTourShown = ConfigItem("MainWindow", "MainTourShown", False, BoolValidator())
     DpiScale = OptionsConfigItem(
         "MainWindow",
         "DpiScale",

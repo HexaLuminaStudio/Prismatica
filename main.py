@@ -3,28 +3,13 @@ import os
 import sys
 import warnings
 
-# 注意:已移除 app.core.utils.matplotlib_backend.installAll() 调用。
-# 原因:
-#   1. 它会无条件切换 matplotlib 后端到 QtAgg 并触发 PySide6 后端加载链,
-#      在 Nuitka 打包的 Win10 环境中可能找不到 shiboken6 路径,
-#      报 "D:shiboken6\libshiboken does not exist"。
-#   2. 它会拖慢启动时间(QtAgg 后端加载本身较重)。
-# 各 view(bias_interface / freq_analyzer_interface / network_widget 等)
-# 在内部已按需调用 matplotlib.use("QtAgg", force=True),且执行时机在
-# QApplication 创建之后,shiboken6 路径已就绪,不受上述问题影响。
-#
-# 若需要在调试环境下让 IPython 跳过 GUI 集成,
-# 可在外部环境变量中显式设置 MPLBACKEND=Agg(此处不再强制)。
-
-# 静默 torch.cuda 内部的 pynvml deprecation 警告(由 PyTorch 触发,非本项目问题)
 warnings.filterwarnings(
     "ignore",
     category=FutureWarning,
     module=r"torch\.cuda",
 )
 
-# 静默 jieba 内部 pkg_resources 弃用警告(由 setuptools>=81 触发,非本项目问题)
-# 警告来源:jieba/_compat.py:18 的 `import pkg_resources`
+
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -32,12 +17,7 @@ warnings.filterwarnings(
     message=r".*pkg_resources is deprecated.*",
 )
 
-# 静默 PySide6 内部 QMouseEvent.globalPos() 弃用警告
-# 警告来源:qfluentwidgetspro.Drawer / 其他组件在事件处理中调用了已被弃用的
-# globalPos() API（PySide6 6.5+ 推荐用 globalPosition().toPoint() 替代）。
-# 第三方库升级滞后,本项目无法直接修复,统一静默。
-# 注意:此警告由 PySide6 在 C++ 层触发,无法用 module 匹配;
-# 只用 message 匹配,避免误伤其他弃用警告。
+
 warnings.filterwarnings(
     "ignore",
     category=DeprecationWarning,
@@ -80,20 +60,11 @@ if _dpi_scale != "Auto":
 app = QApplication(sys.argv)
 app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 
-# =====================================================================
-# 立即启动 Splash 等待窗口(2026-07-27 改造,2026-07-27 再次调整)
-# 设计目标:
-#   - QApplication 创建后**第一件事**就是显示 splash,做到「一运行就启动」
-#   - 后续所有重操作(项目数据预热 / beta 校验 / 引导窗口 / 主窗口构造)
-#     都在 splash 显示**之后**进行,用户立即看到视觉反馈,启动期不再黑屏
-#   - splash 始终保持最前(WindowStaysOnTopHint + raise_ + activateWindow)
-#     并强制处理一次事件循环,让首帧马上绘制出来
-# =====================================================================
 from app.view.widgets.splash_window import SplashWindow
 from app.core.services.splash_loader import SplashLoader
 from qfluentwidgets import InfoBar, InfoBarPosition
 
-# 1) 创建并立即显示 splash(< 100ms 内可见,真正「一运行就启动」)
+
 _splashWindow = SplashWindow()
 # 初始目标 5%(SplashWindow 内部已设);自由增长定时器会从 0 自动爬升
 _splashWindow.setProgress(5, "正在初始化…")
