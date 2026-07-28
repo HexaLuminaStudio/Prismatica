@@ -53,11 +53,13 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
+from app.core.models.project import RESOURCE_TYPE_NGRAM_CLUSTER
 from app.view.widgets.freq_analyzer.ngram_cluster_engine import (
     NgramClusterEngine,
     NgramClusterResult,
 )
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeDialogHeader,
     _makeScrollArea,
@@ -203,10 +205,11 @@ class NgramClusterWorker(QThread):
 # ---------------------------------------------------------------------------
 
 
-class NgramClusterDialog(AiInsightMixin, MessageBoxBase):
+class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
     """N-gram 聚簇分析可视化弹窗
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
 
     功能：
         - 后台线程执行聚类分析，UI 全程不阻塞
@@ -225,6 +228,10 @@ class NgramClusterDialog(AiInsightMixin, MessageBoxBase):
 
     _AI_INSIGHT_PANEL_NAME = "N-gram 聚类"
     _AI_INSIGHT_TYPE = "ngram_cluster"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_NGRAM_CLUSTER
+    _RESOURCE_TITLE_PREFIX = "N-gram 聚类"
 
     def __init__(
         self,
@@ -427,6 +434,10 @@ class NgramClusterDialog(AiInsightMixin, MessageBoxBase):
         self._exportSvgBtn.setEnabled(True)
         self._rerunBtn.setEnabled(True)
 
+        # PRD-002:归档到当前激活项目(若有)
+        if result.ngram_count > 0:
+            self.notifyResourceCreated()
+
         self._infoLabel.setText(
             f"共 {result.ngram_count} 个 {ngramLabel}  ·  "
             f"{result.k} 个簇  ·  语料 {result.file_count} 个文件"
@@ -442,6 +453,53 @@ class NgramClusterDialog(AiInsightMixin, MessageBoxBase):
         if not self._aiHasResult():
             return None
         return ("ngram_cluster", {"result": self._result})
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """N-gram 聚类结果 → 项目资源 payload"""
+        r: NgramClusterResult = getattr(self, "_result", None)
+        if r is None or getattr(r, "ngram_count", 0) == 0:
+            return None
+        try:
+            ngramLabel = "Bigram" if self._n == 2 else f"{self._n}-gram"
+            top = list(zip(r.ngram_labels, r.ngram_freqs))[:5]
+            topText = "、".join(f"{w}({f})" for w, f in top)
+            summary = (
+                f"{ngramLabel} 聚类 {r.ngram_count} 个 n-gram → {r.k} 个簇,"
+                f"轮廓系数={r.silhouette:.3f}。"
+                f"Top:{topText}"
+            )
+        except Exception:
+            summary = "N-gram 聚类结果"
+        try:
+            topList = [
+                {"ngram": w, "freq": int(f)}
+                for w, f in zip(r.ngram_labels[:50], r.ngram_freqs[:50])
+            ]
+        except Exception:
+            topList = []
+        snapshotData = {
+            "n": getattr(self, "_n", 0),
+            "ngramCount": r.ngram_count,
+            "k": r.k,
+            "silhouette": r.silhouette,
+            "topNgrams": topList,
+        }
+        parameters = {
+            "n": getattr(self, "_n", 0),
+            "maxClusters": getattr(self, "_maxClusters", 0),
+            "minFreq": getattr(self, "_minFreq", 0),
+            "maxNgrams": getattr(self, "_maxNgrams", 0),
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"N-gram 聚类 ({r.ngram_count} → {r.k} 簇) ({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     def _onFailed(self, errMsg: str) -> None:
         """分析失败"""

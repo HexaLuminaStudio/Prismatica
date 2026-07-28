@@ -28,6 +28,7 @@ from qfluentwidgets import BodyLabel, PushButton
 
 from app.core.models.project import Resource
 from app.core.services import projectManager
+from app.core.services.research_report_service import researchReportService
 from app.core.utils import logger
 
 from .project_dashboard_widgets import (
@@ -68,14 +69,30 @@ class ProjectDashboardWidget(QWidget):
 
     jumpToModule = Signal(str)
     backRequested = Signal()
+    # AI 报告生成期间的「忙碌态」变化:
+    # - True  → 不允许返回列表 / 跳转其他模块(防止用户误离开打断生成)
+    # - False → 恢复所有交互
+    # 由父容器(ProjectInterface)透传给 MainWindow,后者用来锁定导航切换
+    # 和拦截主窗口关闭。
+    busyChanged = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("projectDashboardWidget")
         self._currentProjectId: str = ""
+        self._busy: bool = False
         self._buildUi()
         self._connectSignals()
         self._syncFromManager()
+        # 监听 AI 报告服务,自动同步 _busy 与按钮可用态。
+        # 注意:_buildUi 之前 researchReportService 已被 AiInsightsPanel
+        # 在自己的 _connectAiService 中绑定,所以这里直接连接不会重复。
+        try:
+            researchReportService.reportStarted.connect(self._onReportStarted)
+            researchReportService.reportFinished.connect(self._onReportFinishedOrFailed)
+            researchReportService.reportFailed.connect(self._onReportFinishedOrFailed)
+        except Exception as e:
+            logger.warning(f"[ProjectDashboard] 监听 AI 报告服务失败: {e}")
 
     # ------------------------------------------------------------------
     # UI
@@ -233,9 +250,86 @@ class ProjectDashboardWidget(QWidget):
         except Exception as e:
             logger.warning(f"[ProjectDashboard] _onResourceSelected 失败: {e}")
 
-    def _onResourceDoubleClicked(self, resourceId: str) -> None:
-        """双击资源池条目 → 等同于「跳转」动作。"""
+    def _onJumpRequested(self, resourceType: str) -> None:
+        """详情面板的「🚀 跳转分析模块」按钮 → 路由到对应模块。"""
         try:
+            if self._busy:
+                # busy 期间禁止离开,丢弃跳转请求(主窗口侧的导航拦截是兜底)
+                logger.debug("[ProjectDashboard] AI 报告生成中,忽略跳转请求")
+                return
+            moduleKey = _RESOURCE_TYPE_TO_MODULE.get(resourceType, "freq_analyzer")
+            self.jumpToModule.emit(moduleKey)
+        except Exception as e:
+            logger.warning(f"[ProjectDashboard] _onJumpRequested 失败: {e}")
+
+    # ------------------------------------------------------------------
+    # AI 报告生成期间的 busy 状态(锁定页面交互)
+    # ------------------------------------------------------------------
+    def isBusy(self) -> bool:
+        """是否处于 AI 报告生成中。"""
+        return self._busy
+
+    def _setBusy(self, busy: bool) -> None:
+        """更新 busy 态 + 同步按钮可用态 + 通知父容器。"""
+        if self._busy == busy:
+            return
+        self._busy = busy
+        try:
+            # 1) 禁用「← 返回列表」:防止用户切回列表后仪表盘上下文丢失
+            self.backButton.setEnabled(not busy)
+            # 2) 禁用详情面板的「🚀 跳转分析模块」:防止离开
+            try:
+                self.detailPanel.jumpButton.setEnabled(
+                    False
+                    if busy
+                    else bool(
+                        self.detailPanel._currentResource
+                        and self.detailPanel._currentResource.type
+                    )
+                )
+            except Exception:
+                pass
+            # 3) 屏蔽资源池双击(仅拦双击事件,保留滚动/选中可交互):
+            #    在 _onResourceDoubleClicked 中已经判断了 _busy,这里是
+            #    事件层兜底,防止任何路径触发的双击事件逃逸到 listWidget
+            try:
+                if busy and self.poolPanel.listWidget is not None:
+                    if not hasattr(self, "_listDoubleClickFilter") or \
+                            self._listDoubleClickFilter is None:
+                        from PySide6.QtCore import QObject, QEvent
+
+                        class _BlockDoubleClickFilter(QObject):
+                            def eventFilter(filterSelf, obj, event):
+                                if event.type() == QEvent.Type.MouseButtonDblClick:
+                                    return True
+                                return False
+
+                        self._listDoubleClickFilter = _BlockDoubleClickFilter(self.poolPanel.listWidget)
+                    self.poolPanel.listWidget.installEventFilter(self._listDoubleClickFilter)
+                elif not busy and getattr(self, "_listDoubleClickFilter", None) is not None:
+                    self.poolPanel.listWidget.removeEventFilter(self._listDoubleClickFilter)
+            except Exception:
+                pass
+            # 4) 通知父容器(MainWindow 监听用来锁定导航 + 拦截关闭)
+            self.busyChanged.emit(busy)
+            logger.info(f"[ProjectDashboard] busy={busy}")
+        except Exception as e:
+            logger.warning(f"[ProjectDashboard] _setBusy 异常: {e}")
+
+    def _onReportStarted(self) -> None:
+        """AI 报告开始生成 → 进入 busy 态。"""
+        self._setBusy(True)
+
+    def _onReportFinishedOrFailed(self, *_args) -> None:
+        """AI 报告结束(成功/失败/取消)→ 退出 busy 态。"""
+        self._setBusy(False)
+
+    def _onResourceDoubleClicked(self, resourceId: str) -> None:
+        """双击资源池条目 → 等同于「跳转」动作(busy 时禁用)。"""
+        try:
+            if self._busy:
+                logger.debug("[ProjectDashboard] busy 中,忽略资源双击")
+                return
             if not resourceId:
                 return
             for r in self.poolPanel._resources:  # noqa: SLF001
@@ -248,14 +342,6 @@ class ProjectDashboardWidget(QWidget):
                     return
         except Exception as e:
             logger.warning(f"[ProjectDashboard] _onResourceDoubleClicked 失败: {e}")
-
-    def _onJumpRequested(self, resourceType: str) -> None:
-        """详情面板的「🚀 跳转分析模块」按钮 → 路由到对应模块。"""
-        try:
-            moduleKey = _RESOURCE_TYPE_TO_MODULE.get(resourceType, "freq_analyzer")
-            self.jumpToModule.emit(moduleKey)
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _onJumpRequested 失败: {e}")
 
 
 __all__ = ["ProjectDashboardWidget"]

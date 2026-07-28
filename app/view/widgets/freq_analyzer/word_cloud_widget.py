@@ -52,10 +52,12 @@ from matplotlib.backends.backend_qtagg import (  # noqa: E402
     FigureCanvasQTAgg as FigureCanvas,
 )
 
+from app.core.models.project import RESOURCE_TYPE_WORD_CLOUD
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.view.widgets.freq_analyzer.word_analysis_engine import (
     DEFAULT_CONTENT_POS,
     WordAnalysisEngine,
@@ -215,14 +217,19 @@ class WordCloudWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class WordCloudWidget(AiInsightMixin, QWidget):
+class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     """词语云图主面板
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
     """
 
     _AI_INSIGHT_PANEL_NAME = "词云"
     _AI_INSIGHT_TYPE = "word_cloud"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_WORD_CLOUD
+    _RESOURCE_TITLE_PREFIX = "词云"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -675,6 +682,53 @@ class WordCloudWidget(AiInsightMixin, QWidget):
             return None
         return ("word_cloud", {"result": self._result})
 
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """词云结果 → 项目资源 payload"""
+        r: WordCloudResult = getattr(self, "_result", None)
+        if r is None or not getattr(r, "wordFreqs", {}):
+            return None
+        try:
+            topWords = sorted(r.wordFreqs.items(), key=lambda x: x[1], reverse=True)[
+                :10
+            ]
+            topText = "、".join(f"{w}({f})" for w, f in topWords)
+            summary = (
+                f"词云 {r.placedCount} 个词,"
+                f"{r.width}×{r.height}px。"
+                f"Top:{topText}"
+            )
+        except Exception:
+            summary = "词云"
+        try:
+            topWords = sorted(r.wordFreqs.items(), key=lambda x: x[1], reverse=True)[
+                :50
+            ]
+            topList = [{"word": w, "freq": f} for w, f in topWords]
+        except Exception:
+            topList = []
+        snapshotData = {
+            "placedCount": r.placedCount,
+            "skippedCount": r.skippedCount,
+            "width": r.width,
+            "height": r.height,
+            "topWords": topList,
+        }
+        parameters = {
+            "width": r.width,
+            "height": r.height,
+            "wordCount": len(r.wordFreqs),
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"词云 ({r.placedCount} 词) ({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
+
     def _onFailed(self, err: str):
         self._resetUi()
         _showInfoBar("error", "生成失败", err[:200], self, duration=4000)
@@ -713,6 +767,9 @@ class WordCloudWidget(AiInsightMixin, QWidget):
             self,
             duration=2500,
         )
+        # PRD-002:归档到当前激活项目(若有)
+        if placedN > 0:
+            self.notifyResourceCreated()
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)

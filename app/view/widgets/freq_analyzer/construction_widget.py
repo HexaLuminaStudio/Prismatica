@@ -60,6 +60,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from app.core.models.project import RESOURCE_TYPE_CONSTRUCTION
 from app.view.widgets.freq_analyzer.construction_engine import (
     ConstructionEngine,
     ConstructionResult,
@@ -69,6 +70,7 @@ from app.view.widgets.freq_analyzer.construction_engine import (
 )
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeSwitchButton,
@@ -224,14 +226,19 @@ class ConstructionWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class ConstructionWidget(AiInsightMixin, QWidget):
+class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     """构式搭配强度分析面板
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
     """
 
     _AI_INSIGHT_PANEL_NAME = "构式分析"
     _AI_INSIGHT_TYPE = "construction"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_CONSTRUCTION
+    _RESOURCE_TITLE_PREFIX = "构式分析"
 
     # POS Pattern 常用示例(下拉框可选)
     PATTERN_PRESETS: List[str] = [
@@ -784,6 +791,9 @@ class ConstructionWidget(AiInsightMixin, QWidget):
         self._renderResults(result)
         # AI 解读:有结果后启用按钮
         self.refreshAiInsightButton()
+        # PRD-002:归档到当前激活项目(若有)
+        if result.matchCount > 0:
+            self.notifyResourceCreated()
         if result.matchCount == 0:
             _showInfoBar(
                 "warning",
@@ -821,6 +831,65 @@ class ConstructionWidget(AiInsightMixin, QWidget):
         if not self._aiHasResult():
             return None
         return ("construction", {"result": self._result})
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """构式分析结果 → 项目资源 payload"""
+        r = getattr(self, "_result", None)
+        if r is None or getattr(r, "matchCount", 0) == 0:
+            return None
+        try:
+            sigSlot = sum(1 for e in r.slotEntries if e.isSignificant)
+            topSlots = r.slotEntries[:5]
+            topText = "、".join(f"{e.slotLabel}={e.word}({e.mi:.1f})" for e in topSlots)
+            summary = (
+                f"构式「{r.patternRaw}」匹配 {r.matchCount} 次,"
+                f"G²={r.logLikelihood:.2f}({'显著' if r.isSignificant else '不显著'}),"
+                f"{len(r.collocates)} 个跨距搭配。"
+                f"Top slot:{topText}"
+            )
+        except Exception:
+            summary = f"构式「{r.patternRaw}」"
+        try:
+            topSlots = [
+                {
+                    "slotLabel": e.slotLabel,
+                    "posTag": e.posTag,
+                    "word": e.word,
+                    "freq": e.freq,
+                    "mi": e.mi,
+                    "logDice": e.logDice,
+                }
+                for e in r.slotEntries[:200]
+            ]
+        except Exception:
+            topSlots = []
+        snapshotData = {
+            "patternRaw": r.patternRaw,
+            "matchCount": r.matchCount,
+            "constructionFreq": r.constructionFreq,
+            "logLikelihood": r.logLikelihood,
+            "isSignificant": r.isSignificant,
+            "topSlotEntries": topSlots,
+            "internalPairsCount": len(r.internalPairs),
+            "collocatesCount": len(r.collocates),
+        }
+        parameters = {
+            "pattern": r.patternRaw,
+            "leftSpan": r.leftSpan,
+            "rightSpan": r.rightSpan,
+            "slotSigThreshold": r.slotSigThreshold,
+            "significanceThreshold": r.significanceThreshold,
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"构式「{r.patternRaw}」({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     # ------------------------------------------------------------------
     def _renderResults(self, r: ConstructionResult):

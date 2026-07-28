@@ -72,6 +72,7 @@ warnings.filterwarnings(
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
+from app.core.models.project import RESOURCE_TYPE_KEYWORD_LIST
 from app.view.widgets.freq_analyzer.corpus_store import CorpusStore
 from app.view.widgets.freq_analyzer.freq_engine import (
     TextSegmenter,
@@ -85,6 +86,7 @@ from app.view.widgets.freq_analyzer.keyword_list_engine import (
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor, ResultSummary
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeSwitchButton,
@@ -829,10 +831,11 @@ class KeywordListWorker(CancellableWorker):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class KeywordListWidget(AiInsightMixin, QWidget, WorkerMixin):
+class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin):
     """Keyword List(主题词 / Keyness)分析面板。
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
 
     UI 布局:
         [ 标题 ]
@@ -851,6 +854,10 @@ class KeywordListWidget(AiInsightMixin, QWidget, WorkerMixin):
 
     _AI_INSIGHT_PANEL_NAME = "关键词列表"
     _AI_INSIGHT_TYPE = "keyword_list"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_KEYWORD_LIST
+    _RESOURCE_TITLE_PREFIX = "关键词分析"
 
     def __init__(
         self,
@@ -1688,6 +1695,68 @@ class KeywordListWidget(AiInsightMixin, QWidget, WorkerMixin):
             return None
         return ("keyword_list", {"result": self._result})
 
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """关键词分析结果 → 项目资源 payload"""
+        r = getattr(self, "_result", None)
+        if r is None or getattr(r, "df", None) is None or len(r.df) == 0:
+            return None
+        try:
+            df = r.df
+            # 取显著词 Top-5 + LL 值
+            top = df.head(5)
+            topText = "、".join(
+                f"{row['Keyword']}(LL={float(row['LL']):.1f})"
+                for _, row in top.iterrows()
+            )
+            summary = (
+                f"关键词分析 {r.observedName} vs {r.referenceName}:"
+                f"显著词 {r.significantCount} 个,候选 {len(df)} 个。"
+                f"Top:{topText}"
+            )
+        except Exception:
+            summary = "关键词分析"
+        try:
+            topRows = []
+            for _, row in df.head(200).iterrows():
+                topRows.append(
+                    {
+                        "keyword": row.get("Keyword", ""),
+                        "obsFreq": int(row.get("ObsFreq", 0)),
+                        "refFreq": int(row.get("RefFreq", 0)),
+                        "ll": float(row.get("LL", 0.0)),
+                        "logRatio": float(row.get("LogRatio", 0.0)),
+                        "pctDiff": float(row.get("PctDiff", 0.0)),
+                        "isKey": bool(row.get("IsKey", False)),
+                    }
+                )
+        except Exception:
+            topRows = []
+        snapshotData = {
+            "observedName": getattr(r, "observedName", ""),
+            "referenceName": getattr(r, "referenceName", ""),
+            "observedTokens": getattr(r, "observedTokens", 0),
+            "referenceTokens": getattr(r, "referenceTokens", 0),
+            "significantCount": getattr(r, "significantCount", 0),
+            "candidateCount": len(df),
+            "topKeywords": topRows,
+        }
+        parameters = {
+            "observedCorpus": getattr(r, "observedName", ""),
+            "referenceCorpus": getattr(r, "referenceName", ""),
+            "significanceLevel": getattr(r, "significanceLevel", 0.0),
+            "method": getattr(r, "method", ""),
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"关键词 ({r.observedName} vs {r.referenceName}) ({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
+
     def _onFinished(self, result: KeywordListResult) -> None:
         self._result = result
         self.runBtn.setEnabled(True)
@@ -1706,6 +1775,10 @@ class KeywordListWidget(AiInsightMixin, QWidget, WorkerMixin):
             self,
             duration=2500,
         )
+
+        # PRD-002:归档到当前激活项目(若有)
+        if result.significantCount > 0 or len(result.df) > 0:
+            self.notifyResourceCreated()
 
     def _onTableRowsReady(
         self,

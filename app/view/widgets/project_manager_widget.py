@@ -295,8 +295,22 @@ class ProjectManagerWidget(QWidget):
     def _doOpen(self, projectId: str) -> None:
         project = projectManager.getProject(projectId)
         if project is None:
+            logger.warning(f"[ProjectManagerWidget] _doOpen: 找不到项目 id={projectId}")
+            InfoBar.error(
+                title="打开失败",
+                content=f"找不到该项目(可能已被删除):{projectId}",
+                parent=self,
+                duration=3000,
+                position=InfoBarPosition.TOP,
+            )
             return
-        projectManager.setActiveProject(projectId)
+        logger.info(
+            f"[ProjectManagerWidget] _doOpen: project={project.name} (id={projectId})"
+        )
+        changed = projectManager.setActiveProject(projectId)
+        # 关键:无论 setActiveProject 是否实际改变(重复点击同一项目
+        # 会返回 False),只要用户点了"打开",就强制通知 ProjectInterface
+        # 切到仪表盘 — 否则会出现"InfoBar 显示但页面不切"的体验问题。
         InfoBar.success(
             title="已切换",
             content=f"已切换到项目「{project.name}」",
@@ -304,6 +318,8 @@ class ProjectManagerWidget(QWidget):
             duration=2000,
             position=InfoBarPosition.TOP,
         )
+        # 显式触发切换信号(此前依赖 activeProjectChanged 间接驱动,
+        # 在重复点击同一项目时该信号不会重发,导致切页失效)。
         self.projectSwitchRequested.emit(projectId)
 
     def _doRename(self, projectId: str) -> None:

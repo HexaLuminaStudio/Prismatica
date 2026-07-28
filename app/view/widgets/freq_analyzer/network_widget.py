@@ -672,14 +672,23 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             )
         except Exception:
             summary = f"网络 {network.nodeCount} 节点 / {network.edgeCount} 边"
+        # 边权重指标:widget 没有 self.metric,只有 edgeWeightCombo
+        # (CooccurrenceNetwork 上也没有 edgeMetric 字段,从 widget 控件取)
+        metricStr = ""
+        try:
+            combo = getattr(self, "edgeWeightCombo", None)
+            if combo is not None:
+                metricStr = str(combo.currentData() or combo.currentText() or "")
+        except Exception:
+            metricStr = ""
         snapshotData = {
             "nodeCount": network.nodeCount,
             "edgeCount": network.edgeCount,
-            "metric": network.edgeMetric,
+            "metric": metricStr,
         }
         parameters = {
             "windowSize": getattr(self, "windowSize", 5),
-            "metric": getattr(self, "metric", "LogDice"),
+            "metric": metricStr,
             "threshold": getattr(self, "threshold", 0),
             "topK": getattr(self, "topK", 50),
         }

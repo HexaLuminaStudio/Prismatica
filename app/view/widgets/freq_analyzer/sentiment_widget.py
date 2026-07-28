@@ -92,8 +92,10 @@ plt.rcParams["font.sans-serif"] = _availableCjkFonts()
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["axes.unicode_minus"] = False
 
+from app.core.models.project import RESOURCE_TYPE_SENTIMENT
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -146,14 +148,19 @@ class SentimentWorker(QThread):
 # ===========================================================================
 # 主面板
 # ===========================================================================
-class SentimentWidget(AiInsightMixin, QWidget):
+class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     """情感分析主面板
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
     """
 
     _AI_INSIGHT_PANEL_NAME = "情感分析"
     _AI_INSIGHT_TYPE = "sentiment"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_SENTIMENT
+    _RESOURCE_TITLE_PREFIX = "情感分析"
 
     def __init__(self, parent=None, corpusStore=None):
         super().__init__(parent)
@@ -420,6 +427,59 @@ class SentimentWidget(AiInsightMixin, QWidget):
             return None
         return ("sentiment", {"result": self._result})
 
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """情感分析结果 → 项目资源 payload"""
+        r: CorpusSentimentResult = getattr(self, "_result", None)
+        if r is None or r.totalDocuments == 0:
+            return None
+        try:
+            polarity = (
+                "积极"
+                if r.avgScore > 0.05
+                else ("消极" if r.avgScore < -0.05 else "中性")
+            )
+            summary = (
+                f"情感分析 {r.totalDocuments} 个文件 / {r.totalSentences} 句,"
+                f"整体倾向「{polarity}」(平均分 {r.avgScore:+.3f}),"
+                f"正面 {r.positiveCount} / 负面 {r.negativeCount} / 中性 {r.neutralCount}"
+            )
+        except Exception:
+            summary = "情感分析结果"
+        try:
+            docSummaries = []
+            for d in r.documents[:20]:
+                docSummaries.append(
+                    {
+                        "name": getattr(d, "fileName", ""),
+                        "score": float(getattr(d, "score", 0.0)),
+                        "sentenceCount": getattr(d, "totalSentences", 0),
+                    }
+                )
+        except Exception:
+            docSummaries = []
+        snapshotData = {
+            "totalDocuments": r.totalDocuments,
+            "totalSentences": r.totalSentences,
+            "avgScore": r.avgScore,
+            "positiveCount": r.positiveCount,
+            "negativeCount": r.negativeCount,
+            "neutralCount": r.neutralCount,
+            "docSummaries": docSummaries,
+        }
+        parameters = {
+            "documentCount": r.totalDocuments,
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"情感分析 ({r.totalDocuments} 文档) ({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
+
     def _onFailed(self, err: str):
         self.runBtn.setEnabled(True)
         self.statusLabel.setText("分析失败")
@@ -456,6 +516,8 @@ class SentimentWidget(AiInsightMixin, QWidget):
             position=InfoBarPosition.TOP_RIGHT,
             parent=self,
         )
+        # PRD-002:归档到当前激活项目(若有)
+        self.notifyResourceCreated()
 
     # ------------------------------------------------------------------
     # 摘要 / 图表

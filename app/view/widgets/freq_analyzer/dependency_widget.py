@@ -51,6 +51,7 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
+from app.core.models.project import RESOURCE_TYPE_DEPENDENCY
 from app.view.widgets.freq_analyzer.dependency_engine import (
     DependencyParse,
     DependencyParser,
@@ -61,6 +62,7 @@ from app.view.widgets.freq_analyzer.dependency_engine import (
 )
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from loguru import logger
@@ -131,18 +133,23 @@ class DependencyAnalysisWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主控件
 # ---------------------------------------------------------------------------
-class DependencyWidget(AiInsightMixin, QWidget):
+class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     """句法依存分析子页面
 
     复用项目标准 UI 模式:
         - 顶部参数卡(输入 + 操作按钮)
         - 中部结果卡(图 + 摘要 + 视图切换)
         - 继承 AiInsightMixin 提供「AI 解读」抽屉能力
+        - 继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
         - 主线程不阻塞,使用 QThread 后台分析
     """
 
     _AI_INSIGHT_PANEL_NAME = "依存分析"
     _AI_INSIGHT_TYPE = "dependency"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_DEPENDENCY
+    _RESOURCE_TITLE_PREFIX = "依存分析"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -414,6 +421,7 @@ class DependencyWidget(AiInsightMixin, QWidget):
     def _onFinished(self, results: List[DependencyParse], backend: str) -> None:
         self.runBtn.setEnabled(True)
         self._results = results
+        self._backend = backend
         self._currentIndex = 0
         self._refreshSentenceSelector()
         if results:
@@ -423,6 +431,9 @@ class DependencyWidget(AiInsightMixin, QWidget):
             self.summaryLabel.setText("分析完成 — 无结果")
         # AI 解读:有结果后启用按钮
         self.refreshAiInsightButton()
+        # PRD-002:归档到当前激活项目(若有)
+        if results:
+            self.notifyResourceCreated()
 
     # ------------------------------------------------------------------
     # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用
@@ -434,6 +445,52 @@ class DependencyWidget(AiInsightMixin, QWidget):
         if not self._aiHasResult():
             return None
         return ("dependency", {"result": self._results})
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """依存分析结果 → 项目资源 payload"""
+        results: List[DependencyParse] = getattr(self, "_results", []) or []
+        if not results:
+            return None
+        try:
+            sentenceSnippets = []
+            for p in results[:3]:
+                if p.text:
+                    snippet = p.text if len(p.text) <= 40 else p.text[:40] + "…"
+                    sentenceSnippets.append(snippet)
+            totalEdges = sum(len(p.edges) for p in results)
+            summary = (
+                f"依存分析 {len(results)} 句,{totalEdges} 条依存边,"
+                f"后端:{getattr(self, '_backend', '')}。"
+                f"样例:{' | '.join(sentenceSnippets)}"
+            )
+        except Exception:
+            summary = f"依存分析 {len(results)} 句"
+        try:
+            conlluSnippets = []
+            for p in results[:5]:
+                conlluSnippets.append(toConllU(p))
+        except Exception:
+            conlluSnippets = []
+        snapshotData = {
+            "sentenceCount": len(results),
+            "totalEdges": sum(len(p.edges) for p in results),
+            "backend": getattr(self, "_backend", ""),
+            "conlluSnippets": conlluSnippets,
+        }
+        parameters = {
+            "sentenceCount": len(results),
+            "backend": getattr(self, "_backend", ""),
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"依存分析 ({len(results)} 句) ({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     def _onFailed(self, err: str) -> None:
         self.runBtn.setEnabled(True)

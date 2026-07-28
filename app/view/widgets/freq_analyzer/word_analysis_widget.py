@@ -63,12 +63,14 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from app.core.models.project import RESOURCE_TYPE_WORD_ANALYSIS
 from app.view.widgets.freq_analyzer.freq_engine import (
     TextSegmenter,
     posTag,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor, ResultSummary
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import _makeSwitchButton, _showInfoBar
 from app.view.widgets.freq_analyzer.word_analysis_engine import (
@@ -221,10 +223,11 @@ class WordAnalysisWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class WordAnalysisWidget(AiInsightMixin, QWidget):
+class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     """词语分析面板
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
 
     UI 布局:
         [ 参数区 ]
@@ -243,6 +246,10 @@ class WordAnalysisWidget(AiInsightMixin, QWidget):
 
     _AI_INSIGHT_PANEL_NAME = "词语分析"
     _AI_INSIGHT_TYPE = "word_analysis"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_WORD_ANALYSIS
+    _RESOURCE_TITLE_PREFIX = "词语分析"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -762,6 +769,9 @@ class WordAnalysisWidget(AiInsightMixin, QWidget):
         )
         # AI 解读:有结果后启用按钮
         self.refreshAiInsightButton()
+        # PRD-002:归档到当前激活项目(若有)
+        if metrics.totalTokens > 0:
+            self.notifyResourceCreated()
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)
@@ -779,6 +789,48 @@ class WordAnalysisWidget(AiInsightMixin, QWidget):
         if not self._aiHasResult():
             return None
         return ("word_analysis", {"result": self._metrics})
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """词语分析结果 → 项目资源 payload"""
+        m: WordMetrics = getattr(self, "_metrics", None)
+        if m is None or getattr(m, "totalTokens", 0) == 0:
+            return None
+        try:
+            summary = (
+                f"词语分析 {m.fileCount} 文件 / {m.totalTokens:,} tokens /"
+                f" {m.totalTypes:,} types;"
+                f" TTR={m.ttr:.3f},词汇密度={m.density:.2%},平均词长={m.avgLength:.2f}"
+            )
+        except Exception:
+            summary = "词语分析结果"
+        snapshotData = {
+            "totalTokens": m.totalTokens,
+            "totalTypes": m.totalTypes,
+            "fileCount": m.fileCount,
+            "contentWordCount": m.contentWordCount,
+            "density": m.density,
+            "avgLength": m.avgLength,
+            "ttr": m.ttr,
+            "guiraud": getattr(m, "guiraud", 0.0),
+            "herdan": getattr(m, "herdan", 0.0),
+            "uber": getattr(m, "uber", 0.0),
+            "mtld": getattr(m, "mtld", 0.0),
+        }
+        parameters = {
+            "fileCount": m.fileCount,
+            "totalTokens": m.totalTokens,
+            "totalTypes": m.totalTypes,
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"词语分析 ({m.fileCount} 文件) ({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     # ------------------------------------------------------------------
     # 结果渲染

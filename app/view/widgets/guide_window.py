@@ -43,6 +43,7 @@ from qfluentwidgets import (
     TransparentPushButton,
     setFont,
 )
+from PySide6.QtWidgets import QSizePolicy
 
 from app.core.utils import cfg, logger, qconfig
 
@@ -87,6 +88,16 @@ class _BaseGuidePage(QWidget):
         # ---- 右侧标题 ----
         self.titleLabel = BodyLabel(title)
         setFont(self.titleLabel, 22, QFont.Weight.Bold)
+        # 2026-07-27 修复引导窗口初始宽度被压窄:
+        # titleLabel 默认 sizeHint 来自自然文字宽度,当外层 stackedWidget
+        # 布局重排时会把它当最小宽度 — 若某页文本恰好偏短,
+        # 整个引导窗口会被收缩成"只能放下标题"的窄条。
+        # 这里强制允许横向扩展 + 自动换行,稳定整页最小宽度。
+        self.titleLabel.setWordWrap(True)
+        self.titleLabel.setMinimumWidth(0)
+        self.titleLabel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         # ---- 内容容器(子类可直接往里 addWidget)----
         self.contentLayout = QVBoxLayout()
@@ -109,6 +120,15 @@ class _BaseGuidePage(QWidget):
         self._hBoxLayout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self._hBoxLayout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignVCenter)
         self._hBoxLayout.addLayout(self.contentLayout, 1)
+
+        # 2026-07-27 修复引导窗口初始宽度被压窄:
+        # page 本身若不设最小宽度,ProGuideWindow 内部的 stackedWidget
+        # 在 addPage 后会按"全部页面 sizeHint 的最大值"取最小尺寸。
+        # 但因为 contentLayout 默认是 Preferred,某页内容较少的页面
+        # 会把外层拉窄。强制 page 最小宽度,保证所有页面统一宽。
+        self.setMinimumWidth(720)
+        # 强制 Expanding,禁止被 stackedWidget 收缩
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
 
 # ----------------------------------------------------------------------
@@ -870,6 +890,45 @@ class GuideWindow(QObject):
                 self.previousButton.setText("上一步")
                 self.nextButton.setText("下一步")
                 self.launchButton.setText("完成")
+
+                # 2026-07-27 修复引导窗口初始宽度被压窄:
+                # ProGuideWindow 内部有 stackedWidget 装载各 page,
+                # 默认 sizePolicy 允许它在内容变化时压缩整体宽度,
+                # 表现出来就是「刚启动时窗口很窄,拖动后才恢复」。
+                # 强制设最小宽度 + Expanding policy,锁定窗口宽度。
+                sw = getattr(self, "stackedWidget", None)
+                if sw is not None:
+                    try:
+                        sw.setMinimumWidth(GuideWindow._WINDOW_DEFAULT_SIZE[0])
+                        sw.setSizePolicy(
+                            QSizePolicy.Policy.Expanding,
+                            QSizePolicy.Policy.Expanding,
+                        )
+                    except Exception:
+                        pass
+
+            def showEvent(self, event):
+                """窗口首次显示时再强制校准一次宽度。
+
+                2026-07-27 修复:
+                setMinimumSize + setSizePolicy 在某些 ProGuideWindow
+                内部布局链下,首次 exec() 仍可能出现宽度被压成图标宽。
+                在 showEvent 里再次 resize 到默认尺寸,作为最终兜底。
+                """
+                super().showEvent(event)
+                try:
+                    # 先让 Qt 完成一次完整 layout pass
+                    self.layout().activate() if self.layout() else None
+                    # 再 resize 到默认尺寸,覆盖可能存在的窄 geometry
+                    targetW, targetH = GuideWindow._WINDOW_DEFAULT_SIZE
+                    if self.width() < targetW or self.height() < targetH:
+                        self.resize(targetW, targetH)
+                        # 再触发一次 processEvents 让新尺寸生效
+                        from PySide6.QtWidgets import QApplication
+
+                        QApplication.processEvents()
+                except Exception:
+                    pass
 
             def closeEvent(self, event: QCloseEvent):
                 """关闭按钮处理:

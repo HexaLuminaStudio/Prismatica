@@ -944,10 +944,62 @@ def _jsonLoadListOfDict(raw: Optional[str]) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# 模块级单例访问器(对齐 taskManager 风格)
+# 模块级单例访问器(对齐 taskManager 风格,但延迟实例化)
+#
+# 设计要点(2026-07-27 修复):
+#   - 历史实现:`projectManager = ProjectManager.instance()` 在模块底部立即执行,
+#     导致任何 `from app.core.services import projectManager` 都会在 import 阶段
+#     触发 SQLite 加载,影响 splash 之前的启动时序。
+#   - 新实现:使用 `__getattr__` 代理,首次访问任意属性时才真正调用
+#     `ProjectManager.instance()`。这样:
+#       * `from app.core.services import projectManager` 不再触发 SQLite I/O
+#       * `projectManager.activeProject()` / `projectManager.addResource(...)` /
+#         信号连接 (`projectManager.activeProjectChanged.connect(...)`) 等
+#         首次访问时才触发 SQLite 加载 + 信号连接
+#       * main.py 可以在 splash 显示后再访问 projectManager 触发预热,
+#         或者通过 ProjectManager.instance() 显式预热
+#   - 兼容性:对调用方完全透明 — 仍是同一个对象实例,所有方法/信号不变。
 # ---------------------------------------------------------------------------
 
-projectManager = ProjectManager.instance()
+
+class _LazyProjectManagerProxy:
+    """延迟初始化的 ProjectManager 模块级访问器。
+
+    任何属性访问都会触发 `ProjectManager.instance()`,后续访问复用同一实例。
+    为保持与原模块对象完全兼容(支持 `isinstance`/`pdb` 等检查),
+    实现了必要的魔术方法。
+    """
+
+    __slots__ = ("_instance",)
+
+    def __init__(self) -> None:
+        self._instance = None
+
+    def _getInstance(self) -> "ProjectManager":
+        """首次访问时真正创建单例。"""
+        if self._instance is None:
+            self._instance = ProjectManager.instance()
+        return self._instance
+
+    def __getattr__(self, name: str):
+        # __slots__ / __init__ 等自身属性由 Python 正常处理,
+        # 其余属性全部转发到真实实例。
+        return getattr(self._getInstance(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        # `_instance` 走正常赋值;其他属性转发到真实实例。
+        if name == "_instance":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._getInstance(), name, value)
+
+    def __repr__(self) -> str:
+        if self._instance is None:
+            return "<LazyProjectManagerProxy(uninitialized)>"
+        return repr(self._instance)
+
+
+projectManager = _LazyProjectManagerProxy()
 
 
 # ---------------------------------------------------------------------------

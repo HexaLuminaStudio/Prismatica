@@ -26,30 +26,84 @@ from .project_interface import ProjectInterface
 
 class MainWindow(MSFluentWindow):
 
-    def __init__(self):
+    def __init__(self, progressCallback=None, startHidden: bool = False):
+        """主窗口构造。
+
+        Args:
+            progressCallback: 可选进度回调,签名 (pct: int, text: str) -> None。
+                              启动 splash 流程时会传入,用于上报各阶段加载进度;
+                              普通调用方无需关心,保持 None 即可。
+            startHidden: 是否在构造期间隐藏窗口(不自动 show())。
+                        - True: 用于 splash 流程 — 构造期间窗口隐藏,
+                          由外部在启动彻底完成后调用 _showAfterStartup() 显示,
+                          避免「主窗口闪现未初始化状态」。
+                        - False(默认): 兼容旧调用方 — initWindow() 内会照常
+                          调用 self.show()。
+        """
+        self._progressCallback = progressCallback
+        self._startHidden = bool(startHidden)
+        self._startupShown = False  # 是否已通过 _showAfterStartup() 显示过
+        # 项目管理页「锁定态」:AI 报告生成期间锁住页面交互,
+        # 此时不允许通过导航栏离开项目管理页,也不允许直接关闭主窗口。
+        self._projectBusy: bool = False
         logger.info("[MainWindow] 开始初始化主窗口")
+        # 主窗口构造区间:30% ~ 95%(由 SplashLoader 协调,前面 0~30% 是
+        # 项目预热 / 许可证 / 引导窗口)。拆成多个小步,每个子界面独立上报,
+        # 让 splash 进度条在追赶动画下能看到数字持续变化。
+        self._reportProgress(30, "初始化主窗口框架")
         super().__init__()
         setThemeColor("#00b09c")
         self.setTitleBar(CustomTitleBar(self))
         self.initWindow()
-
+        self._reportProgress(35, "构造 HSK 下载界面")
         self.hskInterface = HskInterface(self)
+
+        self._reportProgress(40, "构造全球中介下载界面")
         self.globalInterface = GlobalInterface(self)
+
+        self._reportProgress(45, "构造偏误统计界面")
         self.biasInterface = BiasInterface(self)
+
+        self._reportProgress(50, "构造词频分析界面")
         self.freqAnalyzerInterface = FreqAnalyzerInterface(self)
+
+        self._reportProgress(58, "构造任务管理界面")
         self.taskInterface = TaskInterface(self)
+
+        self._reportProgress(65, "构造 AI 聊天界面")
         self.chatInterface = ChatInterface(self)
+
+        self._reportProgress(72, "构建设置界面")
         self.settingInterface = SettingInterface(self)
+
         # PRD-002:项目管理子界面(REQ-PROJ-001)
+        self._reportProgress(80, "构造项目管理界面")
         self.projectInterface = ProjectInterface(self)
         # 仪表盘的「跳转分析模块」信号 → 切到对应分析页(目前所有资源类型
         # 都映射到 FreqAnalyzerInterface,后续按 moduleKey 分流)
         self.projectInterface.jumpToModule.connect(self._onProjectJumpToModule)
 
+        self._reportProgress(85, "绑定信号与项目切换器")
         self.connectSignalToSlot()
 
+        self._reportProgress(90, "加载导航菜单")
         self.initNavigation()
+        self._reportProgress(95, "准备完成")
         logger.info("[MainWindow] 主窗口初始化完成")
+
+    def _reportProgress(self, pct: int, text: str) -> None:
+        """上报当前加载阶段。
+
+        - 仅在传入了 progressCallback 时生效,普通调用完全无副作用
+        - 用 try/except 包住,避免回调异常中断主窗口构造
+        """
+        cb = self._progressCallback
+        if cb is None:
+            return
+        try:
+            cb(int(pct), str(text))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[MainWindow] 进度回调异常: {e}")
 
     def connectSignalToSlot(self):
         logger.debug("[MainWindow] 连接信号和槽")
@@ -65,6 +119,49 @@ class MainWindow(MSFluentWindow):
                 switcher.newRequested.connect(self._onProjectNewRequested)
         except Exception as e:
             logger.warning(f"[MainWindow] 连接项目切换器信号失败: {e}")
+
+        # 项目管理页 busy 状态(AI 报告生成)→ 锁定导航切换 + 拦截关闭
+        try:
+            self.projectInterface.busyChanged.connect(self._onProjectBusyChanged)
+            # 监听 stackedWidget 切换:若 busy 时被切到非项目管理页,自动拉回
+            self.stackedWidget.currentChanged.connect(self._onStackCurrentChanged)
+        except Exception as e:
+            logger.warning(f"[MainWindow] 连接项目管理 busy 信号失败: {e}")
+
+    def _onProjectBusyChanged(self, busy: bool) -> None:
+        """项目管理页 AI 报告生成状态变化。"""
+        self._projectBusy = bool(busy)
+        logger.info(f"[MainWindow] projectBusy={busy}")
+
+    def _onStackCurrentChanged(self, index: int) -> None:
+        """stackedWidget 切换时检查:若 _projectBusy 且切到非项目管理页,拉回。
+
+        qfluentwidgets 的导航栏在用户点击其他模块时会调用
+        ``stackedWidget.setCurrentWidget(...)``,这里在 currentChanged
+        钩子里拦截,保证用户在 AI 报告生成中无法离开项目管理页。
+        """
+        if not self._projectBusy:
+            return
+        try:
+            currentWidget = self.stackedWidget.widget(index)
+            if currentWidget is self.projectInterface:
+                return
+            # 切到了其他页面 → 拉回项目管理页 + 提示用户
+            from qfluentwidgets import InfoBar, InfoBarPosition
+
+            self.stackedWidget.setCurrentWidget(self.projectInterface)
+            InfoBar.warning(
+                title="AI 报告生成中",
+                content="请等待当前报告生成完成,期间无法离开项目管理页。",
+                parent=self,
+                duration=2500,
+                position=InfoBarPosition.TOP,
+            )
+            logger.info(
+                f"[MainWindow] busy 中拦截切页 → 已拉回 projectInterface (was idx={index})"
+            )
+        except Exception as e:
+            logger.warning(f"[MainWindow] busy 拦截切页失败: {e}")
 
     def _onProjectManageRequested(self) -> None:
         """用户从顶栏下拉选「项目管理」入口 — 切到项目管理页"""
@@ -268,12 +365,86 @@ class MainWindow(MSFluentWindow):
         self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
         logger.debug("[MainWindow] 已移动窗口到屏幕中心")
 
-        self.show()
-        QApplication.processEvents()
-        logger.info("[MainWindow] 窗口初始化完成并显示")
+        if self._startHidden:
+            # 启动 splash 流程:此时窗口隐藏(避免「未初始化完成」闪现),
+            # 等外部在启动彻底完成后调用 _showAfterStartup() 再显示。
+            logger.info(
+                "[MainWindow] startHidden=True,窗口暂不显示,等待 _showAfterStartup()"
+            )
+        else:
+            # 兼容旧调用方:照常 show
+            self.show()
+            QApplication.processEvents()
+            logger.info("[MainWindow] 窗口初始化完成并显示")
+
+    def _showAfterStartup(self) -> None:
+        """启动彻底完成后由外部调用:显示主窗口。
+
+        调用时机会在 main.py 中协调 — 通常是 SplashLoader 触发
+        startupCompleted 信号后,主窗口已就绪 + splash 已淡出,
+        此时再 show() 让用户「一步到位」看到完整主窗口,避免闪现。
+        重复调用安全(只生效一次)。
+
+        2026-07-27 调整:即使 SplashLoader 已 fadedOut 之后才调用,
+        这里再做一次「主动抢焦点」+「清掉可能的 WindowStaysOnTopHint 残留」,
+        进一步保证主窗口稳定显示在最前,避免极端场景下与 splash 残留窗口
+        (即便已销毁)或系统弹窗出现层级混乱。
+        """
+        if self._startupShown:
+            logger.debug("[MainWindow] _showAfterStartup 重复调用,忽略")
+            return
+        self._startupShown = True
+        try:
+            # 主动清掉最顶标志(主窗口不需要始终置顶,避免压住其他正常窗口)
+            try:
+                from PySide6.QtCore import Qt
+
+                flags = self.windowFlags()
+                if bool(flags & Qt.WindowType.WindowStaysOnTopHint):
+                    self.setWindowFlags(flags & ~Qt.WindowType.WindowStaysOnTopHint)
+            except Exception:
+                pass
+            self.show()
+            QApplication.processEvents()
+            # raise_() 让窗口激活到前台(Win10 上 show() 不一定抢焦点)
+            self.raise_()
+            self.activateWindow()
+            # 再 processEvents 一次,确保事件循环消化后窗口层级稳定
+            QApplication.processEvents()
+            logger.info("[MainWindow] 启动彻底完成,窗口已显示")
+        except Exception as e:
+            logger.exception(f"[MainWindow] _showAfterStartup 显示失败: {e}")
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        # PRD-002:项目管理页 AI 报告生成期间禁止关闭主窗口(防止打断生成)
+        if self._projectBusy:
+            try:
+                from qfluentwidgets import InfoBar, InfoBarPosition, MessageBox
+
+                mb = MessageBox(
+                    "AI 报告生成中",
+                    "当前正在生成 AI 报告,关闭程序会中断生成过程。\n\n"
+                    "确定要强制关闭吗?",
+                    self,
+                )
+                mb.yesButton.setText("强制关闭")
+                mb.cancelButton.setText("继续等待")
+                if not mb.exec():
+                    event.ignore()
+                    InfoBar.warning(
+                        title="已取消关闭",
+                        content="请等待 AI 报告生成完成后再关闭。",
+                        parent=self,
+                        duration=2000,
+                        position=InfoBarPosition.TOP,
+                    )
+                    logger.info("[MainWindow] busy 中用户取消关闭")
+                    return
+                logger.warning("[MainWindow] busy 中用户强制关闭,AI 报告将被打断")
+            except Exception as e:
+                logger.warning(f"[MainWindow] busy 拦截关闭异常(放行): {e}")
+
         # 检查是否有进行中或等待中的任务
         # P0-A1 fix 2026-07-18:不再直接调 taskControl,改走 TaskManager 高阶接口
         pendingTasks = taskManager.getPendingTasksFromDb()

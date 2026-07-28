@@ -53,12 +53,14 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from app.core.models.project import RESOURCE_TYPE_COLLOCATION
 from app.view.widgets.freq_analyzer.collocation_engine import (
     CollocationEngine,
     CollocationResult,
 )
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.freq_engine import TextSegmenter
+from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.view.widgets.freq_analyzer.token_cache import TokenCache
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeSwitchButton,
@@ -228,10 +230,11 @@ class CollocationWorker(QThread):
 # ---------------------------------------------------------------------------
 # 主面板
 # ---------------------------------------------------------------------------
-class CollocationWidget(AiInsightMixin, QWidget):
+class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     """搭配分析面板
 
     继承 AiInsightMixin 提供「AI 解读」抽屉能力
+    继承 ResourceSinkMixin 提供分析结果自动归档到当前激活项目的能力
 
     UI 布局:
         [ 参数区 ]
@@ -250,6 +253,10 @@ class CollocationWidget(AiInsightMixin, QWidget):
 
     _AI_INSIGHT_PANEL_NAME = "搭配分析"
     _AI_INSIGHT_TYPE = "collocation"
+
+    # PRD-002 资源归档配置(REQ-PROJ-001)
+    _RESOURCE_TYPE = RESOURCE_TYPE_COLLOCATION
+    _RESOURCE_TITLE_PREFIX = "搭配分析"
 
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
@@ -741,6 +748,8 @@ class CollocationWidget(AiInsightMixin, QWidget):
         )
         # AI 解读:结果出来后启用按钮
         self.refreshAiInsightButton()
+        # PRD-002:归档到当前激活项目(若有)
+        self.notifyResourceCreated()
 
     def _resetUi(self):
         self.runBtn.setEnabled(True)
@@ -758,6 +767,61 @@ class CollocationWidget(AiInsightMixin, QWidget):
         if not self._aiHasResult():
             return None
         return ("collocation", {"result": self._result})
+
+    # ------------------------------------------------------------------
+    # PRD-002 资源归档钩子(ResourceSinkMixin)
+    # ------------------------------------------------------------------
+    def _collectResourcePayload(self):
+        """搭配分析结果 → 项目资源 payload"""
+        r = getattr(self, "_result", None)
+        if r is None or not getattr(r, "collocates", []):
+            return None
+        try:
+            top = r.collocates[:5]
+            topText = "、".join(f"{e.collocate}(MI={e.mi:.2f})" for e in top)
+            summary = (
+                f"节点「{r.nodeWord}」(R={r.nodeFreq:,}) 共 {len(r.collocates)} 个搭配词,"
+                f"显著(MI≥{r.significanceThreshold:.1f}) {r.significantCount} 个。"
+                f"Top:{topText}"
+            )
+        except Exception:
+            summary = f"节点「{r.nodeWord}」搭配分析"
+        try:
+            topRows = [
+                {
+                    "collocate": e.collocate,
+                    "freq": e.freq,
+                    "mi": e.mi,
+                    "mi3": e.mi3,
+                    "tScore": e.tScore,
+                    "logDice": e.logDice,
+                    "zScore": e.zScore,
+                }
+                for e in r.collocates[:200]
+            ]
+        except Exception:
+            topRows = []
+        snapshotData = {
+            "nodeWord": r.nodeWord,
+            "nodeFreq": r.nodeFreq,
+            "collocateCount": len(r.collocates),
+            "significantCount": r.significantCount,
+            "topCollocates": topRows,
+        }
+        parameters = {
+            "nodeWord": r.nodeWord,
+            "leftSpan": r.leftSpan,
+            "rightSpan": r.rightSpan,
+            "significanceThreshold": r.significanceThreshold,
+            "continuityCorrection": r.continuityCorrection,
+        }
+        ts = self._buildDefaultTitle().split(" ", 1)[1]
+        return {
+            "title": f"搭配「{r.nodeWord}」({ts})",
+            "summary": summary[:200],
+            "parameters": parameters,
+            "snapshotData": snapshotData,
+        }
 
     # ------------------------------------------------------------------
     # 结果渲染

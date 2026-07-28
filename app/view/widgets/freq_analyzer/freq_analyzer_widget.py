@@ -176,7 +176,14 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     def _aiCollectExplainArgs(self):
         if not self._aiHasResult():
             return None
-        return ("freq", {"rows": self.unigramDf})
+        # insight_prompts.buildFreqPrompt 期望 rows 为 list[dict],
+        # 不能直接传 DataFrame —— 否则 "data.get("rows") or []"
+        # 会在 DataFrame 上触发真值判断(ValueError: ambiguous truth value)
+        try:
+            rows = self.unigramDf.head(100).to_dict(orient="records")
+        except Exception:
+            rows = []
+        return ("freq", {"rows": rows})
 
     def _collectCorpusMeta(self) -> Dict[str, Any]:
         """汇总语料元信息，喂给 AI 服务"""

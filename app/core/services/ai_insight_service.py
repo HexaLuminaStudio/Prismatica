@@ -17,7 +17,7 @@ AI 解读服务门面（PRD-001 REQ-AI-001）
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
@@ -184,7 +184,7 @@ class AiInsightService(QObject):
             return GuardResult(False, f"未知的分析类型: {analysisType}")
 
         if analysisType == TYPE_FREQ:
-            rows = summarizeFreqData(data.get("rows"), maxRows=50)
+            rows = _summarizeRows(data.get("rows"), maxRows=50)
             if not rows:
                 return GuardResult(False, "没有可解读的词频数据。")
         elif analysisType == TYPE_NETWORK:
@@ -335,3 +335,43 @@ class GuardResult:
     def __init__(self, ok: bool, reason: str = ""):
         self.ok = ok
         self.reason = reason
+
+
+def _summarizeRows(rows: Any, maxRows: int = 50) -> List[Dict[str, Any]]:
+    """把 freq 词频行规整成 list[dict]。
+
+    兼容三种入参:
+        - pandas DataFrame（自带 .head / .to_dict）
+        - list / tuple（widget 已转换过的记录列表）
+        - None / 其他类型（视为空）
+
+    取前 maxRows 行(列表切片 / DataFrame.head),失败返回 []。
+    """
+    if rows is None:
+        return []
+    # pandas DataFrame
+    try:
+        import pandas as _pd  # noqa: PLC0415
+
+        if isinstance(rows, _pd.DataFrame):
+            if rows.empty:
+                return []
+            return rows.head(maxRows).to_dict(orient="records")
+    except Exception:
+        pass
+    # list / tuple of dict
+    if isinstance(rows, (list, tuple)):
+        out: List[Dict[str, Any]] = []
+        for item in list(rows)[:maxRows]:
+            if isinstance(item, dict):
+                out.append(item)
+            else:
+                # 非 dict 行(如 NamedTuple / dataclass)转 dict
+                try:
+                    out.append(
+                        dict(item) if hasattr(item, "__dict__") else {"value": item}
+                    )
+                except Exception:
+                    continue
+        return out
+    return []
