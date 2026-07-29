@@ -6,12 +6,37 @@
 
 import hashlib
 import platform
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 
 from loguru import logger
 
 from .encryption import AESCipherGCM, deriveKey, hash256
+
+
+_IS_WINDOWS = sys.platform.startswith("win")
+# Windows: 隐藏子进程控制台窗口,防止 GUI 进程启动 wmic 时弹出 conhost 终端
+_CREATE_NO_WINDOW = 0x08000000
+
+
+def _runHidden(cmd, timeout=5):
+    """运行子进程但不弹出控制台窗口。
+
+    Windows 下 subprocess 启动外部命令时,若无创建标志,系统会为该子进程
+    派生一个 conhost.exe 窗口。对于 GUI 程序(主进程无控制台),这部分窗口
+    会残留在桌面上,且部分用户的 wmic 在兼容层下会卡住,导致"启动期弹出
+    多个终端且无法关闭"的问题。这里统一加 CREATE_NO_WINDOW 标志。
+    """
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+    }
+    if _IS_WINDOWS:
+        kwargs["creationflags"] = _CREATE_NO_WINDOW
+    return subprocess.run(cmd, **kwargs)
 
 
 # P1-fix 2026-07-18:设备特征采集的安全阈值。
@@ -74,12 +99,9 @@ class DeviceIdentifier:
         try:
             if platform.system() == "Windows":
                 # Windows 系统：读取注册表或使用 WMI
-                import subprocess
-
-                result = subprocess.run(
+                # 使用 _runHidden 避免弹出 conhost 终端窗口
+                result = _runHidden(
                     ["wmic", "baseboard", "get", "SerialNumber"],
-                    capture_output=True,
-                    text=True,
                     timeout=5,
                 )
                 serial = result.stdout.strip().split("\n")[-1].strip()
@@ -102,12 +124,9 @@ class DeviceIdentifier:
         """
         try:
             if platform.system() == "Windows":
-                import subprocess
-
-                result = subprocess.run(
+                # 使用 _runHidden 避免弹出 conhost 终端窗口
+                result = _runHidden(
                     ["wmic", "diskdrive", "get", "SerialNumber"],
-                    capture_output=True,
-                    text=True,
                     timeout=5,
                 )
                 serial = result.stdout.strip().split("\n")[-1].strip()

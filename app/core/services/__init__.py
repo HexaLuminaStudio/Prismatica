@@ -12,6 +12,7 @@ from .hsk_download import HSKDownloadWorker
 from .chat_service import ChatService, LLMThread
 from .ai_insight_service import AiInsightService
 from .project_manager import ProjectManager, projectManager
+from .hsk_corpus_service import HskCorpusService, hskCorpusService
 
 __all__ = [
     "HskTokenRefreshThread",
@@ -27,4 +28,6 @@ __all__ = [
     "AiInsightService",
     "ProjectManager",
     "projectManager",
+    "HskCorpusService",
+    "hskCorpusService",
 ]

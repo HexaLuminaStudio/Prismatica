@@ -14,7 +14,7 @@ from qfluentwidgets import (
     Theme,
 )
 
-from .setting import CONFIG_FILE, DOWNLOAD_FOLDER
+from .setting import CONFIG_FILE, DOWNLOAD_FOLDER, INSTALL_DIR, DATA_FOLDER
 
 
 def isWin11():
@@ -117,6 +117,43 @@ class Config(QConfig):
         "AiInsightStyle",
         "学术",
         OptionsValidator(["学术", "通俗", "简洁"]),
+    )
+
+    # ============================================================
+    # HSK 语料检索库（独立 SQLite + 全 NOCASE 索引）
+    # - DbEnabled:    是否启用本模块
+    # - DbPath:       SQLite 数据库绝对路径,默认 <DATA>/corpora/hsk_corpus.db
+    # - ImportOnStartup: 启动期是否自动从 XlsxPath 导入
+    # - XlsxPath:     Excel 数据源路径
+    # - SearchLimit:  单次检索返回行数上限
+    # ============================================================
+    HskCorpusDbEnabled = ConfigItem(
+        "HskCorpus",
+        "DbEnabled",
+        True,
+        BoolValidator(),
+    )
+    HskCorpusDbPath = ConfigItem(
+        "HskCorpus",
+        "DbPath",
+        str(DATA_FOLDER / "corpora" / "hsk_corpus.db"),
+    )
+    HskCorpusImportOnStartup = ConfigItem(
+        "HskCorpus",
+        "ImportOnStartup",
+        False,
+        BoolValidator(),
+    )
+    HskCorpusXlsxPath = ConfigItem(
+        "HskCorpus",
+        "XlsxPath",
+        str(INSTALL_DIR / "test" / "hsk_corpus.xlsx"),
+    )
+    HskCorpusSearchLimit = OptionsConfigItem(
+        "HskCorpus",
+        "SearchLimit",
+        500,
+        OptionsValidator([100, 200, 500, 1000, 2000]),
     )
 
 

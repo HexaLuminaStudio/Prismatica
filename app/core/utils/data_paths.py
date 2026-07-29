@@ -79,6 +79,12 @@ PROJECTS_DIR: Final[Path] = DATA_DIR / "projects"
 # 当前激活项目 id 记忆(JSON)
 PROJECT_STATE_FILE: Final[Path] = DATA_DIR / "project_state.json"
 
+# HSK 作文语料专用库(独立 db 文件,与 default.db 平级)
+# 用途:静态检索语料(从 Excel 一次性导入 + 全文本列 NOCASE 索引)
+# 与 CorpusStore 的 FTS5 互补:本库只读,适合「按列 LIKE 模糊查询」场景
+HSK_CORPUS_DB: Final[Path] = CORPORA_DIR / "hsk_corpus.db"
+HSK_CORPUS_SCHEMA_VERSION: Final[int] = 1
+
 
 # ---------------------------------------------------------------------------
 # 旧路径(用于迁移)

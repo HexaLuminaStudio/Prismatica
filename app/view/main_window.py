@@ -16,6 +16,7 @@ from app.core.utils.config import cfg, qconfig
 from app.core.services import taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .hsk_interface import HskInterface
+from .hsk_corpus_interface import HskCorpusInterface
 from .global_interface import GlobalInterface
 from .bias_interface import BiasInterface
 from .freq_analyzer_interface import FreqAnalyzerInterface
@@ -58,6 +59,9 @@ class MainWindow(MSFluentWindow):
         self.initWindow()
         self._reportProgress(35, "构造 HSK 下载界面")
         self.hskInterface = HskInterface(self)
+
+        self._reportProgress(38, "构造 HSK 作文检索界面")
+        self.hskCorpusInterface = HskCorpusInterface(self)
 
         self._reportProgress(40, "构造全球中介下载界面")
         self.globalInterface = GlobalInterface(self)
@@ -293,6 +297,13 @@ class MainWindow(MSFluentWindow):
             self.hskInterface,
             QIcon(":app/icons/Hsk.svg"),
             "HSK下载",
+            position=NavigationItemPosition.TOP,
+        )
+        # HSK 作文语料检索:与 HSK 下载同级,共用 Dictionary.svg
+        self.addSubInterface(
+            self.hskCorpusInterface,
+            QIcon(":app/icons/Dictionary.svg"),
+            "HSK作文检索",
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
