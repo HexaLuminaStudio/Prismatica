@@ -9,10 +9,16 @@ HSK 语料检索服务层
     - rowCount()        总行数
     - availableColumns() 可检索列名(UI 填充下拉框)
     - search()          按列 LIKE 模糊检索(白名单 + 通配符转义)
+    - searchByScore()   按分数列做区间检索(支持 70-85 / >=70 / <85 等格式)
 
 可检索列白名单(8 列,文本 3 + 分数 5):
     - 国籍 / 证书级别 / 作文题目
     - 听力理解分数 / 阅读理解分数 / 综合表达考试分数 / 口试分数 / 作文分数
+
+分数列检索:
+    - 用户输入形如 70-85 / 70~85 / 70 to 85 / >=70 / <85 等区间字符串
+    - parseScoreRange() 解析为 {"min": int|None, "max": int|None}
+    - SQL 走 >= / <= 范围比较,11337 行 < 5ms
 
 注:
     - db schema 仍保留全部列,只是 UI 不开放其他列的检索入口
@@ -24,6 +30,7 @@ HSK 语料检索服务层
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -68,6 +75,27 @@ _SEARCHABLE_COLUMNS: List[str] = [
     "口试分数",  # 分数
     "作文分数",  # 分数
 ]
+
+# 分数列(走区间检索,不走 LIKE)
+_SCORE_COLUMNS: List[str] = [
+    "听力理解分数",
+    "阅读理解分数",
+    "综合表达考试分数",
+    "口试分数",
+    "作文分数",
+]
+
+# 文本列(走 LIKE 模糊检索)
+_TEXT_COLUMNS: List[str] = [
+    "国籍",
+    "证书级别",
+    "作文题目",
+]
+
+# 空值哨兵:UI 选择「证书级别 = 无」时,在 conditions 里以这个 keyword 传递,
+# service 端识别后转写为 `col IS NULL OR TRIM(col) = ''`。
+# 不使用空串 / None,避免被当作"未填写条件"过滤掉。
+_EMPTY_KEYWORD_SENTINEL: str = "__EMPTY__"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +152,148 @@ def _escapeLike(raw: str) -> str:
     if not raw:
         return ""
     return raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# ---------------------------------------------------------------------------
+# 分数区间解析
+# ---------------------------------------------------------------------------
+# 支持以下写法(全部大小写不敏感,允许中英文符号):
+#   70-85   /   70~85   /   70—85   /   70~85
+#   >=70    /   >=70-<=85   /   >70-<85
+#   <85     /   <=85
+#   70      (单值 → 区间 [70, 70])
+#   , 70-85 (允许首尾空白)
+#
+# 解析返回 dict: {"min": int|None, "max": int|None, "raw": str}
+#   - min 为 None 表示无下界
+#   - max 为 None 表示无上界
+#   - raw 是清洗后的输入(供 UI 反馈)
+_SCORE_RANGE_PATTERN = re.compile(
+    r"""
+    \s*
+    (?: >= | > | <= | < )?       # 允许单边比较符开头
+    \s*
+    -?\d+                          # 第一个数字
+    \s*
+    (?: - | ~ | — | – | to )      # 分隔符
+    \s*
+    -?\d+                          # 第二个数字
+    |
+    \s*
+    (?: >= | > )                   # 大于
+    \s*
+    -?\d+
+    |
+    \s*
+    (?: <= | < )                   # 小于
+    \s*
+    -?\d+
+    |
+    \s*
+    -?\d+                          # 纯数字
+    \s*
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def parseScoreRange(raw: str) -> Dict[str, Optional[int]]:
+    """解析分数区间字符串。
+
+    支持写法(全部可选空白):
+        - "70-85" / "70~85" / "70—85" / "70–85" / "70 to 85"
+        - ">=70-<=85" / ">70-<85" / ">=70" / "<85" / ">70" / "<=85"
+        - "70"(单值 → [70, 70])
+        - 空字符串 → {"min": None, "max": None, "raw": ""}
+
+    Returns:
+        {"min": int | None, "max": int | None, "raw": str}
+        若解析失败,抛出 ValueError(包含原始输入,便于 UI 反馈)。
+    """
+    if raw is None:
+        return {"min": None, "max": None, "raw": ""}
+    text = str(raw).strip()
+    if not text:
+        return {"min": None, "max": None, "raw": ""}
+
+    # 统一分隔符:—、–、to、~ 都视作 "-"
+    normalized = (
+        text.replace("—", "-")
+        .replace("–", "-")
+        .replace("~", "-")
+        .replace("to", "-", 1)
+        .replace("TO", "-", 1)
+        .replace("To", "-", 1)
+    )
+    # 去掉空格
+    normalized = re.sub(r"\s+", "", normalized)
+
+    # 形如 ">=70-<=85" / ">70-<85":拆分为两段
+    m = re.match(
+        r"^(?P<op1>>=|<=|>|<)(?P<n1>-?\d+)-(?P<op2>>=|<=|>|<)(?P<n2>-?\d+)$",
+        normalized,
+    )
+    if m:
+        op1, n1 = m.group("op1"), m.group("n1")
+        op2, n2 = m.group("op2"), m.group("n2")
+        # 形如 ">70-<=85":op1='>', n1='70', op2='<=', n2='85'
+        lo: Optional[float]
+        hi: Optional[float]
+        if op1 == ">=":
+            lo = float(n1)
+        elif op1 == ">":
+            lo = float(n1) + 1
+        elif op1 == "<=":
+            hi = float(n1)  # 左闭右闭区间 "<=70-<=85" 不规范,但宽松处理
+            lo = None
+        else:  # op1 == "<"
+            hi = float(n1) - 1
+            lo = None
+        # 上界
+        if op2 == "<=":
+            hi = float(n2)
+        elif op2 == "<":
+            hi = float(n2) - 1
+        elif op2 == ">=":
+            lo = float(n2)
+        else:  # op2 == ">"
+            lo = float(n2) + 1
+        return {
+            "min": int(lo) if lo is not None else None,
+            "max": int(hi) if hi is not None else None,
+            "raw": text,
+        }
+
+    # 形如 "70-85"
+    m = re.match(r"^(?P<lo>-?\d+)-(?P<hi>-?\d+)$", normalized)
+    if m:
+        lo = int(m.group("lo"))
+        hi = int(m.group("hi"))
+        if lo > hi:
+            raise ValueError(f"区间下限大于上限:{text!r}")
+        return {"min": lo, "max": hi, "raw": text}
+
+    # 形如 ">=70" / ">70"
+    m = re.match(r"^(?P<op>>=|<=|>|<)(?P<n>-?\d+)$", normalized)
+    if m:
+        op, n = m.group("op"), m.group("n")
+        num = int(n)
+        if op == ">=":
+            return {"min": num, "max": None, "raw": text}
+        if op == ">":
+            return {"min": num + 1, "max": None, "raw": text}
+        if op == "<=":
+            return {"min": None, "max": num, "raw": text}
+        if op == "<":
+            return {"min": None, "max": num - 1, "raw": text}
+
+    # 形如 "70"(单值)
+    m = re.match(r"^-?\d+$", normalized)
+    if m:
+        num = int(normalized)
+        return {"min": num, "max": num, "raw": text}
+
+    raise ValueError(f"无法解析的分数区间:{text!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +415,173 @@ class HskCorpusService:
     def availableColumns(self) -> List[str]:
         """可检索列名(给 UI 下拉框)。"""
         return list(_SEARCHABLE_COLUMNS)
+
+    def scoreColumns(self) -> List[str]:
+        """分数列名(支持区间检索)。"""
+        return list(_SCORE_COLUMNS)
+
+    def textColumns(self) -> List[str]:
+        """文本列名(走 LIKE 模糊检索)。"""
+        return list(_TEXT_COLUMNS)
+
+    def isScoreColumn(self, column: str) -> bool:
+        """判定给定列名是否为分数列。"""
+        return column in _SCORE_COLUMNS
+
+    # ------------------------------------------------------------------
+    # 多条件组合检索(AND)— 支持多列筛选
+    # ------------------------------------------------------------------
+    # 条件数据结构:
+    #   {"type": "text",    "column": "国籍",         "keyword": "日本"}
+    #   {"type": "cert",    "column": "证书级别",     "keyword": "A"}
+    #   {"type": "country", "column": "国籍",         "keyword": "日本"}
+    #   {"type": "score",   "column": "听力理解分数", "min": 70, "max": 100}
+    #
+    # 所有条件之间 AND 拼接,空条件会被忽略。
+    def _buildConditionsWhere(self, conditions: List[Dict]) -> tuple:
+        """根据条件列表构造 WHERE 子句与绑定值。
+
+        Returns:
+            (where_sql: str, params: list)
+            where_sql 已做白名单校验,可直接拼到 SELECT 语句里
+            params 为对应位置的绑定值(顺序与占位符一致)
+            当无有效条件时,where_sql = "1=1"
+        """
+        clauses: List[str] = []
+        params: List = []
+        for cond in conditions or []:
+            if not isinstance(cond, dict):
+                continue
+            col = cond.get("column")
+            ctype = cond.get("type")
+            if not col or col not in _SEARCHABLE_COLUMNS:
+                # 非法列名直接跳过(由调用方做预校验)
+                continue
+            if ctype == "score" or col in _SCORE_COLUMNS:
+                lo = cond.get("min")
+                hi = cond.get("max")
+                if lo is None and hi is None:
+                    continue
+                if lo is not None:
+                    clauses.append(f"{col} >= ?")
+                    params.append(int(lo))
+                if hi is not None:
+                    clauses.append(f"{col} <= ?")
+                    params.append(int(hi))
+            else:
+                keyword = (cond.get("keyword") or "").strip()
+                if not keyword:
+                    continue
+                # 空值哨兵 → 匹配 NULL / 空字符串(专用于「证书级别 = 无」)
+                if keyword == _EMPTY_KEYWORD_SENTINEL:
+                    clauses.append(f"({col} IS NULL OR TRIM(COALESCE({col}, '')) = '')")
+                    # 无需绑定参数,但保持 params 列表与占位符数量一致
+                    continue
+                escaped = _escapeLike(keyword)
+                clauses.append(f"{col} LIKE ? ESCAPE '\\'")
+                params.append(f"%{escaped}%")
+        if not clauses:
+            return "1=1", []
+        return " AND ".join(clauses), params
+
+    def searchByConditions(
+        self,
+        conditions: List[Dict],
+        pageSize: int = 1000,
+        maxRows: Optional[int] = None,
+    ) -> List[Dict]:
+        """按多条件组合(AND)分页检索。
+
+        Args:
+            conditions: 条件列表(由 UI 收集),结构见 _buildConditionsWhere
+            pageSize:   每页大小
+            maxRows:    最大返回行数
+
+        Returns:
+            list[dict]
+        """
+        whereSql, params = self._buildConditionsWhere(conditions)
+        # 没有有效条件 → 全表(一般 UI 不会触发,但兜底)
+        pageSize = max(1, min(int(pageSize), 5000))
+
+        conn = sqlite3.connect(str(self._dbPath), timeout=10.0, check_same_thread=False)
+        try:
+            conn.row_factory = sqlite3.Row
+
+            rows: List[Dict] = []
+            offset = 0
+            while True:
+                if maxRows is not None and len(rows) >= maxRows:
+                    break
+                need = pageSize
+                if maxRows is not None:
+                    need = min(pageSize, maxRows - len(rows))
+                sql = (
+                    f"SELECT * FROM hsk_corpus "
+                    f"WHERE {whereSql} "
+                    f"LIMIT ? OFFSET ?"
+                )
+                cur = conn.execute(sql, (*params, need, offset))
+                pageRows = cur.fetchall()
+                if not pageRows:
+                    break
+                rows.extend(dict(r) for r in pageRows)
+                if len(pageRows) < need:
+                    break
+                offset += need
+            return rows
+        finally:
+            conn.close()
+
+    def iterSearchByConditions(
+        self,
+        conditions: List[Dict],
+        pageSize: int = 1000,
+        maxRows: Optional[int] = None,
+    ):
+        """按多条件组合(AND)流式检索生成器。"""
+        whereSql, params = self._buildConditionsWhere(conditions)
+        pageSize = max(1, min(int(pageSize), 5000))
+
+        conn = sqlite3.connect(str(self._dbPath), timeout=10.0, check_same_thread=False)
+        try:
+            conn.row_factory = sqlite3.Row
+            offset = 0
+            totalYielded = 0
+            while True:
+                if maxRows is not None and totalYielded >= maxRows:
+                    break
+                need = pageSize
+                if maxRows is not None:
+                    need = min(pageSize, maxRows - totalYielded)
+                sql = (
+                    f"SELECT * FROM hsk_corpus "
+                    f"WHERE {whereSql} "
+                    f"LIMIT ? OFFSET ?"
+                )
+                cur = conn.execute(sql, (*params, need, offset))
+                pageRows = cur.fetchall()
+                if not pageRows:
+                    break
+                rows = [dict(r) for r in pageRows]
+                totalYielded += len(rows)
+                yield rows
+                if len(rows) < need:
+                    break
+                offset += need
+        finally:
+            conn.close()
+
+    def countByConditions(self, conditions: List[Dict]) -> int:
+        """多条件匹配行数统计(主线程用,期望 < 50ms)。"""
+        whereSql, params = self._buildConditionsWhere(conditions)
+        conn = sqlite3.connect(str(self._dbPath), timeout=10.0)
+        try:
+            sql = f"SELECT COUNT(*) AS n FROM hsk_corpus WHERE {whereSql}"
+            cur = conn.execute(sql, tuple(params))
+            return int(cur.fetchone()[0])
+        finally:
+            conn.close()
 
     def columnHeaderMap(self) -> Dict[str, str]:
         """列名 → 中文表头(给 QTableView headerData 用)。"""
@@ -396,6 +733,160 @@ class HskCorpusService:
             conn.close()
 
     # ------------------------------------------------------------------
+    # 分数区间检索(score 列专用)
+    # ------------------------------------------------------------------
+    def _buildScoreRangeWhere(
+        self, column: str, rangeDict: Dict[str, Optional[int]]
+    ) -> tuple:
+        """根据区间 dict 构造 WHERE 子句与绑定值。
+
+        Returns:
+            (where_sql: str, params: list)
+            where_sql 已做白名单校验,可直接拼到 SELECT 语句里
+            params 为对应位置的绑定值(顺序与占位符一致)
+        """
+        if column not in _SCORE_COLUMNS:
+            raise ValueError(f"非分数列 {column!r},不能使用区间检索")
+        lo = rangeDict.get("min")
+        hi = rangeDict.get("max")
+        clauses: List[str] = []
+        params: List = []
+        if lo is not None:
+            clauses.append(f"{column} >= ?")
+            params.append(int(lo))
+        if hi is not None:
+            clauses.append(f"{column} <= ?")
+            params.append(int(hi))
+        if not clauses:
+            return "1=1", []
+        return " AND ".join(clauses), params
+
+    def searchByScore(
+        self,
+        column: str,
+        rangeDict: Dict[str, Optional[int]],
+        pageSize: int = 1000,
+        maxRows: Optional[int] = None,
+    ) -> List[Dict]:
+        """按分数列做区间检索(走范围比较,不走 LIKE)。
+
+        Args:
+            column:    分数列名(必须出现在 _SCORE_COLUMNS 中)
+            rangeDict: 由 parseScoreRange() 返回的 dict
+                       {"min": int|None, "max": int|None, "raw": str}
+                       若 min 与 max 均为 None,返回空列表(避免无意义全表扫描)
+            pageSize:  分页大小
+            maxRows:   最大返回行数
+
+        Returns:
+            list[dict]
+        """
+        if column not in _SCORE_COLUMNS:
+            raise ValueError(f"非分数列 {column!r},必须在 {_SCORE_COLUMNS} 中")
+        if not rangeDict:
+            return []
+        if rangeDict.get("min") is None and rangeDict.get("max") is None:
+            return []
+        pageSize = max(1, min(int(pageSize), 5000))
+
+        whereSql, params = self._buildScoreRangeWhere(column, rangeDict)
+
+        conn = sqlite3.connect(str(self._dbPath), timeout=10.0, check_same_thread=False)
+        try:
+            conn.row_factory = sqlite3.Row
+
+            rows: List[Dict] = []
+            offset = 0
+            while True:
+                if maxRows is not None and len(rows) >= maxRows:
+                    break
+                need = pageSize
+                if maxRows is not None:
+                    need = min(pageSize, maxRows - len(rows))
+                sql = (
+                    f"SELECT * FROM hsk_corpus "
+                    f"WHERE {whereSql} "
+                    f"LIMIT ? OFFSET ?"
+                )
+                cur = conn.execute(sql, (*params, need, offset))
+                pageRows = cur.fetchall()
+                if not pageRows:
+                    break
+                rows.extend(dict(r) for r in pageRows)
+                if len(pageRows) < need:
+                    break
+                offset += need
+            return rows
+        finally:
+            conn.close()
+
+    def iterSearchByScore(
+        self,
+        column: str,
+        rangeDict: Dict[str, Optional[int]],
+        pageSize: int = 1000,
+        maxRows: Optional[int] = None,
+    ):
+        """按分数列做区间检索的生成器版本。"""
+        if column not in _SCORE_COLUMNS:
+            raise ValueError(f"非分数列 {column!r},必须在 {_SCORE_COLUMNS} 中")
+        if not rangeDict:
+            return
+        if rangeDict.get("min") is None and rangeDict.get("max") is None:
+            return
+        pageSize = max(1, min(int(pageSize), 5000))
+
+        whereSql, params = self._buildScoreRangeWhere(column, rangeDict)
+
+        conn = sqlite3.connect(str(self._dbPath), timeout=10.0, check_same_thread=False)
+        try:
+            conn.row_factory = sqlite3.Row
+            offset = 0
+            totalYielded = 0
+            while True:
+                if maxRows is not None and totalYielded >= maxRows:
+                    break
+                need = pageSize
+                if maxRows is not None:
+                    need = min(pageSize, maxRows - totalYielded)
+                sql = (
+                    f"SELECT * FROM hsk_corpus "
+                    f"WHERE {whereSql} "
+                    f"LIMIT ? OFFSET ?"
+                )
+                cur = conn.execute(sql, (*params, need, offset))
+                pageRows = cur.fetchall()
+                if not pageRows:
+                    break
+                rows = [dict(r) for r in pageRows]
+                totalYielded += len(rows)
+                yield rows
+                if len(rows) < need:
+                    break
+                offset += need
+        finally:
+            conn.close()
+
+    def countMatchesByScore(
+        self, column: str, rangeDict: Dict[str, Optional[int]]
+    ) -> int:
+        """分数区间匹配行数统计(主线程用,期望 < 50ms)。"""
+        if column not in _SCORE_COLUMNS:
+            raise ValueError(f"非分数列 {column!r}")
+        if not rangeDict:
+            return 0
+        if rangeDict.get("min") is None and rangeDict.get("max") is None:
+            return 0
+        whereSql, params = self._buildScoreRangeWhere(column, rangeDict)
+        conn = sqlite3.connect(str(self._dbPath), timeout=10.0)
+        try:
+            sql = f"SELECT COUNT(*) AS n FROM hsk_corpus WHERE {whereSql}"
+            cur = conn.execute(sql, tuple(params))
+            return int(cur.fetchone()[0])
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------------
     # 诊断
     # ------------------------------------------------------------------
     def stats(self) -> Dict:
@@ -406,6 +897,8 @@ class HskCorpusService:
             "row_count": self.rowCount() if self._dbPath.exists() else 0,
             "schema_version": self._schemaVersion,
             "searchable_columns": list(_SEARCHABLE_COLUMNS),
+            "score_columns": list(_SCORE_COLUMNS),
+            "text_columns": list(_TEXT_COLUMNS),
         }
 
 

@@ -13,6 +13,10 @@ HSK 语料后台检索 Worker(QThread 子类)
     - 子线程持锁,主线程通过 RLock 短暂持有 → setAllRows → 解锁
     - 期间不向 UI 推送任何大数据对象,信号队列零负担
 
+支持两种检索模式:
+    1. 单条件(兼容旧接口): column + keyword / column + scoreRange
+    2. 多条件组合(AND):     conditions(列表)
+
 Signals(本类 + 继承):
     progress(int, str):          (pct, status)
     dataReady():                 子线程累积了一页(请主线程拉)
@@ -37,7 +41,7 @@ def _searchableColumns() -> List[str]:
 
 
 class HskCorpusSearchWorker(CancellableWorker):
-    """HSK 语料后台检索 Worker(流式 / 无上限)。"""
+    """HSK 语料后台检索 Worker(流式 / 无上限 / 多条件)。"""
 
     # 子线程 → 主线程:有新数据可拉
     dataReady = Signal()
@@ -45,16 +49,21 @@ class HskCorpusSearchWorker(CancellableWorker):
     def __init__(
         self,
         dbPath: str,
-        column: str,
-        keyword: str,
+        column: str = "",
+        keyword: str = "",
         pageSize: int = 1000,
         parent=None,
+        scoreRange: Optional[Dict[str, Optional[int]]] = None,
+        conditions: Optional[List[Dict]] = None,
     ) -> None:
         super().__init__(parent)
         self._dbPath = dbPath
-        self._column = column
-        self._keyword = keyword
+        self._column = column or ""
+        self._keyword = keyword or ""
+        self._scoreRange: Optional[Dict[str, Optional[int]]] = scoreRange
         self._pageSize = max(1, min(int(pageSize), 5000))
+        # 多条件模式:传 conditions(优先于 column/keyword/scoreRange)
+        self._conditions: Optional[List[Dict]] = conditions
 
         # 数据缓冲:子线程累积,主线程拉
         self._rowsBuffer: List[Dict] = []
@@ -66,31 +75,72 @@ class HskCorpusSearchWorker(CancellableWorker):
     # 主入口(基类已包 try/except)
     # ------------------------------------------------------------------
     def runImpl(self) -> None:
-        if not self._keyword:
-            self.reportProgress(100, "关键词为空,无需检索")
-            self.finishedWithResult.emit(0)
-            return
-
-        allowed = _searchableColumns()
-        if self._column not in allowed:
-            self.failed.emit(f"非法列名 {self._column!r}")
-            return
-
         from app.core.services.hsk_corpus_service import HskCorpusService
 
         svc = HskCorpusService.instance()
+        isMultiMode = self._conditions is not None
+        isScoreMode = (
+            (not isMultiMode) and self._column and svc.isScoreColumn(self._column)
+        )
+
+        # 参数校验
+        if isMultiMode:
+            # 多条件模式:必须至少有一个有效条件(由 UI 过滤)
+            valid = [c for c in (self._conditions or []) if c]
+            if not valid:
+                self.reportProgress(100, "无有效条件,无需检索")
+                self.finishedWithResult.emit(0)
+                return
+        elif isScoreMode:
+            if not self._scoreRange:
+                self.reportProgress(100, "区间为空,无需检索")
+                self.finishedWithResult.emit(0)
+                return
+            lo = self._scoreRange.get("min")
+            hi = self._scoreRange.get("max")
+            if lo is None and hi is None:
+                self.reportProgress(100, "区间为空,无需检索")
+                self.finishedWithResult.emit(0)
+                return
+        else:
+            if not self._keyword:
+                self.reportProgress(100, "关键词为空,无需检索")
+                self.finishedWithResult.emit(0)
+                return
+            allowed = _searchableColumns()
+            if self._column not in allowed:
+                self.failed.emit(f"非法列名 {self._column!r}")
+                return
+
         self.reportProgress(5, "开始检索 ...")
         if self.isCancelled():
             return
 
-        # 流式消费,rows 全程只在子线程累积
-        try:
-            for pageRows in svc.iterSearch(
+        # 选择流式接口
+        if isMultiMode:
+            iterFn = lambda: svc.iterSearchByConditions(
+                conditions=self._conditions or [],
+                pageSize=self._pageSize,
+                maxRows=None,
+            )
+        elif isScoreMode:
+            iterFn = lambda: svc.iterSearchByScore(
+                column=self._column,
+                rangeDict=self._scoreRange or {},
+                pageSize=self._pageSize,
+                maxRows=None,
+            )
+        else:
+            iterFn = lambda: svc.iterSearch(
                 column=self._column,
                 keyword=self._keyword,
                 pageSize=self._pageSize,
                 maxRows=None,
-            ):
+            )
+
+        # 流式消费,rows 全程只在子线程累积
+        try:
+            for pageRows in iterFn():
                 if self.isCancelled():
                     return
                 # 写入缓冲(短锁)
