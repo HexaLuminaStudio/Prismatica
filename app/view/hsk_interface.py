@@ -16,6 +16,7 @@ from qfluentwidgets import (
     TeachingTipTailPosition,
 )
 
+from app.core.services import batchApplyService
 from app.core.utils import logger, signalBus
 from .widgets.hsk_search_widget import (
     AdvancedSettingCardWidget,
@@ -53,6 +54,8 @@ class HskInterface(QWidget):
         # 分段控件和按钮
         self.typeSegmentedWidget = SegmentedWidget(self)
         self.runTaskButton = PushButton("申请任务", self)
+        self.batchAddButton = PushButton("+ 添加到清单", self)
+        self.batchDownloadButton = PushButton("批量下载 (0)", self)
 
         self._initWidget()
 
@@ -82,6 +85,17 @@ class HskInterface(QWidget):
         self.runTaskButton.setIcon(":app/icons/Check.svg")
         self.runTaskButton.clicked.connect(self._runTask)
 
+        # PRD-003:批量下载按钮
+        self.batchAddButton.setFixedSize(140, 40)
+        self.batchAddButton.setIcon(":app/icons/Check.svg")
+        self.batchAddButton.clicked.connect(self._onBatchAddClicked)
+        self.batchDownloadButton.setFixedSize(140, 40)
+        self.batchDownloadButton.clicked.connect(self._onBatchDownloadClicked)
+        self.batchDownloadButton.setEnabled(False)
+        # 订阅清单数量变化,更新徽章与启用状态
+        batchApplyService.itemsChanged.connect(self._onBatchItemsChanged)
+        self._onBatchItemsChanged(batchApplyService.getCount())
+
         self._initLayout()
 
     def _initLayout(self):
@@ -96,8 +110,10 @@ class HskInterface(QWidget):
         vBoxLayout.addWidget(self.advancedSettingCardWidget)
         vBoxLayout.addStretch(1)
 
-        # 按钮行
+        # 按钮行:批量入口(左)+ 申请任务(右)
         btnRow = QHBoxLayout()
+        btnRow.addWidget(self.batchAddButton)
+        btnRow.addWidget(self.batchDownloadButton)
         btnRow.addStretch(1)
         btnRow.addWidget(self.runTaskButton)
         vBoxLayout.addLayout(btnRow)
@@ -176,6 +192,73 @@ class HskInterface(QWidget):
             # 恢复按钮状态
             self.runTaskButton.setEnabled(True)
             self.runTaskButton.setText("申请任务")
+
+    # ========================================================================
+    # PRD-003 批量下载入口
+    # ========================================================================
+
+    def _buildInfoDict(self) -> dict:
+        """根据当前检索条件构造 infoDict(url + payload)"""
+        currentWidget = self._getCurrentSearchWidget()
+        if currentWidget is None:
+            return {}
+        baseDict = currentWidget.returnValues()
+        isValid, errorType = self._validateInput(baseDict)
+        if not isValid:
+            self._showInputError(errorType, currentWidget)
+            return {}
+        advanceDict = self.advancedSettingCardWidget.returnValues()
+        url = baseDict.get("url")
+        baseDict.pop("url")
+        return {"url": url, "payload": {**baseDict, **advanceDict}}
+
+    def _onBatchAddClicked(self) -> None:
+        """+ 添加到清单 → 弹出 BatchDownloadDialog(弹窗内可继续添加)"""
+        infoDict = self._buildInfoDict()
+        if not infoDict:
+            return
+        logger.debug(f"[HSK] 批量添加: {infoDict}")
+        from app.view.widgets.batch_download_dialog import BatchDownloadDialog
+
+        dlg = BatchDownloadDialog("Hsk", infoDict, self.window())
+        # exec() 会阻塞,关闭弹窗后继续
+        dlg.exec()
+
+    def _onBatchDownloadClicked(self) -> None:
+        """底部"批量下载 (N)"按钮 → 等价于直接打开弹窗并立刻提交(快捷入口)"""
+        if batchApplyService.getCount() == 0:
+            return
+        items = batchApplyService.getItems()
+        from app.core.services import taskManager
+
+        created = 0
+        for item in items:
+            try:
+                taskId = taskManager.createTask("hskDownload", item.toInfoDict())
+                created += 1
+                logger.info(f"[HSK] 批量创建任务 {taskId}: {item.summary()[:40]}")
+            except Exception as e:
+                logger.error(f"[HSK] createTask 失败: {e}")
+        batchApplyService.clearAll()
+        if created > 0:
+            InfoBar.success(
+                title="批量任务已创建",
+                content=f"已创建 {created} 个下载任务,请到任务中心查看进度",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                duration=3500,
+                position=InfoBarPosition.TOP_RIGHT,
+                parent=self.window(),
+            )
+            try:
+                signalBus.navigateToSubInterface.emit("TaskInterface")
+            except Exception as e:
+                logger.warning(f"[HSK] 跳转 Task 页面失败: {e}")
+
+    def _onBatchItemsChanged(self, count: int) -> None:
+        """清单数量变化 → 更新批量下载按钮的徽章与启用状态"""
+        self.batchDownloadButton.setText(f"批量下载 ({count})")
+        self.batchDownloadButton.setEnabled(count > 0)
 
     def _getCurrentSearchWidget(self):
         """获取当前显示的搜索组件"""

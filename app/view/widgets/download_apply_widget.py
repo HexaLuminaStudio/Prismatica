@@ -317,3 +317,14 @@ class DownloadApplyWidget(MessageBoxBase):
         """对话框关闭时清理资源"""
         self.cleanupWorker()
         super().closeEvent(event)
+
+    def _toInfoDict(self) -> Dict[str, Any]:
+        """构造 taskManager.createTask 所需的 infoDict(PRD-003 批量下载复用)
+
+        Returns:
+            {"url": str, "payload": dict} 格式,与现有 _runTask 提交的格式一致。
+        """
+        return {
+            "url": self.infoDict.get("url", ""),
+            "payload": dict(self.infoDict.get("payload", {})),
+        }

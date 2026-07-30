@@ -6,6 +6,7 @@
 
 import re
 import sys
+import time
 from pathlib import Path
 from typing import List, Pattern
 
@@ -18,16 +19,16 @@ SENSITIVE_PATTERNS_LIST: List[Pattern] = [
     # API密钥和Token
     re.compile(r"(api[_-]?key|apikey|api[_-]?token|access[_-]?token)", re.IGNORECASE),
     # P0-fix:长度阈值从 16 降到 8,避免短 token(如 8-12 位的内部密钥)漏网
-    re.compile(
-        r"(secret[_-]?key|secret[_-]?token|bearer\s+)[\w\-]{8,}", re.IGNORECASE
-    ),
+    re.compile(r"(secret[_-]?key|secret[_-]?token|bearer\s+)[\w\-]{8,}", re.IGNORECASE),
     re.compile(r"sk-[a-zA-Z0-9]{20,}"),  # OpenAI API Key格式(放低至 20)
     re.compile(r"ghp_[a-zA-Z0-9]{20,}"),  # GitHub Personal Access Token(放低)
     re.compile(r"gho_[a-zA-Z0-9]{20,}"),  # GitHub OAuth Token(放低)
     # 密码相关
     # P0-fix:阈值从 6 降到 4,4 位 PIN 也能被遮蔽
     re.compile(r"(密码|pwd|passwd|password)[\::=：]+[^\s]{4,}"),
-    re.compile(r'(password|passwd|pwd)\s*[:=]\s*["\']?[^\s"\']{4,}["\']?', re.IGNORECASE),
+    re.compile(
+        r'(password|passwd|pwd)\s*[:=]\s*["\']?[^\s"\']{4,}["\']?', re.IGNORECASE
+    ),
     # 认证信息
     re.compile(
         r'(authorization|bearer|token|jwt)[\s:=]+["\']?[A-Za-z0-9\-_.~+/]+=*["\']?',
@@ -275,3 +276,202 @@ def getLog():
 
 # 为了向后兼容，导出_logger实例（小写变量名）
 logger = _logger
+
+
+# =====================================================================
+# 冷启动耗时埋点(2026-07-30 新增)
+#
+# 设计目的:
+#   - 用户反馈"冷启动很慢",需要一个独立文件记录启动各阶段耗时
+#   - 落盘到 logs/startup_<时间戳>.log,便于用户反馈后定位瓶颈
+#   - 使用 loguru 子 logger("startup"),与主日志隔离
+# 用法:
+#   profiler = StartupProfiler()
+#   with profiler.stage("stage_name", "阶段描述"):
+#       ... do work ...
+#   profiler.mark("checkpoint_name", "额外说明")
+#   profiler.finish()  # 主窗口 ready 后调用,写汇总
+# =====================================================================
+class _StartupProfiler:
+    """冷启动耗时分析器。模块级单例,通过 getStartupProfiler() 获取。"""
+
+    def __init__(self):
+        self._bootStart = time.perf_counter()
+        self._importStart = self._bootStart  # 将在最早 stage 调用前再校准
+        self._records: List[dict] = []  # [(name, label, elapsedMs, sinceStartMs)]
+        self._handlerId = None
+        self._logFilePath: Path = None
+        self._finished = False
+
+    def _attachFileHandler(self) -> None:
+        """按需挂载 startup_<时间戳>.log 文件 handler(只挂一次)。"""
+        if self._handlerId is not None:
+            return
+        logDir = Path(LOG_FOLDER)
+        logDir.mkdir(parents=True, exist_ok=True)
+        # 文件名带启动时刻,便于 grep / 上报时定位当次启动
+        self._logFilePath = logDir / f"startup_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        fmt = (
+            "<green>{time:HH:mm:ss.SSS}</green> | "
+            "<level>{level: <5}</level> | "
+            "<level>{message}</level>"
+        )
+        self._handlerId = _logger.add(
+            str(self._logFilePath),
+            level="DEBUG",
+            format=fmt,
+            filter=lambda record: record["extra"].get("startup") is True,
+            encoding="utf-8",
+            enqueue=True,
+        )
+        _logger.bind(startup=True).info(
+            "[StartupProfiler] 日志句柄已挂载 -> {}", self._logFilePath.name
+        )
+
+    def stage(self, name: str, label: str = ""):
+        """返回一个上下文管理器:进入时记录阶段起点,退出时记录耗时。
+
+        :param name:  阶段英文/拼音键名(用于聚合统计)
+        :param label: 中文说明(便于用户上报后阅读)
+        :return: 上下文管理器
+        """
+        # 懒加载 file handler,避免污染主流程 import 顺序
+        self._attachFileHandler()
+        return _StageScope(self, name, label)
+
+    def mark(self, name: str, label: str = "") -> None:
+        """记录一个瞬时检查点(不配对 start/end)。"""
+        self._attachFileHandler()
+        now = time.perf_counter()
+        elapsedMs = (now - self._bootStart) * 1000.0
+        prevMs = self._records[-1]["sinceStartMs"] if self._records else 0.0
+        deltaMs = elapsedMs - prevMs
+        self._records.append(
+            {
+                "name": name,
+                "label": label,
+                "elapsedMs": elapsedMs,
+                "sinceStartMs": elapsedMs,
+                "deltaMs": deltaMs,
+                "kind": "mark",
+            }
+        )
+        _logger.bind(startup=True).info(
+            "[MARK] +{:7.1f}ms (total {:8.1f}ms) | {} | {}",
+            deltaMs,
+            elapsedMs,
+            name,
+            label,
+        )
+
+    def finish(self) -> None:
+        """主窗口 ready 后调用,汇总并落盘。重复调用安全。"""
+        if self._finished:
+            return
+        self._attachFileHandler()
+        now = time.perf_counter()
+        totalMs = (now - self._bootStart) * 1000.0
+        # 汇总:按总耗时倒序,前 12 个最耗时阶段
+        stages = [r for r in self._records if r["kind"] == "stage"]
+        top = sorted(stages, key=lambda r: r["elapsedMs"], reverse=True)[:12]
+        _logger.bind(startup=True).info("=" * 60)
+        _logger.bind(startup=True).info(
+            "[SUMMARY] 冷启动总耗时 = {:.1f} ms (= {:.2f} s)",
+            totalMs,
+            totalMs / 1000.0,
+        )
+        _logger.bind(startup=True).info(
+            "[SUMMARY] 累计阶段数 = {}, 检查点数 = {}",
+            len(stages),
+            sum(1 for r in self._records if r["kind"] == "mark"),
+        )
+        if top:
+            _logger.bind(startup=True).info(
+                "[SUMMARY] Top-12 耗时阶段(按结束时间绝对值):"
+            )
+            for r in top:
+                _logger.bind(startup=True).info(
+                    "  -> +{:8.1f} ms (total {:8.1f} ms) | {} | {}",
+                    r["deltaMs"],
+                    r["elapsedMs"],
+                    r["name"],
+                    r["label"],
+                )
+        _logger.bind(startup=True).info("[SUMMARY] 详细文件: {}", self._logFilePath)
+        _logger.bind(startup=True).info("=" * 60)
+        # 同步在主日志里打一行,便于 grep "冷启动总耗时"
+        logger.info(
+            "[StartupProfiler] 冷启动总耗时 = {:.1f} ms,详情见 {}",
+            totalMs,
+            self._logFilePath,
+        )
+        self._finished = True
+
+
+class _StageScope:
+    """_StartupProfiler.stage() 返回的上下文管理器。"""
+
+    def __init__(self, owner: "_StartupProfiler", name: str, label: str):
+        self._owner = owner
+        self._name = name
+        self._label = label
+        self._start = 0.0
+        self._prevMs = 0.0
+
+    def __enter__(self):
+        self._start = time.perf_counter()
+        # 当前累计耗时(进入此阶段时的"已过时间")
+        self._prevMs = (self._start - self._owner._bootStart) * 1000.0
+        _logger.bind(startup=True).info(
+            "[STAGE-START] t={:.1f} ms | {} | {}",
+            self._prevMs,
+            self._name,
+            self._label,
+        )
+        return self
+
+    def __exit__(self, excType, excVal, excTb):
+        end = time.perf_counter()
+        stageMs = (end - self._start) * 1000.0
+        deltaMs = stageMs  # 阶段自身耗时
+        self._owner._records.append(
+            {
+                "name": self._name,
+                "label": self._label,
+                "elapsedMs": (end - self._owner._bootStart) * 1000.0,
+                "sinceStartMs": (end - self._owner._bootStart) * 1000.0,
+                "deltaMs": stageMs,
+                "kind": "stage",
+            }
+        )
+        if excType is None:
+            _logger.bind(startup=True).info(
+                "[STAGE-END  ] +{:7.1f} ms (total {:8.1f} ms) | {} | {}",
+                deltaMs,
+                (end - self._owner._bootStart) * 1000.0,
+                self._name,
+                self._label,
+            )
+        else:
+            _logger.bind(startup=True).error(
+                "[STAGE-ERR  ] {:7.1f} ms (total {:8.1f} ms) | {} | {} | exc={}",
+                stageMs,
+                (end - self._owner._bootStart) * 1000.0,
+                self._name,
+                self._label,
+                excVal,
+            )
+        # 不吞异常,让上层知道
+        return False
+
+
+# 单例代理
+_startupProfilerInstance: _StartupProfiler = None
+
+
+def getStartupProfiler() -> _StartupProfiler:
+    """获取冷启动耗时分析器单例。模块导入后随时可调用。"""
+    global _startupProfilerInstance
+    if _startupProfilerInstance is None:
+        _startupProfilerInstance = _StartupProfiler()
+    return _startupProfilerInstance

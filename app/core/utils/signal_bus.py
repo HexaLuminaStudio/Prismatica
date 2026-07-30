@@ -27,5 +27,9 @@ class SignalBus(QObject):
     # 项目列表变更信号(新建/删除/重命名) — 无参数
     projectListChanged = Signal()
 
+    # PRD-003 HSK 批量下载
+    # 跳转请求信号:参数为子界面 objectName (str),由 main_window 订阅后 switchTo
+    navigateToSubInterface = Signal(str)
+
 
 signalBus = SignalBus()

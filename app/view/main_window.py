@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import (
     NavigationItemPosition,
     SplashScreen,
@@ -132,6 +132,13 @@ class MainWindow(MSFluentWindow):
             self.stackedWidget.currentChanged.connect(self._onStackCurrentChanged)
         except Exception as e:
             logger.warning(f"[MainWindow] 连接项目管理 busy 信号失败: {e}")
+
+        # PRD-003:批量下载完成后跳转请求 → 切到对应子界面
+        # 子界面通过 signalBus.navigateToSubInterface.emit("TaskInterface") 触发
+        try:
+            signalBus.navigateToSubInterface.connect(self._onNavigateToSubInterface)
+        except Exception as e:
+            logger.warning(f"[MainWindow] 连接导航信号失败: {e}")
 
     def _onProjectBusyChanged(self, busy: bool) -> None:
         """项目管理页 AI 报告生成状态变化。"""
@@ -290,6 +297,27 @@ class MainWindow(MSFluentWindow):
                     logger.warning(f"[MainWindow] 跳转到 {moduleKey} 失败: {e}")
         except Exception as e:
             logger.warning(f"[MainWindow] _onProjectJumpToModule 失败: {e}")
+
+    def _onNavigateToSubInterface(self, objectName: str) -> None:
+        """通用导航请求处理(PRD-003)。
+
+        子界面通过 signalBus.navigateToSubInterface.emit("ObjectName") 触发,
+        本方法根据 objectName 找到对应子界面并 switchTo。
+        """
+        try:
+            target = self.findChild(QWidget, objectName)
+            if target is None:
+                logger.warning(f"[MainWindow] 找不到子界面: {objectName}")
+                return
+            try:
+                self.switchTo(target)
+            except Exception:
+                try:
+                    self.stackedWidget.setCurrentWidget(target)
+                except Exception as e:
+                    logger.warning(f"[MainWindow] 切换到 {objectName} 失败: {e}")
+        except Exception as e:
+            logger.warning(f"[MainWindow] _onNavigateToSubInterface 失败: {e}")
 
     def initNavigation(self):
         logger.info("[MainWindow] 开始初始化导航界面")

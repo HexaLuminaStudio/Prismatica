@@ -132,10 +132,31 @@ class SplashLoader(QObject):
             # 在此之前先推进到 28%,留 2% 的 gap 让动画从外部衔接过来。
             self._reportProgress(28, "开始构造主窗口…")
             self._processEventsBriefly()
+            # 冷启动埋点:MainWindow() 真正构造耗时(通常是冷启动第二大头)
+            try:
+                from app.core.utils.logger import getStartupProfiler
+
+                _profiler = getStartupProfiler()
+                _profiler.mark(
+                    "mainwindow_build_start",
+                    "MainWindow() 构造开始(走 SplashLoader 主线程方案)",
+                )
+            except Exception as _profErr:
+                logger.debug(f"[SplashLoader] profiler mark 失败(非致命): {_profErr}")
             mainWindow = MainWindow(
                 progressCallback=self._reportProgress,
                 startHidden=True,  # 关键:构造期间隐藏主窗口,避免闪现
             )
+            try:
+                from app.core.utils.logger import getStartupProfiler
+
+                _profiler = getStartupProfiler()
+                _profiler.mark(
+                    "mainwindow_build_end",
+                    "MainWindow() 构造结束",
+                )
+            except Exception as _profErr:
+                logger.debug(f"[SplashLoader] profiler mark 失败(非致命): {_profErr}")
 
             # 阶段 2:构造完毕,主动再 processEvents 一次,让 splash 看到 100%
             self._processEventsBriefly()
