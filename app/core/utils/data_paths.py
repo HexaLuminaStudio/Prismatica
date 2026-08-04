@@ -85,6 +85,12 @@ PROJECT_STATE_FILE: Final[Path] = DATA_DIR / "project_state.json"
 HSK_CORPUS_DB: Final[Path] = CORPORA_DIR / "hsk_corpus.db"
 HSK_CORPUS_SCHEMA_VERSION: Final[int] = 1
 
+# PRD-004/005:HSK 本地语料镜像库(独立于 HSK_CORPUS_DB,互不冲突)
+# 数据源:test/corpus/index.json + shards/shard_*.jsonl(只读)
+# 由 HskLocalCorpusImportWorker 后台导入(PRD-004 已实施,代码层若文件丢失需重建)
+HSK_LOCAL_CORPUS_DB: Final[Path] = CORPORA_DIR / "hsk_corpus_local.db"
+HSK_LOCAL_CORPUS_SCHEMA_VERSION: Final[int] = 1
+
 
 # ---------------------------------------------------------------------------
 # 旧路径(用于迁移)

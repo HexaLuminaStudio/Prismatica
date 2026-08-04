@@ -583,6 +583,45 @@ class HskCorpusService:
         finally:
             conn.close()
 
+    def iterZwhaoByConditions(
+        self,
+        conditions: List[Dict],
+        pageSize: int = 1000,
+    ) -> Iterator[List[str]]:
+        """按多条件组合(AND)流式 yield「作文母号」列。
+
+        Args:
+            conditions: 与 iterSearchByConditions 相同的条件结构
+            pageSize:   每页返回多少个 zwhao(默认 1000)
+
+        Yields:
+            list[str]: 一批 zwhao(可能为空 = 流结束)
+        """
+        whereSql, params = self._buildConditionsWhere(conditions)
+        pageSize = max(1, min(int(pageSize), 5000))
+
+        conn = sqlite3.connect(
+            str(self._dbPath), timeout=10.0, check_same_thread=False
+        )
+        try:
+            offset = 0
+            while True:
+                sql = (
+                    f"SELECT 作文母号 FROM hsk_corpus "
+                    f"WHERE {whereSql} AND 作文母号 IS NOT NULL "
+                    f"LIMIT ? OFFSET ?"
+                )
+                cur = conn.execute(sql, (*params, pageSize, offset))
+                pageRows = [r[0] for r in cur.fetchall() if r[0]]
+                if not pageRows:
+                    break
+                yield pageRows
+                if len(pageRows) < pageSize:
+                    break
+                offset += pageSize
+        finally:
+            conn.close()
+
     def columnHeaderMap(self) -> Dict[str, str]:
         """列名 → 中文表头(给 QTableView headerData 用)。"""
         return dict(_CN_HEADER_MAP)

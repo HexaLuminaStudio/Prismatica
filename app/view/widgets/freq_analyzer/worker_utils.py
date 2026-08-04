@@ -39,6 +39,7 @@ from loguru import logger
 # 性能优化:只在主线程使用 QTableWidget,所以 PySide6 始终要导入
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
+from shiboken6 import isValid as _shibokenIsValid
 
 
 # ---------------------------------------------------------------------------
@@ -258,9 +259,25 @@ class WorkerMixin:
         适用场景:
             - widget 销毁 / 切换语料库前(此时可传 waitMs=300 做短暂等待)
             - 重新分析前(配合 startWorker 自动调用,waitMs 默认 0)
+
+        P4-fix(2026-08-04):增加 isValid() 检查 + RuntimeError 兜底
+            deleteLater() 已注册的 worker 在事件循环下一次迭代时会被真正 delete,
+            此时若仍有 Python 引用并尝试访问其方法(尤其是 wait()),
+            shiboken 会抛 "Internal C++ object (...) already deleted"。
+            每次访问 C++ 方法前先 isValid() 校验,确保 worker 还活着。
         """
         worker = self._worker
         if worker is None:
+            return
+        # 防御:C++ 对象可能已被 deleteLater 回收
+        if not _shibokenIsValid(worker):
+            logger.debug(
+                f"[WorkerMixin] disposeWorker: worker 已被 deleteLater,"
+                " 跳过清理"
+            )
+            self._worker = None
+            self._workerFinishedCallbacks = []
+            self._workerFailedCallbacks = []
             return
         try:
             # 先断开所有信号,防止回调期间 widget 已销毁
@@ -270,17 +287,21 @@ class WorkerMixin:
                 worker.cancelledClean.disconnect(self._onWorkerCancelled)
             except (RuntimeError, TypeError):
                 pass
-            # 设置取消标志(非阻塞)
-            if worker.isRunning():
+            # 设置取消标志(非阻塞)— 注意:isRunning() 也要校验
+            if _shibokenIsValid(worker) and worker.isRunning():
                 worker.cancel()
             # 仅在调用方明确传入 waitMs 时才等待(如 closeEvent)
-            if waitMs > 0 and worker.isRunning():
-                worker.wait(int(waitMs))
-                if worker.isRunning():
-                    logger.warning(
-                        f"[WorkerMixin] {type(worker).__name__} {waitMs}ms 内未退出,"
-                        "将让 OS 强制清理"
-                    )
+            if waitMs > 0:
+                if _shibokenIsValid(worker) and worker.isRunning():
+                    worker.wait(int(waitMs))
+                    if _shibokenIsValid(worker) and worker.isRunning():
+                        logger.warning(
+                            f"[WorkerMixin] {type(worker).__name__}"
+                            f" {waitMs}ms 内未退出,将让 OS 强制清理"
+                        )
+        except RuntimeError as e:
+            # shiboken "already deleted" 兜底:即便 isValid 漏判,也不要刷屏
+            logger.debug(f"[WorkerMixin] disposeWorker 已 delete 兜底: {e}")
         except Exception as e:
             logger.warning(f"[WorkerMixin] disposeWorker 异常: {e}")
         finally:

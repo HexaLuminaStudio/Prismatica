@@ -63,9 +63,11 @@ from qfluentwidgets import (
     CompactSpinBox,
     FluentIcon,
     InfoBar,
+    InfoBarIcon,
     InfoBarPosition,
     LineEdit,
     PrimaryPushButton,
+    PushButton,
     StrongBodyLabel,
     TitleLabel,
     ToolButton,
@@ -394,6 +396,12 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._currentWorker: Optional[HskCorpusSearchWorker] = None
         self._matchTotal: int = 0  # 真实总命中数(不限 20 条)
 
+        # PRD-005:最近一次「搜索」成功的条件与导出 worker
+        self._lastConditions: List[Dict] = []
+        self._lastSearchFinished: bool = False
+        self._exportWorker = None  # type: Optional[Any]
+        self._lastExportDir: Optional[str] = None  # 用于完成后「打开文件夹」
+
         # 条件行列表(动态增删)
         self._conditionRows: List[_ConditionRow] = []
         self._rowsContainer: Optional[QVBoxLayout] = None
@@ -499,6 +507,18 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.searchBtn = PrimaryPushButton("搜索", self, FluentIcon.SEARCH)
         self.searchBtn.clicked.connect(self._onSearchClicked)
         actionRow.addWidget(self.searchBtn)
+
+        # PRD-005:导出所有命中作文(在「搜索」按钮右侧,默认禁用)
+        self.exportAllBtn = PrimaryPushButton(
+            "导出命中作文", self, FluentIcon.SAVE
+        )
+        self.exportAllBtn.setToolTip(
+            "按最近一次「搜索」命中的全部作文(不限 20 条),从本地镜像库提取原文"
+        )
+        self.exportAllBtn.setEnabled(False)
+        self.exportAllBtn.clicked.connect(self._onExportAllClicked)
+        actionRow.addSpacing(12)  # 视觉分隔
+        actionRow.addWidget(self.exportAllBtn)
 
         sLayout.addLayout(actionRow)
         root.addWidget(searchCard)
@@ -679,6 +699,12 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             )
             return
 
+        # PRD-005:新一次搜索 → 重置导出状态(避免用户在不同时段误用旧 conditions)
+        self._lastConditions = list(conditions)
+        self._lastSearchFinished = False
+        if hasattr(self, "exportAllBtn"):
+            self.exportAllBtn.setEnabled(False)
+
         # 取消旧 worker
         self.disposeWorker(waitMs=0)
         self._pullTimer.stop()
@@ -796,6 +822,11 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
                     self.tableView.setColumnWidth(col, 280)
         self._currentWorker = None
 
+        # PRD-005:搜索成功后启用「导出所有命中作文」按钮
+        self._lastSearchFinished = True
+        if hasattr(self, "exportAllBtn") and self._matchTotal > 0:
+            self.exportAllBtn.setEnabled(True)
+
     def _onWorkerFailed(self, errMsg: str) -> None:
         self._pullTimer.stop()
         self._currentWorker = None
@@ -810,6 +841,193 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         )
 
     # ------------------------------------------------------------------
+    # PRD-005 导出所有命中作文(一体化对话框版本)
+    # ------------------------------------------------------------------
+    def _onExportAllClicked(self) -> None:
+        """导出按钮槽函数:一体化对话框 → 后台 Worker。
+
+        流程:
+            1) 防御性检查(未检索 / 命中空)
+            2) 流式拉 zwhao(从 hsk_corpus.db)
+            3) 弹一体化对话框(目录/格式/范围 + 实时预览)
+            4) 启动 Worker
+        """
+        from app.core.services.hsk_local_corpus_service import hskLocalCorpusService
+        from app.core.services.hsk_corpus_service import hskCorpusService
+        from app.view.widgets.hsk_corpus.hsk_corpus_export_dialog import (
+            HskCorpusExportOptionsDialog,
+        )
+        from app.view.widgets.hsk_corpus.hsk_corpus_export_worker import (
+            HskCorpusExportWorker,
+        )
+
+        # ---- 0. 防御性检查 ----
+        if not self._lastSearchFinished or not self._lastConditions:
+            InfoBar.warning(
+                title="未检索",
+                content="请先点「搜索」命中作文后再导出",
+                parent=self,
+                duration=2500,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        if self._matchTotal <= 0:
+            InfoBar.warning(
+                title="命中为空",
+                content="上一次搜索没有命中任何作文,无法导出",
+                parent=self,
+                duration=2500,
+                position=InfoBarPosition.TOP,
+            )
+            return
+        if not hskLocalCorpusService.isAvailable():
+            InfoBar.error(
+                title="本地镜像库不可用",
+                content="请检查 datas/corpora/hsk_corpus_local.db 是否存在",
+                parent=self,
+                duration=3500,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        # ---- 1. 流式拉 zwhao ----
+        zwhaoList: List[str] = []
+        try:
+            for page in hskCorpusService.iterZwhaoByConditions(
+                self._lastConditions, pageSize=2000
+            ):
+                zwhaoList.extend(page)
+        except Exception as e:
+            logger.error(f"[HskCorpusBrowser] 流式拉 zwhao 失败: {e}")
+            InfoBar.error(
+                title="导出启动失败",
+                content=f"获取命中列表失败: {e}",
+                parent=self,
+                duration=3500,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        if not zwhaoList:
+            InfoBar.warning(
+                title="无作文可导出",
+                content="当前筛选条件下没有可导出的作文",
+                parent=self,
+                duration=2500,
+                position=InfoBarPosition.TOP,
+            )
+            return
+
+        # ---- 2. 一体化对话框 ----
+        dlg = HskCorpusExportOptionsDialog(
+            zwhaoList=zwhaoList,
+            localAvailable=True,
+            parent=self.window(),
+        )
+        if not dlg.exec():
+            return  # 用户取消
+
+        v = dlg.value
+        # ---- 3. 启动 Worker ----
+        self._exportWorker = HskCorpusExportWorker(
+            zwhaoList=v["zwhaoList"],
+            outputDir=v["outputDir"],
+            fileFormat=v["fileFormat"],
+            skipMissingTitle=False,  # 作文母号(zwhao)是唯一标识,不再用 Title 过滤
+            mergeMode=v["mergeMode"],
+            mergeFileName=v["mergeFileName"],
+            parent=self,
+        )
+        self._exportWorker.progress.connect(self._onExportProgress)
+        self._exportWorker.finishedWithResult.connect(self._onExportFinished)
+        self._exportWorker.failed.connect(self._onExportFailed)
+        # 保存输出目录(完成后用于「打开文件夹」)
+        self._lastExportDir = v["outputDir"]
+        self.exportAllBtn.setEnabled(False)
+        self.exportAllBtn.setText("导出中...")
+        self._exportWorker.start()
+
+        InfoBar.info(
+            title="开始导出",
+            content=(
+                f"后台导出 {v['previewTotal']:,} 篇 → "
+                f"{v['fileFormat'].upper()}"
+                + (
+                    f" · 合并到 {v['mergeFileName']}.{v['fileFormat']}"
+                    if v["mergeMode"]
+                    else " · 分文件"
+                )
+            ),
+            parent=self,
+            duration=3000,
+            position=InfoBarPosition.TOP,
+        )
+
+    def _onExportProgress(self, current: int, total: int) -> None:
+        """导出进度回调。"""
+        if self.statusLabel:
+            self.statusLabel.setText(f"导出中 {current:,}/{total:,}")
+
+    def _onExportFinished(
+        self, successCount: int, skippedCount: int, failCount: int
+    ) -> None:
+        """导出完成回调:InfoBar + 「打开文件夹」按钮。"""
+        self.exportAllBtn.setEnabled(True)
+        self.exportAllBtn.setText("导出命中作文")
+        if self.statusLabel:
+            self.statusLabel.setText("就绪")
+
+        content = (
+            f"成功 {successCount:,} 篇 · 跳过 {skippedCount:,} 篇 · "
+            f"失败 {failCount:,} 篇"
+        )
+
+        # 用 InfoBar.new 而非 .success,以便挂自定义按钮
+        bar = InfoBar.new(
+            InfoBarIcon.SUCCESS,
+            title="导出完成",
+            content=content,
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            duration=6000,
+            position=InfoBarPosition.TOP,
+            parent=self,
+        )
+
+        # 「打开文件夹」按钮
+        if getattr(self, "_lastExportDir", None):
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            openBtn = PushButton("打开文件夹", bar)
+            exportDir = self._lastExportDir
+            openBtn.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(exportDir))
+            )
+            bar.widgetLayout.addWidget(openBtn)
+            bar.widgetLayout.addSpacing(8)
+
+        logger.info(f"[HskCorpusBrowser] 导出完成: {content}")
+        self._exportWorker = None
+
+    def _onExportFailed(self, errorMsg: str) -> None:
+        """导出失败回调。"""
+        self.exportAllBtn.setEnabled(True)
+        self.exportAllBtn.setText("导出命中作文")
+        if self.statusLabel:
+            self.statusLabel.setText("就绪")
+
+        InfoBar.error(
+            title="导出失败",
+            content=errorMsg[:80],
+            parent=self,
+            duration=4000,
+            position=InfoBarPosition.TOP,
+        )
+        logger.error(f"[HskCorpusBrowser] 导出失败: {errorMsg}")
+        self._exportWorker = None
+
+    # ------------------------------------------------------------------
     # 析构
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:
@@ -818,4 +1036,13 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             self.disposeWorker(waitMs=300)
         except Exception:
             pass
+        # PRD-005:同步停止导出 worker(避免线程悬挂)
+        try:
+            if self._exportWorker is not None and self._exportWorker.isRunning():
+                self._exportWorker.stop()
+                # 给 worker 100ms 主动退出,不强等
+                if not self._exportWorker.wait(100):
+                    logger.warning("[HskCorpusBrowser] 导出 worker 未在 100ms 内退出")
+        except Exception as e:
+            logger.warning(f"[HskCorpusBrowser] 停止导出 worker 失败: {e}")
         super().closeEvent(event)

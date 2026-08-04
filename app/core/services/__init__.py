@@ -13,6 +13,7 @@ from .chat_service import ChatService, LLMThread
 from .ai_insight_service import AiInsightService
 from .project_manager import ProjectManager, projectManager
 from .hsk_corpus_service import HskCorpusService, hskCorpusService
+from .hsk_local_corpus_service import HskLocalCorpusService, hskLocalCorpusService
 from .batch_apply_service import BatchApplyService, BatchItem, batchApplyService
 
 __all__ = [
