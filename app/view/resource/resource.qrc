@@ -33,5 +33,6 @@
         <file>icons/Robot.svg</file>
         <file>icons/Erase.svg</file>
         <file>icons/Paperclip.svg</file>
+        <file>icons/User.svg</file>
     </qresource>
 </RCC>

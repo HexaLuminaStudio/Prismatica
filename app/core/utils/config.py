@@ -74,6 +74,12 @@ class Config(QConfig):
     # - 用户完成或跳过引导后写入 False,后续启动不再弹出
     # - 与 FirstLaunch 互不影响:即便清空 FirstLaunch,只要 MainTourShown=True 就跳过
     MainTourShown = ConfigItem("MainWindow", "MainTourShown", False, BoolValidator())
+
+    # 云端 API base URL(2026-08-05 PRD v2)
+    # 默认指向雨云公网 FastAPI 后端,生产换 HTTPS + 域名后会同步更新
+    cloudBaseUrl = ConfigItem(
+        "Cloud", "BaseUrl", "http://103.236.55.211:8000"
+    )
     DpiScale = OptionsConfigItem(
         "MainWindow",
         "DpiScale",

@@ -38,8 +38,6 @@ from qfluentwidgets import (
     IconWidget,
 )
 
-from app.core.models.billing_models import BillStatus
-from app.core.services import account_db
 from app.core.services.billing_service import getBillingService
 from app.core.utils.signal_bus import signalBus
 
@@ -121,7 +119,7 @@ class BalanceCard(QWidget):
         headerLayout.setSpacing(8)
         header.setMinimumHeight(44)
 
-        self.headerIcon = IconWidget(FIF.SHOPPING_CART, header)
+        self.headerIcon = IconWidget(":app/icons/Advance.svg", header)
         self.headerIcon.setFixedSize(20, 20)
         headerLayout.addWidget(self.headerIcon)
 
@@ -236,7 +234,8 @@ class BalanceCard(QWidget):
         monthStart = datetime.utcnow().replace(
             day=1, hour=0, minute=0, second=0, microsecond=0
         )
-        bills = account_db.listBills(self._userId, status=BillStatus.SETTLED, limit=500)
+        # 账单走云端(billing_service 内部已有 cloud_cache 离线兜底)
+        bills = billing.listBills(self._userId, limit=500)
         monthSpent = sum(b.realCost for b in bills if b.createdAt >= monthStart)
         totalSpent = sum(b.realCost for b in bills)
 

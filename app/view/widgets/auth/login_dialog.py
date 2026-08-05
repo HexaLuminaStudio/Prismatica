@@ -201,12 +201,11 @@ class LoginDialog(QWidget):
             "TRY-XXXX-XXXX-XXXX-XXXX", showName=True, parent=self._card
         )
         self.activationForm = _CodeForm(
-            "粘贴 LicenseManager 激活码", showName=False, parent=self._card
+            "粘贴激活码", showName=False, parent=self._card
         )
 
         self.activationHint = BodyLabel(
-            "激活码流程由现有 LicenseManager 处理。"
-            "成功后请重启软件以进入主窗口。",
+            "激活码已接入云端,输入后即可激活,无需重启软件。",
             self._card,
         )
         self.activationHint.setStyleSheet("color: #888; padding: 4px 0;")
@@ -331,7 +330,7 @@ class LoginDialog(QWidget):
             self.hintLabel.setText("体验码格式:TRY-XXXX-XXXX-XXXX-XXXX,激活赠送 20 币")
             self.yesButton.setText("激活")
         else:
-            self.hintLabel.setText("激活码由现有 LicenseManager 处理")
+            self.hintLabel.setText("激活码已接入云端,输入后即可激活")
             self.yesButton.setText("激活")
 
     def _activeForm(self) -> _CodeForm:
@@ -343,7 +342,6 @@ class LoginDialog(QWidget):
         return self.activationForm
 
     def _onActivate(self) -> None:
-        idx = self._routeKeyToIndex(self.pivot.currentRouteKey())
         form = self._activeForm()
         code = form.codeEdit.text().strip()
         if not code:
@@ -359,10 +357,6 @@ class LoginDialog(QWidget):
             return
         form.codeEdit.setError(False)
         self.reactivateRow.hide()
-
-        if idx == self.TAB_ACTIVATION:
-            self._activateLegacy(code)
-            return
 
         displayName = (
             (form.nameEdit.text().strip() if form.nameEdit else "") or "内测用户"
@@ -404,40 +398,3 @@ class LoginDialog(QWidget):
             duration=2000,
             position=InfoBarPosition.TOP,
         )
-
-    def _activateLegacy(self, code: str) -> None:
-        form = self.activationForm
-        try:
-            from app.core.utils.device_id import generateOrLoadDeviceId
-            from app.core.utils.license import getLicenseManager
-
-            deviceCode = generateOrLoadDeviceId()
-            result = getLicenseManager().activate(code, deviceCode)
-            if result.get("success"):
-                self._success = True
-                InfoBar.success(
-                    title="激活成功",
-                    content="激活成功,请重启软件以进入主窗口",
-                    parent=self,
-                    duration=3000,
-                    position=InfoBarPosition.TOP,
-                )
-                self.accept()
-            else:
-                form.codeEdit.setError(True)
-                InfoBar.error(
-                    title="激活失败",
-                    content=result.get("message", "未知错误"),
-                    parent=self,
-                    duration=3500,
-                    position=InfoBarPosition.TOP,
-                )
-        except Exception as e:
-            form.codeEdit.setError(True)
-            InfoBar.error(
-                title="激活异常",
-                content=str(e),
-                parent=self,
-                duration=3500,
-                position=InfoBarPosition.TOP,
-            )

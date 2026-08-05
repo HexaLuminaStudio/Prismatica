@@ -47,13 +47,31 @@ app/
 │   ├── api/        外部接口封装（HTTP、下载）
 │   ├── models/     数据模型定义（目前空，预留 Pydantic/dataclass）
 │   ├── services/   业务逻辑 + 多线程 Worker（HSK 下载、Global 下载、TaskManager）
-│   └── utils/      通用工具（config、logger、license、encryption、setting、data_paths、signal_bus、constant、device_id）
+│   │               + 云端 Gateway（2026-08-05）：
+│   │                 - cloud_api.py       底层 httpx 客户端（11 端点、401 自动 refresh）
+│   │                 - cloud_config.py    多环境配置（prod/dev/staging + qconfig 改写）
+│   │                 - cloud_device.py    设备 ID 持久化
+│   │                 - cloud_cache.py     本地只读快照（user.json/bills.json）
+│   │                 - auth_gateway.py    鉴权云端编排（强云端，不再写本地 SQLite）
+│   │                 - billing_gateway.py 计费云端编排（me/preauth/settle/refund/listBills）
+│   │                 - auth_service.py    本地 license.enc 存储 + token 缓存（强云端后只承担这 2 件事）
+│   │                 - billing_service.py 计费业务门面（被 @charged 装饰器调用，内部委托 billing_gateway）
+│   └── utils/      通用工具（config、logger、license、encryption、setting、data_paths、signal_bus、constant、device_id、error_messages_cn）
 ├── view/
 │   ├── *_interface.py     顶层子界面（每个导航项一个）
 │   ├── main_window.py     主窗口
 │   └── widgets/           可复用 QWidget 组件；每个功能模块一个子包
 └── resource/      Qt 资源（icons/*.svg, images/*.png, resource.qrc, 自动生成的 resource.py）
 ```
+
+### 云端鉴权/计费架构变化（2026-08-05）
+
+**强云端决策已落定**：AuthService 不再降级到本地 SQLite，所有写操作走云端。
+- `AuthService.redeemCode` → `AuthGateway.redeem` → `CloudApi.redeem`
+- `BillingService.{preauth,settle,refund}` → `BillingGateway.{preauth,settle,refund}` → `CloudApi.*`
+- 本地 `license.enc` 仅作 token 缓存（走设备指纹派生 AES-GCM）
+- `account_db` 不再写 bill，所有 bill 由云端权威决定
+- 单测：`tests/test_cloud_api.py` + `tests/test_auth_gateway.py`，12 个用例
 
 **导入规则（强制）**：使用绝对导入，根包为 `app.core.*` / `app.view.*` / `app.resource.*`。视图层**只能**调用 `app.core.services`，禁止直接调 `app.core.api` 或操作 models。资源通过 Qt 资源系统引用，前缀为 `:app/...`（如 `:app/icons/Hsk.svg`、`:app/images/logo.png`），对应 `app/resource/resource.qrc` 中 `<qresource prefix="/app">` 的声明。
 

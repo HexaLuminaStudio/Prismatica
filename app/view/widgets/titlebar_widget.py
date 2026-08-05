@@ -4,8 +4,19 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 from qfluentwidgets import BodyLabel, CardWidget, ImageLabel
 from qframelesswindow import TitleBar
 
+from app.core.models.auth_models import UserTier
 from app.core.utils import cfg, qconfig, signalBus
 from app.view.widgets.project_switcher_widget import ProjectSwitcher
+
+
+# 档位 → 标题栏显示文案
+_TIER_LABELS = {
+    UserTier.GUEST: "公益版",
+    UserTier.TRIAL: "体验版",
+    UserTier.BETA: "公益版",
+    UserTier.BETA_PRO: "内测专业版",
+    UserTier.PAID: "正式用户",
+}
 
 
 class UserStatusWidget(CardWidget):
@@ -40,15 +51,15 @@ class UserStatusWidget(CardWidget):
         signalBus.activationStatusChanged.connect(self._onActivationStatusChanged)
 
     def _updateActivationStatus(self):
-        """更新激活状态显示"""
-        from app.core.utils.license import getLicenseManager
+        """更新激活状态显示(2026-08-05 改读 AuthService 云端凭证)"""
+        from app.core.services.auth_service import getAuthService
 
-        licenseManager = getLicenseManager()
+        auth = getAuthService()
 
-        if licenseManager.isActivated():
+        if auth.isAuthenticated():
             # 已激活
-            userType = licenseManager.getUserType()
-            self.tokenLabel.setText(userType)
+            tier = auth.currentTier()
+            self.tokenLabel.setText(_TIER_LABELS.get(tier, tier.value))
             self.publicImageLabel.setVisible(False)
             self.advanceImageLabel.setVisible(True)
         else:

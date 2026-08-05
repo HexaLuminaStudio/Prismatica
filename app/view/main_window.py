@@ -376,7 +376,7 @@ class MainWindow(MSFluentWindow):
         # 内测账户中心(REQ-BETA-001):放底部,与"设置"同级
         self.addSubInterface(
             self.accountInterface,
-            QIcon(":app/icons/Save.svg"),  # 复用现有图标
+            QIcon(":app/icons/User.svg"),  # 复用现有图标
             "账户",
             position=NavigationItemPosition.BOTTOM,
         )
@@ -511,7 +511,11 @@ class MainWindow(MSFluentWindow):
         # PRD-002:项目管理页 AI 报告生成期间禁止关闭主窗口(防止打断生成)
         if self._projectBusy:
             try:
-                from qfluentwidgets import InfoBar, InfoBarPosition, MessageBox
+                # 注意:不要在此局部导入 MessageBox —
+                # 那会让 MessageBox 在本函数内成为 local,若 _projectBusy=False
+                # 则下方 line ~555 使用 MessageBox 时触发 UnboundLocalError。
+                # MessageBox 已在模块顶部导入,直接使用模块级即可。
+                from qfluentwidgets import InfoBar, InfoBarPosition
 
                 mb = MessageBox(
                     "AI 报告生成中",

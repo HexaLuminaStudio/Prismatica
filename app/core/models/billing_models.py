@@ -130,6 +130,7 @@ class Account(BaseModel):
     frozenBalance: int = Field(default=0, ge=0)
     totalSpent: int = Field(default=0, ge=0)
     totalRecharged: int = Field(default=0, ge=0)
+    expireAt: Optional[datetime] = Field(default=None, description="云端真实到期时间(naive UTC)")
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     updatedAt: datetime = Field(default_factory=datetime.utcnow)
 

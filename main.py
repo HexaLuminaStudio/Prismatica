@@ -249,7 +249,15 @@ else:
     # 启动门(REQ-BETA-002):未激活用户必须先激活才能进入主窗口
     # 优先级低于内测时间锁(过期直接退出),高于引导窗口(可与引导共存)
     # ============================================================
-    if not getAuthService().isAuthenticated():
+    _authService = getAuthService()
+    if not _authService.isAuthenticated():
+        # 云端恢复:本地凭证完好但 token 过期 / expireAt 陈旧时,先尝试
+        # 用 refresh token 从云端恢复会话(失败不阻断,进入登录门)
+        try:
+            _authService.restoreSession()
+        except Exception as _restoreErr:  # noqa: BLE001
+            logger.warning(f"[Main] 云端会话恢复失败(忽略): {_restoreErr}")
+    if not _authService.isAuthenticated():
         try:
             with _startupProfiler.stage("auth_gate", "AuthGate 启动门"):
                 from app.view.auth_interface import showAuthGate

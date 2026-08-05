@@ -101,7 +101,10 @@ def charged(
                 f"resource={preResource} cost={preview.estimatedCost}"
             )
 
-            # 2) 余额不足直接拒绝
+            # 2) 余额不足直接拒绝(2026-08-05 T7):
+            # 之前逻辑已经检查 affordable,但同时也会再走 preauth → 云端预占
+            # → 当 balance=0 时还白白走一趟 /v1/billing/preauth 现预占 0 额度,失败再回退,
+            # 流程冗余。这次修正语义:affordable=False 直接抛,不再发起云端预占请求。
             if not preview.affordable:
                 logger.warning(
                     f"[charged] 余额不足 user={userId} "

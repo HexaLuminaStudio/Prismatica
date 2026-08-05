@@ -43,7 +43,6 @@ TableView 拉伸修复策略:
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -77,6 +76,7 @@ from qfluentwidgets import (
 from loguru import logger
 
 from app.core.services.hsk_corpus_service import HskCorpusService
+from app.core.utils.data_paths import HSK_CORPUS_DB
 from app.core.utils.constant import hskCountryDict
 from app.view.widgets.freq_analyzer.worker_utils import WorkerMixin
 from app.view.widgets.hsk_corpus.hsk_corpus_model import HskCorpusModel
@@ -96,7 +96,8 @@ _DISPLAY_LIMIT: int = 20
 # ------------------------------------------------------------------
 # 本页面的所有检索/统计都围绕这一个文件展开。
 # 注意:此路径不应在 UI 文本中展示给用户。
-BOUND_HSK_DB_PATH = Path(r"e:\Prismatica\datas\corpora\hsk_corpus.db")
+# 使用 data_paths 统一路径(<INSTALL_DIR>/datas/corpora/hsk_corpus.db),禁止硬编码。
+BOUND_HSK_DB_PATH = HSK_CORPUS_DB
 
 
 # ======================================================================

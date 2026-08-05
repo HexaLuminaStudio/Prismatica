@@ -39,6 +39,7 @@ from qfluentwidgets import (
 )
 
 from app.core.services.auth_service import getAuthService
+from app.core.utils import logger
 from app.core.utils.signal_bus import signalBus
 from app.view.widgets.auth.login_dialog import LoginDialog
 from app.view.widgets.billing.balance_card import BalanceCard
@@ -127,6 +128,17 @@ class AccountInterface(QWidget):
         self.corruptBanner.hide()
         hero.addWidget(self.corruptBanner)
 
+        # 会话失效提示条(2026-08-05 F5):refresh token 失效时显示,
+        # 引导用户走「重新激活」。默认隐藏。
+        self.sessionBanner = CaptionLabel("", container)
+        self.sessionBanner.setStyleSheet(
+            "color: #b67c2b; background: rgba(255,180,0,10%); "
+            "padding: 6px 10px; border-radius: 6px;"
+        )
+        self.sessionBanner.setWordWrap(True)
+        self.sessionBanner.hide()
+        hero.addWidget(self.sessionBanner)
+
         containerLayout.addLayout(hero)
 
         # ---------- 第一块:余额 ----------
@@ -194,9 +206,25 @@ class AccountInterface(QWidget):
         # 信号
         signalBus.activationStatusChanged.connect(self._onAuthChanged)
         signalBus.licenseCorrupted.connect(self._onLicenseCorrupted)
+        signalBus.sessionExpired.connect(self._onSessionExpired)
         auth = getAuthService()
         if auth.currentUserId():
             self._setUser(auth.currentUserId())
+            # 修复(2026-08-05 F4):启动后从云端拉取最新账户信息,刷新余额/账单。
+            # 网络失败不弹错(账户页本地有缓存可看),仅记日志。
+            try:
+                from app.core.services.billing_service import getBillingService
+
+                getBillingService().refreshUserFromCloud(auth.currentUserId())
+            except Exception:
+                logger.warning("[AccountInterface] 云端拉取账户信息失败,使用本地缓存")
+            # 刷新账单列表
+            try:
+                # 直接调 listBills → setUserId 会触发 refresh
+                self.billTable.setUserId(auth.currentUserId())
+                self.billTable.refresh()
+            except Exception:
+                logger.warning("[AccountInterface] 云端拉取账单失败")
         else:
             # 修复(2026-08-05):未激活时仍允许点击「重新激活」,
             # 让用户能从账户中心直接进入激活流程,无需重启走启动门。
@@ -226,6 +254,19 @@ class AccountInterface(QWidget):
         )
         self.corruptBanner.setText(msg)
         self.corruptBanner.show()
+
+    def _onSessionExpired(self, reason: str) -> None:
+        """会话失效(refresh token 过期)时显示橙色横幅,引导重新激活。
+
+        2026-08-05 F5:云端 /v1/auth/refresh 也 401 时触发,
+        之前只写 WARNING 日志,用户感知不到。
+        """
+        msg = (
+            f"⚠ {reason}。"
+            "请点击右上角「重新激活」重新输入凭证后再使用。"
+        )
+        self.sessionBanner.setText(msg)
+        self.sessionBanner.show()
 
     def _onReactivate(self) -> None:
         """重新激活入口:弹 LoginDialog(reentryMode=True)。"""

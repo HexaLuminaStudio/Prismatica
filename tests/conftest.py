@@ -1,56 +1,27 @@
 # coding: utf-8
-"""pytest 全局 fixture
+"""pytest 全局 fixtures + sys.path 修复(2026-08-05 T8)。
 
-所有测试使用临时 DATA_DIR,避免污染用户数据。
+由于 PrismaticaUI 不是 installable 包,直接 `pytest tests/` 默认
+会找不到 `app` 这个 root 包。在 pyproject 已配 pythonpath=["."],
+但部分环境下(尤其 Windows + 中文路径)需要兜底。
 """
 
 from __future__ import annotations
 
-import os
-import shutil
-import tempfile
+import sys
 from pathlib import Path
 
-import pytest
+# 把项目根加进 sys.path,保证 `import app.xxx` 可用
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 
-@pytest.fixture(autouse=True)
-def isolated_data_dir(monkeypatch, tmp_path: Path):
-    """将 DATA_DIR / CONFIG_FOLDER 重定向到临时目录。
+# 阻止 loguru 在测试期向上传播导致卡顿
+try:
+    from loguru import logger as _loguru
 
-    自动应用于所有测试,确保不读写真实 <INSTALL_DIR>/datas。
-    """
-    testRoot = tmp_path / "prismatica_test"
-    dataDir = testRoot / "datas"
-    configDir = testRoot / "config"
-    logDir = testRoot / "logs"
-    for d in (dataDir, configDir, logDir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    # 先重置所有单例,再 monkeypatch 路径,再重置单例(确保新路径生效)
-    import app.core.services.auth_service as auth_mod
-    import app.core.services.billing_service as billing_mod
-    import app.core.services.pricing_service as pricing_mod
-
-    auth_mod._authServiceInstance = None
-    billing_mod._billingInstance = None
-    pricing_mod.PricingService._instance = None
-
-    # Monkey patch 路径(必须在单例构造前)
-    import app.core.services.account_db as account_db_mod
-    import app.core.services.auth_service as auth_service_mod
-    monkeypatch.setattr("app.core.utils.setting.DATA_FOLDER", dataDir)
-    monkeypatch.setattr("app.core.utils.setting.CONFIG_FOLDER", configDir)
-    monkeypatch.setattr("app.core.utils.setting.LOG_FOLDER", logDir)
-    monkeypatch.setattr(account_db_mod, "ACCOUNT_DB", dataDir / "account.db")
-    monkeypatch.setattr(
-        "app.core.services.pricing_service.PRICING_FILE", dataDir / "pricing.json"
-    )
-    monkeypatch.setattr(auth_service_mod, "LICENSE_FILE", configDir / "license.enc")
-
-    # 强制重新初始化 schema(到 monkeypatched 路径)
-    from app.core.services.account_db import initSchema
-    initSchema()
-
-    yield testRoot
-    # 清理(autouse 结束后 tmp_path 自动删除,这里不必手动)
+    _loguru.remove()
+    _loguru.add(lambda m: None, level="WARNING")
+except Exception:  # noqa: BLE001
+    pass

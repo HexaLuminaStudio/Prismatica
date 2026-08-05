@@ -169,9 +169,8 @@ class BetaExpiredDialog(MessageBoxBase):
                 buttonLayout.insertWidget(1, self._continueButton)
 
     def _onActivate(self):
-        """用户点击「使用激活码解锁」"""
-        from app.core.utils.license import getLicenseManager
-        from app.core.utils.device_id import generateOrLoadDeviceId
+        """用户点击「使用激活码解锁」(2026-08-05 改走云端兑换)"""
+        from app.core.services.auth_service import getAuthService
 
         code = self._codeEdit.text().strip()
         if not code:
@@ -181,29 +180,12 @@ class BetaExpiredDialog(MessageBoxBase):
             )
             return
 
-        deviceCode = generateOrLoadDeviceId()
-        mgr = getLicenseManager()
-        result = mgr.verifyActivationCode(code, deviceCode)
-
-        if not result.get("success"):
-            self._reasonLabel.setText(f"激活失败:{result.get('message', '未知错误')}")
+        result = getAuthService().redeemCode(code)
+        if not result.success:
+            self._reasonLabel.setText(f"激活失败:{result.message}")
             self._reasonLabel.setStyleSheet(
                 "color: #b00; font-size: 14px; padding: 4px 0;"
             )
-            return
-
-        # 激活成功:保存数据,关闭弹窗
-        # P1-fix 2026-07-18:license.activate() 现在返回 dict,这里需要
-        # 显式检查 success,失败时把 message 透传给用户。
-        activateResult = mgr.activate(code, deviceCode)
-        if not activateResult.get("success"):
-            self._reasonLabel.setText(
-                f"激活失败:{activateResult.get('message', '未知错误')}"
-            )
-            self._reasonLabel.setStyleSheet(
-                "color: #b00; font-size: 14px; padding: 4px 0;"
-            )
-            self.yesButton.setEnabled(True)
             return
 
         self._reasonLabel.setText("激活成功!下次启动将自动识别正式版。")

@@ -1,50 +1,49 @@
 # coding: utf-8
-"""鉴权服务(AuthService)
+"""鉴权服务(AuthService)- 2026-08-05 T4/T5 重构
 
-与现有 license.py 共存:
-    - 现有 license.py 管理 activation.dat / betaLock / 激活码流程(保留)
-    - 本服务管理 InviteCode / TrialCode / RechargeCode 三类新增凭证,
-      以及激活成功后写入 config/license.enc(与现有字段**互不冲突**)
+变化摘要:
+    - 删掉 `_activateFromInvite / _activateFromTrial / _redeemRecharge` 三个本地分支
+    - 删掉 `redeemCode` 中「云端失败 → 走本地降级」的兜底逻辑
+    - 删掉 `_ensureAccountWithGrant`(grant 完全由云端完成)
+    - 新增 `clearTokens()` 方法(供 CloudApi logout 等场景使用)
+    - 修 `setTokens` 在 `self._currentLicense is None` 时仍持久化 token
 
-激活成功后:
-    1. 写本地凭证(License 模型,AES-GCM 加密)
-    2. 创建 Account(赠送初始余额)
-    3. 触发 signalBus.activationStatusChanged 让 UI 刷新
+本服务在「强云端」决策下,只承担:
+    1. License 模型 + license.enc 加密持久化
+    2. JWT 内存缓存 + TokenStore 抽象实现(供 CloudApi 拿)
+    3. 通过 AuthGateway 调云端(由 AuthGateway.redeem() 收敛云端路径)
 """
 
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
 from app.core.models.auth_models import (
     AuthMode,
-    InviteCode,
     License,
     RedeemResult,
-    RechargeCode,
-    TrialCode,
     UserTier,
 )
-from app.core.services import account_db
 from app.core.utils.encryption import AESCipherGCM, hash256
 from app.core.utils.signal_bus import signalBus
-from app.core.utils.signed_code import (
-    parseSignedModel,
-    tryParseAnyCode,
-)
-from app.core.utils.setting import CONFIG_FOLDER
 
 
-LICENSE_FILE: Path = CONFIG_FOLDER / "license.enc"
+LICENSE_FILE: Path = None  # 启动期由 _deriveLicenseFile() 填实
 
 # 全局单例
 _authServiceInstance: Optional["AuthService"] = None
+
+
+def _deriveLicenseFile() -> Path:
+    """模块级默认 license.enc 路径(从 setting.py 取)。"""
+    from app.core.utils.setting import CONFIG_FOLDER
+
+    return CONFIG_FOLDER / "license.enc"
 
 
 class InvalidCodeError(Exception):
@@ -52,14 +51,22 @@ class InvalidCodeError(Exception):
 
 
 class AuthService:
-    """鉴权主服务"""
+    """鉴权主服务(2026-08-05 收缩为「凭证存储 + token 缓存」)"""
 
     def __init__(self, licenseFile: Optional[Path] = None):
-        # 修复(2026-08-05):同时支持参数和模块级常量,monkeypatch 模块级常量也能生效。
-        # Python 的"or"语义:licenseFile is None 时取 LICENSE_FILE(模块级),测试中
-        # 已经 monkeypatch 了 LICENSE_FILE,所以这里能拿到正确的 tmp_path。
-        self._licenseFile = licenseFile if licenseFile is not None else LICENSE_FILE
+        # 模块级 vs 实例级,monkeypatch 友好
+        if licenseFile is not None:
+            self._licenseFile = licenseFile
+        else:
+            global LICENSE_FILE
+            if LICENSE_FILE is None:
+                LICENSE_FILE = _deriveLicenseFile()
+            self._licenseFile = LICENSE_FILE
         self._currentLicense: Optional[License] = None
+        # 云端 JWT 缓存
+        self._accessToken: Optional[str] = None
+        self._refreshToken: Optional[str] = None
+        self._tokenExpiresAt: Optional[datetime] = None
         self._load()
 
     # ---------- 单例 ----------
@@ -83,11 +90,6 @@ class AuthService:
         return True
 
     def _isExpired(self, license: License) -> bool:
-        """判断给定凭证是否已过期(实例方法,供 redeem 分支复用)。
-
-        修复(2026-08-05):过期凭证在重新激活时应被自动清理,而非一直返回
-        ALREADY_AUTHENTICATED 让用户卡住。
-        """
         return license.expireAt < datetime.utcnow()
 
     def currentUserId(self) -> Optional[str]:
@@ -104,244 +106,268 @@ class AuthService:
             return UserTier.GUEST
         return lic.tier
 
+    # ---------- 云端 JWT ----------
+    def getAccessToken(self) -> Optional[str]:
+        return self._accessToken
+
+    def getRefreshToken(self) -> Optional[str]:
+        return self._refreshToken
+
+    def setTokens(
+        self,
+        accessToken: str,
+        refreshToken: str,
+        expiresIn: int,
+    ) -> None:
+        """写入内存 + 持久化(2026-08-05 T5:即使 _currentLicense is None 也要写)。"""
+        self._accessToken = accessToken
+        self._refreshToken = refreshToken
+        self._tokenExpiresAt = datetime.utcnow() + timedelta(seconds=max(1, int(expiresIn)))
+        # 持久化到 license.enc(下次 _save 会带上)
+        try:
+            self._saveToDisk()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[Auth] setTokens 持久化失败(忽略): {e}")
+
+    def clearTokens(self) -> None:
+        """2026-08-05 T1/T4 新增:仅清 token,保留 License(供 CloudApi.logout 使用)。"""
+        self._accessToken = None
+        self._refreshToken = None
+        self._tokenExpiresAt = None
+        try:
+            self._saveToDisk()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[Auth] clearTokens 持久化失败(忽略): {e}")
+
     def deactivate(self) -> None:
-        """注销(清除本地凭证与账户)。"""
+        """注销(清 license + token + 文件)。"""
         try:
             if self._licenseFile.exists():
                 self._licenseFile.unlink()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"[Auth] 删除 license.enc 失败: {e}")
         self._currentLicense = None
-        signalBus.activationStatusChanged.emit(False)
+        self._accessToken = None
+        self._refreshToken = None
+        self._tokenExpiresAt = None
+        try:
+            signalBus.activationStatusChanged.emit(False)
+        except Exception:  # noqa: BLE001
+            pass
         logger.info("[Auth] 已注销本地凭证")
 
-    # ---------- 兑换 ----------
+    # ---------- 兑换(2026-08-05 委托给 AuthGateway) ----------
     def redeemCode(
         self,
         rawCode: str,
         displayName: Optional[str] = None,
     ) -> RedeemResult:
-        """统一兑换入口:自动识别 INV/TRY/RCH 三类凭证。"""
-        rawCode = (rawCode or "").strip()
-        if not rawCode:
-            return RedeemResult(success=False, code="INVALID", message="请输入凭证")
+        """统一兑换入口:走 AuthGateway(不再 fallback 本地)。"""
+        from app.core.services.auth_gateway import getAuthGateway
 
-        try:
-            kind, model = tryParseAnyCode(rawCode)
-        except Exception as e:
-            logger.warning(f"[Auth] 凭证解析失败: {e}")
-            return RedeemResult(success=False, code="INVALID", message=f"凭证无效: {e}")
+        gateway = getAuthGateway()
+        result = gateway.redeem(rawCode=rawCode, displayName=displayName)
 
-        if kind == "invite":
-            return self._activateFromInvite(model, displayName or "内测用户")
-        if kind == "trial":
-            return self._activateFromTrial(model, displayName or "体验用户")
-        if kind == "recharge":
-            return self._redeemRecharge(model)
-        return RedeemResult(success=False, code="INVALID", message="未知凭证类型")
-
-    # ---------- 邀请码 ----------
-    def _activateFromInvite(
-        self,
-        code: InviteCode,
-        displayName: str,
-    ) -> RedeemResult:
-        now = datetime.utcnow()
-        if code.expireAt < now:
-            return RedeemResult(success=False, code="EXPIRED", message="该邀请码已过期")
-        if self._currentLicense is not None and not self._isExpired(
-            self._currentLicense
-        ):
-            # 修复 BUG-4(2026-08-05):返回 ALREADY_AUTHENTICATED 让 LoginDialog
-            # 显示「立即注销并重试」按钮,避免用户需手动跳转。
-            # 修复(2026-08-05):仅在「未过期」的现存凭证下拦截;
-            # 过期凭证视为可重激活,自动清理后允许新凭证覆盖。
-            return RedeemResult(
-                success=False,
-                code="ALREADY_AUTHENTICATED",
-                message="已存在激活凭证,请先注销后再兑换新邀请码",
-            )
-        if self._currentLicense is not None and self._isExpired(self._currentLicense):
-            # 修复(2026-08-05):过期凭证自动清理,让用户能直接重激活。
+        # 成功:把云端返回的 License 写本地缓存
+        if result.success and result.license is not None:
+            self._currentLicense = result.license
+            try:
+                self._saveToDisk()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[Auth] redeem 写 license.enc 失败: {e}")
+            try:
+                signalBus.activationStatusChanged.emit(True)
+            except Exception:  # noqa: BLE001
+                pass
             logger.info(
-                f"[Auth] 检测到过期凭证 user={self._currentLicense.userId},自动清理"
+                f"[Auth] redeem 成功 user={result.userId} "
+                f"grantedBalance={result.grantedBalance}"
             )
-            self.deactivate()
+            # 云端权威:兑换后立即拉 /me 同步真实 expireAt/tier(失败不阻断)
+            self.restoreSession()
 
-        expireAt = now + timedelta(days=code.grantedDays)
-        license = License(
-            licenseId=_genId("lic"),
-            userId=_genId("usr"),
-            displayName=displayName,
-            authMode=AuthMode.INVITE_CODE,
-            tier=code.tier,
-            activatedAt=now,
-            expireAt=expireAt,
-            deviceFingerprint=_deviceFingerprint(),
-            grantedBalance=code.grantedBalance,
-            payloadJson=code.model_dump_json(),
-        )
-        self._saveLicense(license)
-        # 创建/赠送余额
-        self._ensureAccountWithGrant(license, code.grantedBalance, "activation_grant")
-        self._currentLicense = license
-        signalBus.activationStatusChanged.emit(True)
-        logger.info(
-            f"[Auth] 邀请码激活成功 user={license.userId} "
-            f"balance={code.grantedBalance} expire={expireAt}"
-        )
-        return RedeemResult(
-            success=True,
-            code="OK",
-            message=f"激活成功!已赠送 {code.grantedBalance} 币",
-            license=license,
-            grantedBalance=code.grantedBalance,
-            expireAt=expireAt,
-            userId=license.userId,
-        )
+        return result
 
-    # ---------- 体验码 ----------
-    def _activateFromTrial(
-        self,
-        code: TrialCode,
-        displayName: str,
-    ) -> RedeemResult:
-        now = datetime.utcnow()
-        if code.expireAt < now:
-            return RedeemResult(success=False, code="EXPIRED", message="该体验码已过期")
-        if self._currentLicense is not None and not self._isExpired(
-            self._currentLicense
-        ):
-            return RedeemResult(
-                success=False,
-                code="ALREADY_AUTHENTICATED",
-                message="已存在激活凭证,请先注销后再兑换",
-            )
-        if self._currentLicense is not None and self._isExpired(self._currentLicense):
-            logger.info(
-                f"[Auth] 检测到过期凭证 user={self._currentLicense.userId},自动清理"
-            )
-            self.deactivate()
+    # ---------- 会话恢复(云端权威) ----------
+    def restoreSession(self) -> bool:
+        """启动/兑换后调用:让本地凭证与云端一致。
 
-        expireAt = now + timedelta(days=code.grantedDays)
-        license = License(
-            licenseId=_genId("lic"),
-            userId=_genId("usr"),
-            displayName=displayName,
-            authMode=AuthMode.TRIAL_CODE,
-            tier=code.tier,
-            activatedAt=now,
-            expireAt=expireAt,
-            deviceFingerprint=_deviceFingerprint(),
-            grantedBalance=code.grantedBalance,
-            payloadJson=code.model_dump_json(),
-        )
-        self._saveLicense(license)
-        self._ensureAccountWithGrant(license, code.grantedBalance, "trial_grant")
-        self._currentLicense = license
-        signalBus.activationStatusChanged.emit(True)
-        logger.info(
-            f"[Auth] 体验码激活成功 user={license.userId} "
-            f"balance={code.grantedBalance} expire={expireAt}"
-        )
-        return RedeemResult(
-            success=True,
-            code="OK",
-            message=f"体验激活成功!已赠送 {code.grantedBalance} 币",
-            license=license,
-            grantedBalance=code.grantedBalance,
-            expireAt=expireAt,
-            userId=license.userId,
-        )
+        流程:
+            1. 无本地凭证 → 返回 False
+            2. access token 未过期 → 直接拉 /me 同步 tier/expireAt
+            3. access token 过期/缺失 → 用 refresh token 恢复会话,再拉 /me 同步
+            4. 任何失败 → 保留本地离线凭证,不弹错
 
-    # ---------- 充值码 ----------
-    def _redeemRecharge(self, code: RechargeCode) -> RedeemResult:
-        from app.core.services.billing_service import getBillingService
-
-        # 必须先有本地账户
+        返回 True 表示会话已与云端确认(至少本地凭证可用)。
+        """
         lic = self._currentLicense
         if lic is None:
-            return RedeemResult(
-                success=False,
-                code="INVALID",
-                message="请先激活(输入邀请码/体验码)再使用充值码",
-            )
+            return False
 
-        # 注册到本地去重表(若已存在则跳过)
-        account_db.registerRechargeCode(code.code, code.amount, code.expireAt)
+        refreshed = self._isTokenUsable() or self._tryRefreshToken()
 
-        billing = getBillingService()
-        result = billing.rechargeByCode(
-            userId=lic.userId,
-            code=code.code,
-            expectedAmount=code.amount,
-            note=code.note,
-        )
+        # 云端权威:同步 tier / displayName / expireAt
+        try:
+            from app.core.services.billing_service import getBillingService
 
-        # 修复 BUG-3(2026-08-05):细化失败原因,UI 可针对性提示用户
-        # - 区分「未激活」「已使用」「已过期」「码无效」
-        if not result.success:
-            detailCode = "INVALID"
-            msg = result.message
-            if "已被使用" in msg:
-                detailCode = "ALREADY_USED"
-            elif "已过期" in msg:
-                detailCode = "EXPIRED"
-            elif "先激活" in msg:
-                detailCode = "NEED_ACTIVATION"
-            return RedeemResult(
-                success=False,
-                code=detailCode,
-                message=msg,
-                userId=lic.userId,
-            )
+            account = getBillingService().refreshUserFromCloud(lic.userId)
+            if account is not None:
+                self._syncLicenseFromAccount(lic, account)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[Auth] restoreSession /me 同步失败(忽略): {e}")
 
-        return RedeemResult(
-            success=True,
-            code="OK",
-            message=result.message,
-            grantedBalance=result.amount,
-            userId=lic.userId,
-        )
+        return refreshed
+
+    def _syncLicenseFromAccount(self, lic: License, account: Any) -> None:
+        """把云端 Account 的关键字段回写本地 License(云端为准)。"""
+        updated = False
+        if account.displayName and account.displayName != lic.displayName:
+            lic.displayName = account.displayName
+            updated = True
+        try:
+            cloudTier = UserTier(account.tier)
+            if cloudTier != UserTier.GUEST and cloudTier != lic.tier:
+                lic.tier = cloudTier
+                updated = True
+        except Exception:  # noqa: BLE001
+            pass
+        if account.expireAt is not None and account.expireAt != lic.expireAt:
+            # 云端为准:即使比本地早也采用(修正本地编造的 365 天兜底)
+            lic.expireAt = account.expireAt
+            updated = True
+        if updated:
+            try:
+                self._saveToDisk()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[Auth] restoreSession 写盘失败(忽略): {e}")
+            try:
+                signalBus.activationStatusChanged.emit(True)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _isTokenUsable(self) -> bool:
+        """access token 是否仍可用(存在且未过期)。"""
+        if not self._accessToken:
+            return False
+        if self._tokenExpiresAt is None:
+            return False
+        return self._tokenExpiresAt > datetime.utcnow()
+
+    def _tryRefreshToken(self) -> bool:
+        """用 refresh token 从云端恢复会话(失败静默返回 False)。"""
+        if not self._refreshToken:
+            return False
+        try:
+            from app.core.services.auth_gateway import getAuthGateway
+
+            ok = getAuthGateway().refreshSession()
+            if ok:
+                logger.info("[Auth] 会话已通过 refresh token 恢复")
+            return ok
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[Auth] 会话刷新失败(忽略): {e}")
+            return False
 
     # ---------- 内部:凭证存储 ----------
-    def _saveLicense(self, license: License) -> None:
-        """加密保存 License 到 config/license.enc(AES-GCM,密钥派生自设备指纹)。"""
+    def _saveToDisk(self) -> None:
+        """统一存盘入口(供 setTokens / clearTokens / redeem 复用)。"""
         self._licenseFile.parent.mkdir(parents=True, exist_ok=True)
         try:
             key = self._deriveKey()
             cipher = AESCipherGCM(key)
-            payload = license.model_dump_json()
+            envelope: dict[str, Any] = {}
+            if self._currentLicense is not None:
+                envelope["license"] = json.loads(self._currentLicense.model_dump_json())
+            if self._accessToken:
+                envelope["accessToken"] = self._accessToken
+            if self._refreshToken:
+                envelope["refreshToken"] = self._refreshToken
+            if self._tokenExpiresAt:
+                envelope["tokenExpiresAt"] = self._tokenExpiresAt.isoformat()
+            if not envelope:
+                # 没有任何数据,不写空文件
+                return
+            payload = json.dumps(envelope, ensure_ascii=False)
             encrypted = cipher.encrypt(payload)
             self._licenseFile.write_text(encrypted, encoding="utf-8")
             logger.debug(f"[Auth] license 已加密保存: {self._licenseFile}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.exception(f"[Auth] 保存 license 失败: {e}")
             raise
+
+    def _saveLicense(self, license: License) -> None:
+        """兼容旧调用(保留一段时间,后续删)。
+
+        新代码请用 _saveToDisk()。
+        """
+        self._currentLicense = license
+        self._saveToDisk()
 
     def _load(self) -> None:
         if not self._licenseFile.exists():
             return
+        loadError: Optional[Exception] = None
         try:
             key = self._deriveKey()
-            cipher = AESCipherGCM(key)
-            decrypted = cipher.decrypt(self._licenseFile.read_text(encoding="utf-8"))
-            data = json.loads(decrypted)
-            self._currentLicense = License.model_validate(data)
-            logger.info(
-                f"[Auth] 已加载本地 license user={self._currentLicense.userId} "
-                f"expire={self._currentLicense.expireAt}"
-            )
-        except Exception as e:
-            # 修复 BUG-1(2026-08-05):不再静默失败,
+            envelope = self._decryptEnvelope(key)
+        except Exception as e:  # noqa: BLE001
+            envelope = None
+            loadError = e
+
+        # 迁移:老版本 license.enc 用「设备指纹/沙箱密钥」加密,升级后尝试旧密钥解密
+        migrated = False
+        if envelope is None:
+            try:
+                legacyKey = self._legacyDeriveKey()
+                envelope = self._decryptEnvelope(legacyKey)
+                migrated = True
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[Auth] 旧密钥解密失败,标记损坏: {e}")
+
+        if envelope is None:
             # 1) 备份损坏文件 2) emit licenseCorrupted 信号让 UI 提示用户
             self._currentLicense = None
             self._backupCorruptedFile()
-            logger.warning(f"[Auth] 加载 license.enc 失败: {e}")
+            logger.warning(f"[Auth] 加载 license.enc 失败: {loadError}")
             try:
-                signalBus.licenseCorrupted.emit(str(e))
-            except Exception:
+                signalBus.licenseCorrupted.emit(str(loadError))
+            except Exception:  # noqa: BLE001
                 pass
+            return
+
+        if isinstance(envelope, dict) and "license" in envelope:
+            licPayload = envelope.get("license")
+            if licPayload:
+                self._currentLicense = License.model_validate(licPayload)
+            self._accessToken = envelope.get("accessToken")
+            self._refreshToken = envelope.get("refreshToken")
+            expires = envelope.get("tokenExpiresAt")
+            if expires:
+                try:
+                    self._tokenExpiresAt = datetime.fromisoformat(expires)
+                except Exception:  # noqa: BLE001
+                    self._tokenExpiresAt = None
+        elif isinstance(envelope, dict):
+            # 兼容老格式(整段就是 License)
+            self._currentLicense = License.model_validate(envelope)
+        logger.info(
+            f"[Auth] 已加载本地 license user={self._currentLicense.userId if self._currentLicense else None} "
+            f"hasJwt={bool(self._accessToken)}"
+        )
+
+        # 迁移成功:立即用新持久化密钥重加密,后续统一走新密钥
+        if migrated:
+            try:
+                self._saveToDisk()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[Auth] 迁移重加密失败(忽略): {e}")
+
+    def _decryptEnvelope(self, key: bytes) -> Optional[dict]:
+        """用指定密钥解密 license.enc 并解析为 dict;失败抛异常。"""
+        cipher = AESCipherGCM(key)
+        decrypted = cipher.decrypt(self._licenseFile.read_text(encoding="utf-8"))
+        envelope = json.loads(decrypted)
+        return envelope if isinstance(envelope, dict) else None
 
     def _backupCorruptedFile(self) -> None:
         """将损坏的 license.enc 备份为 license.enc.corrupt.{timestamp}。"""
@@ -357,17 +383,34 @@ class AuthService:
             )
             shutil.copy2(str(self._licenseFile), str(backup))
             logger.info(f"[Auth] 已备份损坏凭证: {backup}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"[Auth] 备份损坏凭证失败: {e}")
 
     def _deriveKey(self) -> bytes:
-        """派生 AES 密钥(32 字节)。
+        """主密钥:持久化随机密钥文件(<CONFIG_FOLDER>/.license-key)。
 
-        优先级:
-            1. 设备指纹派生(主路径,每机独立)
-            2. 沙箱密钥文件 <CONFIG_FOLDER>/.sandbox-key(每次启动随机生成,
-               chmod 600,仅当前主机有效)—— 修复 BUG-2,避免跨机器复制
+        首次生成后固定不变,不再依赖硬件特征 —— 硬件变化/特征采集失败
+        都不会再导致 license.enc 无法解密(修复「刷新后即消失」)。
         """
+        return self._getOrCreateLicenseKey()
+
+    def _getOrCreateLicenseKey(self) -> bytes:
+        """获取或创建持久化随机密钥(32 字节)。文件缺失/写盘失败即报错,不再生成一次性随机密钥。"""
+        import secrets
+
+        keyFile = self._licenseFile.parent / ".license-key"
+        keyFile.parent.mkdir(parents=True, exist_ok=True)
+        if keyFile.exists():
+            data = keyFile.read_bytes()
+            if len(data) >= 32:
+                return data[:32]
+        key = secrets.token_bytes(32)
+        keyFile.write_bytes(key)
+        logger.info(f"[Auth] 已生成持久化密钥: {keyFile}")
+        return key
+
+    def _legacyDeriveKey(self) -> bytes:
+        """旧版密钥(设备指纹 → 沙箱密钥),仅供迁移解密存量 license.enc。"""
         try:
             from app.core.utils.device_id import getDeviceIdentifier
 
@@ -379,94 +422,30 @@ class AuthService:
             salt = hash256(combined).encode()[:32]
             import hashlib as _h
 
-            return _h.pbkdf2_hmac("sha256", combined.encode(), salt, 100000, dklen=32)
-        except Exception as e:
-            logger.warning(
-                f"[Auth] 设备特征不可用({e}),降级到沙箱密钥:凭证仅当前主机有效"
+            return _h.pbkdf2_hmac(
+                "sha256", combined.encode(), salt, 100000, dklen=32
             )
-            return self._getOrCreateSandboxKey()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[Auth] 设备特征不可用({e}),尝试旧沙箱密钥")
+            return self._readSandboxKey()
 
-    def _getOrCreateSandboxKey(self) -> bytes:
-        """获取或创建沙箱环境密钥(32 字节随机)。
-
-        存储路径:<CONFIG_FOLDER>/.sandbox-key,文件权限 0600。
-        进程级生成,持久化到磁盘,保证多次启动密钥稳定。
-        """
-        import os
-        import secrets
-
-        # 关键:从 self._licenseFile.parent 取路径,而不是模块级 LICENSE_FILE,
-        # 这样 monkeypatch / 实例化时的 licenseFile 参数都能生效。
+    def _readSandboxKey(self) -> bytes:
+        """读取旧沙箱密钥(仅迁移用);缺失则报错,不再生成一次性随机密钥。"""
         keyFile = self._licenseFile.parent / ".sandbox-key"
-        try:
-            if keyFile.exists():
-                data = keyFile.read_bytes()
-                if len(data) >= 32:
-                    return data[:32]
-            # 第一次:随机生成 32 字节
-            key = secrets.token_bytes(32)
-            keyFile.parent.mkdir(parents=True, exist_ok=True)
-            keyFile.write_bytes(key)
-            # Windows 下没有 os.chmod 0600 语义,改用 icacls 跳过
-            try:
-                os.chmod(keyFile, 0o600)
-            except (OSError, NotImplementedError):
-                pass
-            logger.info(f"[Auth] 已生成沙箱密钥: {keyFile}")
-            return key
-        except Exception as e:
-            # 兜底:进程级内存密钥(最差情况,重启即失效)
-            logger.warning(f"[Auth] 沙箱密钥持久化失败,使用进程级密钥: {e}")
-            return secrets.token_bytes(32)
-
-    def _ensureAccountWithGrant(
-        self,
-        license: License,
-        grantAmount: int,
-        source: str,
-    ) -> None:
-        """创建账户并赠送初始余额(幂等)。"""
-        from app.core.models.billing_models import Account
-
-        existing = account_db.getAccount(license.userId)
-        if existing is None:
-            # 先创建账户(余额 0)
-            account = Account(
-                userId=license.userId,
-                displayName=license.displayName,
-                tier=license.tier.value,
-                balance=0,
-                frozenBalance=0,
-                totalSpent=0,
-                totalRecharged=0,
-            )
-            account_db.upsertAccount(account)
-        # 再加余额(同时写充值记录)
-        try:
-            record = account_db.addBalance(
-                userId=license.userId,
-                delta=grantAmount,
-                source=source,
-                code="",
-            )
-            logger.debug(f"[Auth] 初始赠送记录: {record.recordId}")
-        except Exception as e:
-            logger.warning(f"[Auth] 写初始赠送流水失败: {e}")
-
-
-def _genId(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:12]}"
-
-
-def _deviceFingerprint() -> str:
-    try:
-        from app.core.utils.device_id import generateOrLoadDeviceId
-
-        return generateOrLoadDeviceId()
-    except Exception:
-        return ""
+        if keyFile.exists():
+            data = keyFile.read_bytes()
+            if len(data) >= 32:
+                return data[:32]
+        raise RuntimeError("旧沙箱密钥缺失,无法迁移解密")
 
 
 def getAuthService() -> AuthService:
     """获取全局 AuthService 单例。"""
     return AuthService.instance()
+
+
+__all__ = [
+    "AuthService",
+    "InvalidCodeError",
+    "getAuthService",
+]

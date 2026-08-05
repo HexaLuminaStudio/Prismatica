@@ -25,7 +25,6 @@ from qfluentwidgets import (
 )
 from loguru import logger
 
-from app.core.services import account_db
 from app.core.services.auth_service import getAuthService
 from app.core.utils.setting import LOG_FOLDER
 
@@ -135,18 +134,6 @@ class FeedbackDialog(MessageBoxBase):
         except Exception as e:
             logger.warning(f"[Feedback] 打包日志失败: {e}")
             log_zip = None  # 不阻断主流程
-
-        # 写 DB
-        try:
-            account_db.saveFeedback(
-                feedbackId=feedbackId,
-                userId=userId,
-                category=category,
-                description=desc[:500],
-                logPath=str(log_zip) if log_zip else "",
-            )
-        except Exception as e:
-            logger.warning(f"[Feedback] 写 DB 失败: {e}")
 
         InfoBar.success(
             title="反馈已保存",
