@@ -13,6 +13,15 @@ class SignalBus(QObject):
     # 激活状态变更信号
     activationStatusChanged = Signal(bool)
 
+    # 余额变更信号:参数为 (userId: str, balance: int)
+    balanceChanged = Signal(str, int)
+
+    # 账单新增信号:参数为 userId
+    billCreated = Signal(str)
+
+    # 凭证损坏信号:参数为损坏原因字符串(str)
+    licenseCorrupted = Signal(str)
+
     # HSK Token刷新信号
     hskTokenRefreshSignal = Signal(str)
     # 参数: token (str) - 新的Token值

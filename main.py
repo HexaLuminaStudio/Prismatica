@@ -209,6 +209,7 @@ except Exception as _pmWarmupErr:
 # =====================================================================
 from app.core.utils.license import getLicenseManager
 from app.core.utils.setting import IS_BETA
+from app.core.services.auth_service import getAuthService  # 启动门
 
 _splashWindow.setProgress(18, "正在校验许可证…")
 _splashWindow.raise_()
@@ -244,6 +245,36 @@ if IS_BETA and _betaStatus.get("status") in ("expired_hard", "expired_30d"):
     except Exception:
         pass
 else:
+    # ============================================================
+    # 启动门(REQ-BETA-002):未激活用户必须先激活才能进入主窗口
+    # 优先级低于内测时间锁(过期直接退出),高于引导窗口(可与引导共存)
+    # ============================================================
+    if not getAuthService().isAuthenticated():
+        try:
+            with _startupProfiler.stage("auth_gate", "AuthGate 启动门"):
+                from app.view.auth_interface import showAuthGate
+
+                _splashWindow.setProgress(20, "正在校验激活凭证…")
+                _splashWindow.raise_()
+                QApplication.processEvents()
+                # 修复(2026-08-05 启动门卡死):
+                #   1) 不再 hold splash —— splash 已 hide 时其子 dialog 也
+                #      不可见不响应,会导致 exec() 永久阻塞。
+                #   2) showAuthGate(parent=None) → 内部 fallback 到 activeWindow,
+                #      让 LoginDialog 作为独立顶层弹窗显示。
+                #   3) splash 仍作为 WindowStaysOnTopHint 在最下层,登录完成
+                #      后主窗口上来时 splash 才 finish。
+                activated = showAuthGate(parent=None)
+                if not activated:
+                    logger.warning("[Main] 用户未激活,退出程序")
+                    try:
+                        _splashWindow.finish()
+                    except Exception:
+                        pass
+                    QApplication.instance().quit()
+                    sys.exit(0)
+        except Exception as _authErr:
+            logger.exception(f"[Main] AuthGate 异常(非致命,继续): {_authErr}")
     # ============================================================
     # 首次启动引导(2026-07-21 新增)
     # - 读取 cfg.FirstLaunch;为 True 时先弹出引导窗口
@@ -283,13 +314,18 @@ else:
             with _startupProfiler.stage(
                 "guide_window_exec", "首次启动 GuideWindow.exec()"
             ):
-                _guideCompleted = _guideWindow.exec()
-
-            # 引导结束后让 splash 重新接管(若进度已推进过,这里继续推一格)
-            try:
-                _splashWindow.release(progress=25, text="引导完成,准备启动主窗口…")
-            except Exception as _relErr:
-                logger.warning(f"[Main] 恢复 splash 失败(非致命): {_relErr}")
+                # 修复(2026-08-05):hold/release 用 try/finally 配对,
+                # 哪怕 exec 抛异常也要恢复 splash,避免「软件无反应」。
+                try:
+                    _guideCompleted = _guideWindow.exec()
+                finally:
+                    # 引导结束后让 splash 重新接管(若进度已推进过,这里继续推一格)
+                    try:
+                        _splashWindow.release(
+                            progress=25, text="引导完成,准备启动主窗口…"
+                        )
+                    except Exception as _relErr:
+                        logger.warning(f"[Main] 恢复 splash 失败(非致命): {_relErr}")
 
             if not _guideCompleted:
                 # 用户在未完成时尝试关闭引导 -> 退出整个程序

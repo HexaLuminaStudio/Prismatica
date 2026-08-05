@@ -98,6 +98,9 @@ class SplashWindow(QWidget):
         self._currentProgress = 0
         self._stageText = "正在准备…"
         self._isFinished = False
+        self._isHeld = (
+            False  # 修复(2026-08-05):hold/release 状态守卫,避免重复 hide/show
+        )
         self._lastExternalProgressAt = 0.0  # 上次外部推进时间戳(秒)
         # 初始把目标设到 5,自由增长定时器会从 0 自动爬升,
         # 用户一打开 splash 就看到进度条在动,而不是停在 0 等几秒。
@@ -392,12 +395,18 @@ class SplashWindow(QWidget):
         实现要点:
             - 不修改 _isFinished,finish() 仍可后续调用
             - 不停止定时器,再次 show 时进度条会自动重新开始追赶
+            - _isHeld 状态守卫,避免未持有时重复 release 时 no-op
         """
         if self._isFinished:
             logger.debug("[Splash] hold() 调用但 splash 已 finish,忽略")
             return
+        if self._isHeld:
+            # 修复(2026-08-05):同一窗口多次 hold() 是无意义的,避免日志噪音
+            logger.debug("[Splash] hold() 调用但已处于 held 状态,忽略")
+            return
         try:
             self.hide()
+            self._isHeld = True
             logger.info("[Splash] 临时退场(引导窗口交互期间)")
         except Exception:
             logger.debug("[Splash] hold() hide 失败")
@@ -411,6 +420,10 @@ class SplashWindow(QWidget):
         """
         if self._isFinished:
             return
+        if not self._isHeld:
+            # 修复(2026-08-05):未持有时 release 是无意义的,
+            # 不再触发 show/raise/activate,避免空 splash 闪现。
+            return
         if progress is not None:
             try:
                 self.progressChanged.emit(int(progress), str(text))
@@ -420,10 +433,14 @@ class SplashWindow(QWidget):
             self.show()
             self.raise_()
             self.activateWindow()
+            self._isHeld = False
             # 强制首帧立即绘制,避免被后续阻塞逻辑遮挡
             from PySide6.QtWidgets import QApplication
 
             QApplication.processEvents()
             logger.info("[Splash] 重新显示(引导结束后)")
         except Exception:
+            # 释放失败时也要清掉守卫,避免后续 release() 永远 no-op,
+            # 导致 splash 永久不可见。
+            self._isHeld = False
             logger.debug("[Splash] release() show 失败")

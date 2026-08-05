@@ -24,6 +24,7 @@ from .task_interface import TaskInterface
 from .chat_interface import ChatInterface
 from .setting_interface import SettingInterface
 from .project_interface import ProjectInterface
+from .account_interface import AccountInterface
 
 
 class MainWindow(MSFluentWindow):
@@ -80,6 +81,9 @@ class MainWindow(MSFluentWindow):
 
         self._reportProgress(72, "构建设置界面")
         self.settingInterface = SettingInterface(self)
+
+        self._reportProgress(76, "构造账户中心界面")
+        self.accountInterface = AccountInterface(self)
 
         # PRD-002:项目管理子界面(REQ-PROJ-001)
         self._reportProgress(80, "构造项目管理界面")
@@ -367,6 +371,14 @@ class MainWindow(MSFluentWindow):
             QIcon(":app/icons/Save.svg"),
             "项目管理",
             position=NavigationItemPosition.SCROLL,
+        )
+
+        # 内测账户中心(REQ-BETA-001):放底部,与"设置"同级
+        self.addSubInterface(
+            self.accountInterface,
+            QIcon(":app/icons/Save.svg"),  # 复用现有图标
+            "账户",
+            position=NavigationItemPosition.BOTTOM,
         )
 
         self.addSubInterface(
