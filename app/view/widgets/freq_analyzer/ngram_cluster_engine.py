@@ -24,7 +24,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from loguru import logger
+from app.core.utils import logger
 
 # sklearn 可选依赖
 try:

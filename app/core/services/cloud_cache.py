@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.utils.setting import CONFIG_FOLDER
 

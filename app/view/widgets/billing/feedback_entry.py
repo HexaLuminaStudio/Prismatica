@@ -23,7 +23,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar, InfoBarPosition,
 )
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.services.auth_service import getAuthService
 from app.core.utils.setting import LOG_FOLDER

@@ -3,6 +3,7 @@ from .signal_bus import signalBus
 from .logger import (
     logger,
     log,
+    audit,
     Logger,
     getLogger,
     getLog,

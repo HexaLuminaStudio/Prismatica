@@ -1,7 +1,57 @@
 # coding:utf-8
 """
 统一的日志配置模块
-提供敏感信息过滤、分级日志记录、日志轮转等功能
+提供敏感信息过滤、分级日志记录、日志轮转、关键事件审计等功能
+
+================================================================
+日志使用规范(2026-08-06 规范化)
+================================================================
+日志级别与典型用途:
+
+    DEBUG   调试细节,生产默认不输出。用于追踪函数入口/内部状态,
+            仅在排查具体问题时启用(DEV 模式自动开启)。
+    INFO    关键业务节点摘要,产品级必备追踪。
+            例如:登录成功、下载启动、计费成功、任务入队。
+    WARNING 可恢复的异常或预期内的失败,需要人关注但不必报警。
+            例如:单次网络重试、缓存未命中、文件跳过。
+    ERROR   单次操作失败、不可恢复但不影响整体流程。
+            例如:某个文件下载失败、单个任务失败。
+    EXCEPTION
+            与 ERROR 同级,自动附带堆栈。用于 try/except 中需要看调用链的场合。
+    AUDIT   关键合规/审计事件,落地到独立 audit_<date>.log(90 天)。
+            业务侧必须记录的几类事件:
+                - AUTH_xxx    鉴权事件(登录、激活、刷新、注销)
+                - BILL_xxx    计费事件(预占、结算、退款、余额变更)
+                - DOWNLOAD_xxx
+                              语料/资源下载关键节点(开始/结束/失败)
+                - STARTUP_xxx 启动流程关键里程碑(各 stage 完成)
+                - CONFIG_xxx  用户关键设置变更(路径、并发、模型)
+
+================================================================
+输出通道约定
+================================================================
+- log_<时间戳>.log    普通日志(INFO+),轮转 500MB,保留 10 天
+- debug_<日期>.log    调试日志(DEBUG+),轮转 50MB,保留 3 天(仅 DEV 模式)
+- error_<日期>.log    错误日志(ERROR+),轮转 10MB,保留 30 天
+- audit_<日期>.log    审计日志(自定义过滤),轮转 10MB,保留 90 天
+- startup_<时间戳>.log
+                      冷启动耗时(独立 logger,见 _StartupProfiler)
+
+================================================================
+敏感信息过滤
+================================================================
+所有 handler 都默认挂 _logFilter,自动遮蔽 API Key / Token /
+手机号 / 邮箱 / 身份证 / 银行卡 等敏感字段。无需业务侧手动处理。
+
+================================================================
+import 约定
+================================================================
+统一从 `app.core.utils import logger, audit` 导入,
+**不要** `from loguru import logger`(详见 CLAUDE.md)。
+
+audit() 用法:
+    from app.core.utils import audit
+    audit("AUTH_LOGIN_SUCCESS", f"user={userId}")
 """
 
 import re
@@ -116,6 +166,17 @@ def _logFilter(record):
     return True
 
 
+def _auditFilter(record):
+    """审计日志过滤器(2026-08-06)。
+
+    只放行带 `extra["audit"]=True` 的事件,且对 message 做敏感字段遮蔽。
+    业务侧应通过 `logger.bind(audit=True).info(...)` 或模块级 `audit()`
+    函数写入,直接调 `logger.info()` 不会进 audit 日志。
+    """
+    record["message"] = _filterSensitiveInfo(record["message"])
+    return record["extra"].get("audit") is True
+
+
 class Logger:
     """日志管理器类"""
 
@@ -217,6 +278,21 @@ class Logger:
             )
             self._handlers.append(handlerId)
 
+            # 审计日志(2026-08-06 新增):只接收 audit() 写入的事件,
+            # 通过 extra["audit"]=True 标记 + 自定义 filter 路由。
+            # 业务事件类型约定见模块顶部注释(AUTH_/BILL_/DOWNLOAD_/STARTUP_/CONFIG_)。
+            auditHandlerId = _logger.add(
+                logPath / "audit_{time:YYYY-MM-DD}.log",
+                level="INFO",
+                format=self.formatString,
+                rotation="10 MB",
+                retention="90 days",
+                encoding="utf-8",
+                enqueue=True,
+                filter=_auditFilter,
+            )
+            self._handlers.append(auditHandlerId)
+
         return self
 
     def debug(self, message: str, *args, **kwargs):
@@ -242,6 +318,18 @@ class Logger:
     def exception(self, message: str, *args, **kwargs):
         """记录异常信息（自动包含堆栈跟踪）"""
         _logger.exception(message, *args, **kwargs)
+
+    def audit(self, eventType: str, message: str, *args, **kwargs) -> None:
+        """审计事件(2026-08-06 新增)。
+
+        Args:
+            eventType: 事件类型标识,建议大写 + 下划线,如
+                       "AUTH_LOGIN_SUCCESS" / "BILL_PREAUTH" /
+                       "DOWNLOAD_FINISH" 等。
+            message:   事件描述,自由文本(已自动过敏感过滤)。
+            *args / **kwargs: 透传给 loguru(支持 format 占位)。
+        """
+        _logger.bind(audit=True).info(f"[{eventType}] {message}", *args, **kwargs)
 
 
 def _autoSetup(environment: str = "DEV"):
@@ -276,6 +364,28 @@ def getLog():
 
 # 为了向后兼容，导出_logger实例（小写变量名）
 logger = _logger
+
+
+# =====================================================================
+# 模块级 audit() 便捷函数(2026-08-06)
+#
+# 用法:
+#     from app.core.utils import audit
+#     audit("AUTH_LOGIN_SUCCESS", f"user={userId}")
+#
+# 与 logger.info() 的区别:
+#   - logger.info(...)  → 走 log_<时间戳>.log (普通日志,10 天保留)
+#   - audit(...)        → 走 audit_<日期>.log (审计,90 天保留 + 独立通道)
+#   - audit 不需要堆栈、不参与日志染色,只关心"发生了什么"
+# =====================================================================
+def audit(eventType: str, message: str, *args, **kwargs) -> None:
+    """模块级 audit() 快捷方法。
+
+    Args:
+        eventType: 事件类型,如 "AUTH_LOGIN_SUCCESS" / "BILL_PREAUTH"。
+        message:   事件描述,自由文本(已自动过敏感过滤)。
+    """
+    _logger.bind(audit=True).info(f"[{eventType}] {message}", *args, **kwargs)
 
 
 # =====================================================================

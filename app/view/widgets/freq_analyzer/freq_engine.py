@@ -23,7 +23,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import jieba
 import pandas as pd
-from loguru import logger
+from app.core.utils import logger
 
 
 # P0-fix:用户自定义正则的 ReDoS 防御。

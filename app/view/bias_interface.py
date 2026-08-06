@@ -8,7 +8,7 @@ import io
 
 import numpy as np
 import pandas as pd
-from loguru import logger
+from app.core.utils import logger
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtSvgWidgets import QSvgWidget

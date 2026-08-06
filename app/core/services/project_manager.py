@@ -53,7 +53,7 @@ from app.core.utils.data_paths import (
     PROJECTS_DIR,
     PROJECT_STATE_FILE,
 )
-from loguru import logger
+from app.core.utils import logger
 
 
 def _nowIso() -> str:

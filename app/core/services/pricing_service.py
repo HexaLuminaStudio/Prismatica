@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.models.billing_models import (
     ActionType,

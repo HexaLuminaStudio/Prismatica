@@ -4,7 +4,7 @@
 显示正在下载的任务卡片
 """
 
-from loguru import logger
+from app.core.utils import logger
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 

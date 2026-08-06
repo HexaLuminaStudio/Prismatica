@@ -130,6 +130,14 @@ def _onStartupCompleted() -> None:
             return
         _mainWindowRef._showAfterStartup()
         logger.info("[Main] 主窗口已展示(启动彻底完成)")
+        # 启动审计(2026-08-06):主窗口展示完成落 audit,
+        # 用于事后追溯「启动耗时 / 异常中止」等关键里程碑。
+        try:
+            from app.core.utils import audit
+            totalMs = (time.perf_counter() - _startupProfiler._bootStart) * 1000.0
+            audit("STARTUP_MAIN_WINDOW_READY", f"totalMs={totalMs:.1f}")
+        except Exception as _auditErr:
+            logger.debug(f"[Main] audit 写入失败(非致命): {_auditErr}")
         # 冷启动埋点:此时用户已看到主窗口,落盘冷启动耗时汇总
         try:
             _startupProfiler.finish()
@@ -200,63 +208,37 @@ except Exception as _pmWarmupErr:
     logger.warning(f"[Main] 预热 ProjectManager 失败(非致命,继续): {_pmWarmupErr}")
 
 # =====================================================================
-# 内测时间锁校验:首次启动记录 start_date,后续验证签名/截止日/有效期
+# 启动门(2026-08-06 简化:删除本地内测时间锁)
 #
+# 历史背景:
+#   - 旧版本:本地维护 BETA_HARD_DEADLINE + 30 天有效期,过期强制弹窗。
+#   - 新版本:全部授权与有效期由云端 PrismaticaAPI 接管,本地不再做日期限制。
 # 行为规则:
-#   - IS_BETA=True  → 时间锁全量生效:超出 BETA_HARD_DEADLINE 或 30 天则阻止启动
-#   - IS_BETA=False → 不阻止启动(正式版通过激活码授权,时间锁仅做后台追踪)
-# 注意:此校验在 splash 之后进行,期间 splash 持续显示并展示阶段文案
+#   - IS_BETA=True  → 仍保留启动门(强制先激活才能进主界面)
+#   - IS_BETA=False → 不弹启动门,允许进入主界面,付费功能按需激活
 # =====================================================================
-from app.core.utils.license import getLicenseManager
 from app.core.utils.setting import IS_BETA
 from app.core.services.auth_service import getAuthService  # 启动门
 
-_splashWindow.setProgress(18, "正在校验许可证…")
+_splashWindow.setProgress(18, "正在准备启动…")
 _splashWindow.raise_()
 QApplication.processEvents()
 
-with _startupProfiler.stage("license_check", "许可证/BetaTimelock 校验"):
-    _betaStatus = getLicenseManager().ensureBetaTimelock()
-# P0-fix:用于在过期时持有非模态弹窗的强引用,防止 Python GC 回收。
-# 模块级全局变量,生命周期等同进程。
-_betaExpiredDialog = None
-logger.info(
-    f"[BetaTimelock] IS_BETA={IS_BETA}, "
-    f"status={_betaStatus.get('status')}, "
-    f"daysRemaining={_betaStatus.get('daysRemaining')}, "
-    f"deadline={_betaStatus.get('deadline')}"
-)
+logger.info(f"[Main] IS_BETA={IS_BETA},本地时间锁已下线(2026-08-06)")
 
-if IS_BETA and _betaStatus.get("status") in ("expired_hard", "expired_30d"):
-    # P0-fix 2026-07-18:内测已过期时**仅显示提示弹窗**,不显示主窗口。
-    # - 弹窗用 modal 模式阻塞主事件循环(直到用户激活成功 / 退出程序)
-    # - 不创建 MainWindow,避免用户绕过弹窗进入主程序
-    # - 用户必须做出选择(激活码 / 退出)
-    from app.view.widgets.beta_expired_dialog import showBetaExpiredWarning
-
-    logger.warning(
-        f"[BetaTimelock] 内测已过期,显示提示弹窗: {_betaStatus.get('reason')}"
-    )
-    # 暂存到模块级变量,避免弹窗被 GC
-    _betaExpiredDialog = showBetaExpiredWarning(_betaStatus, parent=None, modal=True)
-    # 过期分支:splash 立即关闭(主窗口永远不会构造)
+# ============================================================
+# 启动门(REQ-BETA-002,2026-08-06 调整):
+# - 内测版(IS_BETA=True):未激活用户必须先激活才能进入主窗口
+# - 正式版(IS_BETA=False):不再弹启动门,允许进入主界面,付费功能按需再激活
+# ============================================================
+_authService = getAuthService()
+if IS_BETA and not _authService.isAuthenticated():
+    # 云端恢复:本地凭证完好但 token 过期 / expireAt 陈旧时,先尝试
+    # 用 refresh token 从云端恢复会话(失败不阻断,进入登录门)
     try:
-        _splashWindow.finish()
-    except Exception:
-        pass
-else:
-    # ============================================================
-    # 启动门(REQ-BETA-002):未激活用户必须先激活才能进入主窗口
-    # 优先级低于内测时间锁(过期直接退出),高于引导窗口(可与引导共存)
-    # ============================================================
-    _authService = getAuthService()
-    if not _authService.isAuthenticated():
-        # 云端恢复:本地凭证完好但 token 过期 / expireAt 陈旧时,先尝试
-        # 用 refresh token 从云端恢复会话(失败不阻断,进入登录门)
-        try:
-            _authService.restoreSession()
-        except Exception as _restoreErr:  # noqa: BLE001
-            logger.warning(f"[Main] 云端会话恢复失败(忽略): {_restoreErr}")
+        _authService.restoreSession()
+    except Exception as _restoreErr:  # noqa: BLE001
+        logger.warning(f"[Main] 云端会话恢复失败(忽略): {_restoreErr}")
     if not _authService.isAuthenticated():
         try:
             with _startupProfiler.stage("auth_gate", "AuthGate 启动门"):
@@ -283,88 +265,94 @@ else:
                     sys.exit(0)
         except Exception as _authErr:
             logger.exception(f"[Main] AuthGate 异常(非致命,继续): {_authErr}")
-    # ============================================================
-    # 首次启动引导(2026-07-21 新增)
-    # - 读取 cfg.FirstLaunch;为 True 时先弹出引导窗口
-    # - 引导完成后 cfg.FirstLaunch 被置为 False,下次启动不再弹出
-    # - 若用户在未完成时点关闭按钮,引导窗口拒绝关闭并请求退出主程序
-    # ============================================================
-    _guideWindow = None
-    # 许可证校验通过 → 推进到 22%(给引导窗口留 6%)
-    _splashWindow.setProgress(22, "许可证校验通过")
-    QApplication.processEvents()
-    if qconfig.get(cfg.FirstLaunch):
+elif not IS_BETA:
+    # 正式版:仅尝试云端恢复(若本地有未过期凭证),不做强制拦截。
+    try:
+        _authService.restoreSession()
+    except Exception as _restoreErr:  # noqa: BLE001
+        logger.info(f"[Main] 正式版跳过启动门,云端会话恢复失败(忽略): {_restoreErr}")
+# ============================================================
+# 首次启动引导(2026-07-21 新增)
+# - 读取 cfg.FirstLaunch;为 True 时先弹出引导窗口
+# - 引导完成后 cfg.FirstLaunch 被置为 False,下次启动不再弹出
+# - 若用户在未完成时点关闭按钮,引导窗口拒绝关闭并请求退出主程序
+# ============================================================
+_guideWindow = None
+# 启动门通过 → 推进到 22%(给引导窗口留 6%)
+_splashWindow.setProgress(22, "启动门已通过")
+QApplication.processEvents()
+if qconfig.get(cfg.FirstLaunch):
+    try:
+        from app.view.widgets.guide_window import GuideWindow
+
+        _splashWindow.setProgress(24, "正在显示首次启动引导…")
+        QApplication.processEvents()
+
+        # ---- 2026-07-27 改造:Splash ↔ 引导窗口融合 ----
+        # 引导窗口是真正的交互窗口,需要用户点击"下一步 / 完成"。
+        # 若此时 splash 仍在最前(WindowStaysOnTopHint),会出现
+        #   - splash + 引导窗口重叠闪现(后者被 splash 遮住一半)
+        #   - 用户点不到引导窗口的"下一步"按钮(splash 抢了事件)
+        # 解决方案:
+        #   - exec() 前调用 splash.hold():临时隐藏 splash(不销毁,
+        #     保留状态),此时引导窗口独占屏幕
+        #   - exec() 返回后调用 splash.release():让 splash 重新显示
+        #   - 配合 SplashLoader 的 fadedOut → startupCompleted 推迟逻辑,
+        #     整个启动序列不会出现"两个窗口叠加"
+        logger.info("[Main] 检测到首次启动,显示引导窗口(暂存 splash)")
+        _guideWindow = GuideWindow()
         try:
-            from app.view.widgets.guide_window import GuideWindow
+            _splashWindow.hold()
+        except Exception as _holdErr:
+            logger.warning(f"[Main] 暂存 splash 失败(非致命): {_holdErr}")
+        QApplication.processEvents()
 
-            _splashWindow.setProgress(24, "正在显示首次启动引导…")
-            QApplication.processEvents()
-
-            # ---- 2026-07-27 改造:Splash ↔ 引导窗口融合 ----
-            # 引导窗口是真正的交互窗口,需要用户点击"下一步 / 完成"。
-            # 若此时 splash 仍在最前(WindowStaysOnTopHint),会出现
-            #   - splash + 引导窗口重叠闪现(后者被 splash 遮住一半)
-            #   - 用户点不到引导窗口的"下一步"按钮(splash 抢了事件)
-            # 解决方案:
-            #   - exec() 前调用 splash.hold():临时隐藏 splash(不销毁,
-            #     保留状态),此时引导窗口独占屏幕
-            #   - exec() 返回后调用 splash.release():让 splash 重新显示
-            #   - 配合 SplashLoader 的 fadedOut → startupCompleted 推迟逻辑,
-            #     整个启动序列不会出现"两个窗口叠加"
-            logger.info("[Main] 检测到首次启动,显示引导窗口(暂存 splash)")
-            _guideWindow = GuideWindow()
+        with _startupProfiler.stage(
+            "guide_window_exec", "首次启动 GuideWindow.exec()"
+        ):
+            # 修复(2026-08-05):hold/release 用 try/finally 配对,
+            # 哪怕 exec 抛异常也要恢复 splash,避免「软件无反应」。
             try:
-                _splashWindow.hold()
-            except Exception as _holdErr:
-                logger.warning(f"[Main] 暂存 splash 失败(非致命): {_holdErr}")
-            QApplication.processEvents()
-
-            with _startupProfiler.stage(
-                "guide_window_exec", "首次启动 GuideWindow.exec()"
-            ):
-                # 修复(2026-08-05):hold/release 用 try/finally 配对,
-                # 哪怕 exec 抛异常也要恢复 splash,避免「软件无反应」。
+                _guideCompleted = _guideWindow.exec()
+            finally:
+                # 引导结束后让 splash 重新接管(若进度已推进过,这里继续推一格)
                 try:
-                    _guideCompleted = _guideWindow.exec()
-                finally:
-                    # 引导结束后让 splash 重新接管(若进度已推进过,这里继续推一格)
-                    try:
-                        _splashWindow.release(
-                            progress=25, text="引导完成,准备启动主窗口…"
-                        )
-                    except Exception as _relErr:
-                        logger.warning(f"[Main] 恢复 splash 失败(非致命): {_relErr}")
+                    _splashWindow.release(
+                        progress=25, text="引导完成,准备启动主窗口…"
+                    )
+                except Exception as _relErr:
+                    logger.warning(f"[Main] 恢复 splash 失败(非致命): {_relErr}")
 
-            if not _guideCompleted:
-                # 用户在未完成时尝试关闭引导 -> 退出整个程序
-                # cfg.FirstLaunch 保持 True,下次启动仍会引导
-                logger.warning("[Main] 引导未完成,退出程序,保留 FirstLaunch=True")
-                # 释放引导窗口,避免悬挂引用
-                _guideWindow = None
-                # 关闭 splash,再退出
-                try:
-                    _splashWindow.finish()
-                except Exception:
-                    pass
-                QApplication.instance().quit()
-                # 跳过后续主窗口创建逻辑(用 sys.exit 跳出整个模块底部)
-                sys.exit(0)
-        except Exception as _guideErr:
-            logger.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
+        if not _guideCompleted:
+            # 用户在未完成时尝试关闭引导 -> 退出整个程序
+            # cfg.FirstLaunch 保持 True,下次启动仍会引导
+            logger.warning("[Main] 引导未完成,退出程序,保留 FirstLaunch=True")
+            # 释放引导窗口,避免悬挂引用
+            _guideWindow = None
+            # 关闭 splash,再退出
+            try:
+                _splashWindow.finish()
+            except Exception:
+                pass
+            QApplication.instance().quit()
+            # 跳过后续主窗口创建逻辑(用 sys.exit 跳出整个模块底部)
+            sys.exit(0)
+    except Exception as _guideErr:
+        logger.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
 
-    # ============================================================
-    # 启动主窗口异步加载
-    # - SplashLoader 在下一轮事件循环触发 MainWindow 构造
-    # - 完成后通过 mainWindowReady 信号在主线程 show()
-    # - splash 在主窗口 ready 后自动 finish() 并淡出销毁
-    # ============================================================
-    # 引导完成(或跳过引导) → 推进到 26%,留 4% 给 SplashLoader 衔接 30%
-    _splashWindow.setProgress(26, "准备启动主窗口…")
-    QApplication.processEvents()
-    with _startupProfiler.stage(
-        "splash_loader_start", "SplashLoader.start() 触发异步加载"
-    ):
-        _splashLoader.start()  # 立即返回,异步构造
+# ============================================================
+# 启动主窗口异步加载
+# - SplashLoader 在下一轮事件循环触发 MainWindow 构造
+# - 完成后通过 mainWindowReady 信号在主线程 show()
+# - splash 在主窗口 ready 后自动 finish() 并淡出销毁
+# ============================================================
+# 引导完成(或跳过引导) → 推进到 26%,留 4% 给 SplashLoader 衔接 30%
+_splashWindow.setProgress(26, "准备启动主窗口…")
+QApplication.processEvents()
+with _startupProfiler.stage(
+    "splash_loader_start", "SplashLoader.start() 触发异步加载"
+):
+    _splashLoader.start()  # 立即返回,异步构造
 
 # 应用程序退出处理
 result = app.exec()

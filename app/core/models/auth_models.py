@@ -22,9 +22,8 @@ from pydantic import BaseModel, Field
 
 
 class AuthMode(str, Enum):
-    """鉴权模式"""
+    """鉴权模式(2026-08-06:删除 BETA_TIMELOCK,本地不再做内测时间锁)"""
 
-    BETA_TIMELOCK = "beta_timelock"            # 现有内测时间锁
     ACTIVATION_CODE = "activation_code"         # 现有激活码(license.py)
     INVITE_CODE = "invite_code"                 # 新增邀请码
     TRIAL_CODE = "trial_code"                   # 新增体验码

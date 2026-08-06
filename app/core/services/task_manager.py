@@ -7,7 +7,7 @@
 import threading
 from typing import Any, Dict, List, Optional
 
-from loguru import logger
+from app.core.utils import audit, logger
 from PySide6.QtCore import QObject, Signal
 
 from app.core.api.task_control import taskControl
@@ -64,6 +64,8 @@ class TaskManager(QObject):
             self.pendingQueue.append(taskId)
 
             logger.info(f"[TaskManager] 创建任务: {taskId}, 类型: {taskType}")
+            # 下载审计(2026-08-06):记录任务创建,便于事后追溯
+            audit("DOWNLOAD_TASK_CREATE", f"taskId={taskId} type={taskType}")
 
             # 尝试启动队列中的任务
             self.processQueue()
@@ -517,10 +519,14 @@ class TaskManager(QObject):
                 )
                 self.taskCompleted.emit(taskId, filePath or "")
                 logger.info(f"[TaskManager] 任务完成: {taskId}, filePath={filePath}")
+                # 下载审计(2026-08-06):任务完成落 audit,filePath 可用于回溯
+                audit("DOWNLOAD_TASK_DONE", f"taskId={taskId} filePath={filePath or ''}")
             else:
                 taskControl.failTask(taskId, message)
                 self.taskFailed.emit(taskId, message)
                 logger.error(f"[TaskManager] 任务失败: {taskId}, {message}")
+                # 下载审计(2026-08-06):任务失败落 audit,记录原因
+                audit("DOWNLOAD_TASK_FAIL", f"taskId={taskId} msg={message[:120]}")
 
             self.processQueue()
 

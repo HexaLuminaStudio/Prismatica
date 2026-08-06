@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional, Sequence, Tuple
 
-from loguru import logger
+from app.core.utils import logger
 
 
 # ---------------------------------------------------------------------------

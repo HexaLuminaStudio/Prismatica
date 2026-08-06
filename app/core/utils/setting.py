@@ -32,28 +32,6 @@ APP_NAME = "Prismatica"
 
 
 IS_BETA: bool = True
-BETA_FEATURES = [
-    (
-        "Check.svg",
-        "完整语料下载",
-        "HSK + 全球中介语料库全量下载与检索(无功能限制)",
-    ),
-    (
-        "Analysis.svg",
-        "语料分析与统计",
-        "词频 / 搭配 / 索引 / 共现网络 / 依存 / 词云等完整分析模块",
-    ),
-    (
-        "Setting.svg",
-        "所有设置项可用",
-        "登录 Token、目录、并发数等高级设置均可调整",
-    ),
-    (
-        "Task.svg",
-        "任务管理",
-        "下载/导入任务可全部使用,无功能限制",
-    ),
-]
 
 
 def _getLicenseSecret() -> str:

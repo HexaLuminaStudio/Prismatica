@@ -4,7 +4,7 @@ import json
 from typing import Literal, Dict, Any
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame, QScrollArea
 from PySide6.QtCore import Qt
-from loguru import logger
+from app.core.utils import logger
 
 from qfluentwidgets import (
     MessageBoxBase,

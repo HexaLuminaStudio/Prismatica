@@ -73,7 +73,7 @@ from qfluentwidgets import (
     TableView,
 )
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.services.hsk_corpus_service import HskCorpusService
 from app.core.utils.data_paths import HSK_CORPUS_DB

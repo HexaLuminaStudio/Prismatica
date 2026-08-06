@@ -19,7 +19,7 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from loguru import logger
+from app.core.utils import logger
 
 # matplotlib 后端必须在导入 pyplot 前设置
 import matplotlib  # noqa: E402

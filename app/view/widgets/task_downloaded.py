@@ -4,7 +4,7 @@
 显示已完成的任务记录
 """
 
-from loguru import logger
+from app.core.utils import logger
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 

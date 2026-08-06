@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
-from loguru import logger
+from app.core.utils import logger
 from PySide6.QtCore import QThread, Signal
 
 from app.core.api.task_control import taskControl

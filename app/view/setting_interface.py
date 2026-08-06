@@ -145,6 +145,12 @@ class SoftwareSettingWidget(GroupHeaderCardWidget):
             qconfig.set(cfg.DownloadSavePath, folderPath)
             self.groupWidgets[0].setTitle(folderPath)
             logger.info(f"[Setting] 下载保存路径已修改: {folderPath}")
+            # 配置审计(2026-08-06):用户改路径落 audit,便于售后排查文件丢失问题
+            try:
+                from app.core.utils import audit
+                audit("CONFIG_DOWNLOAD_PATH_CHANGED", f"path={folderPath}")
+            except Exception:
+                pass
             self._showSuccessMessage("O(∩_∩)O 修改成功", "下载保存路径修改成功")
         else:
             logger.debug("[Setting] 用户取消选择下载保存路径")

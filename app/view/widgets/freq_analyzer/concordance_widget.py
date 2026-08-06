@@ -77,7 +77,7 @@ from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.core.models.project import RESOURCE_TYPE_KWIC
 
 # P0-fix:统一使用 loguru,与项目其它模块保持一致
-from loguru import logger
+from app.core.utils import logger
 
 
 # 节点词高亮颜色（柔和黄色背景）

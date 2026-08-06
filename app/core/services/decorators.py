@@ -23,7 +23,7 @@ from __future__ import annotations
 import functools
 from typing import Any, Callable, Optional
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.models.billing_models import ActionType
 from app.core.services.auth_service import getAuthService

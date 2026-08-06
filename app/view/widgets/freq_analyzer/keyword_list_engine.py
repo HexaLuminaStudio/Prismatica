@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger
-from loguru import logger
+from app.core.utils import logger
 
 
 # ---------------------------------------------------------------------------

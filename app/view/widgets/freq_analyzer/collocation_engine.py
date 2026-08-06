@@ -94,7 +94,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from loguru import logger
+from app.core.utils import logger
 
 
 # ---------------------------------------------------------------------------

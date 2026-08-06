@@ -25,7 +25,7 @@ from typing import Any, Dict, Optional, Tuple
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
-from loguru import logger
+from app.core.utils import logger
 
 
 class CleanSignals(QObject):

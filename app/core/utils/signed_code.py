@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Type, TypeVar
 
-from loguru import logger
+from app.core.utils import logger
 from pydantic import BaseModel
 
 from app.core.models.auth_models import InviteCode, RechargeCode, TrialCode

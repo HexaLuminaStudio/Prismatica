@@ -40,6 +40,7 @@ from qfluentwidgets import (
 
 from app.core.services.auth_service import getAuthService
 from app.core.utils import logger
+from app.core.utils.setting import IS_BETA
 from app.core.utils.signal_bus import signalBus
 from app.view.widgets.auth.login_dialog import LoginDialog
 from app.view.widgets.billing.balance_card import BalanceCard
@@ -107,12 +108,15 @@ class AccountInterface(QWidget):
         title.setStyleSheet("font-size: 24px;")
         heroTop.addWidget(title)
         heroTop.addStretch(1)
-        # 重新激活链接(右侧)
-        self.reactivateBtn = HyperlinkButton(
-            url="", text="↻ 重新激活", parent=container
-        )
-        self.reactivateBtn.clicked.connect(self._onReactivate)
-        heroTop.addWidget(self.reactivateBtn)
+        # 重新激活链接(2026-08-06):仅内测版保留,
+        # 正式版启动不再弹启动门,激活改为在主界面按需触发,
+        # 「重新激活」入口删除。
+        if IS_BETA:
+            self.reactivateBtn = HyperlinkButton(
+                url="", text="↻ 重新激活", parent=container
+            )
+            self.reactivateBtn.clicked.connect(self._onReactivate)
+            heroTop.addWidget(self.reactivateBtn)
         hero.addLayout(heroTop)
 
         subtitle = CaptionLabel("管理你的内测凭证、查看余额与账单流水", container)
@@ -216,15 +220,15 @@ class AccountInterface(QWidget):
                 from app.core.services.billing_service import getBillingService
 
                 getBillingService().refreshUserFromCloud(auth.currentUserId())
-            except Exception:
-                logger.warning("[AccountInterface] 云端拉取账户信息失败,使用本地缓存")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[AccountInterface] 云端拉取账户信息失败,使用本地缓存: %s", e)
             # 刷新账单列表
             try:
                 # 直接调 listBills → setUserId 会触发 refresh
                 self.billTable.setUserId(auth.currentUserId())
                 self.billTable.refresh()
-            except Exception:
-                logger.warning("[AccountInterface] 云端拉取账单失败")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[AccountInterface] 云端拉取账单失败: %s", e)
         else:
             # 修复(2026-08-05):未激活时仍允许点击「重新激活」,
             # 让用户能从账户中心直接进入激活流程,无需重启走启动门。
@@ -242,9 +246,11 @@ class AccountInterface(QWidget):
         isAuth = bool(userId)
         self.rechargeActionBtn.setEnabled(isAuth)
         self.logoutBtn.setEnabled(isAuth)
-        # 修复(2026-08-05):重新激活按钮在未激活状态下也必须可用,
-        # 让用户无需重启即可进入激活流程。其他按钮(充值/注销)保持原行为。
-        self.reactivateBtn.setEnabled(True)
+        # 2026-08-06:「重新激活」仅内测版存在(对象属性可能未创建)。
+        # 内测版下让重新激活按钮在未激活状态也可用,方便用户走重新激活流程。
+        reactivateBtn = getattr(self, "reactivateBtn", None)
+        if reactivateBtn is not None:
+            reactivateBtn.setEnabled(True)
 
     def _onLicenseCorrupted(self, reason: str) -> None:
         """凭证损坏时显示顶部红色横幅。"""

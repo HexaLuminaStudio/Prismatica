@@ -3,11 +3,10 @@
 激活码验证模块
 提供激活码生成、验证和激活状态管理功能
 
-新增(内测时间锁):
-    - 内测期间:首次启动自动记录 start_date(加密存储)
-    - 截止日 2026-7-30:硬上限,过期后无法使用
-    - 安全性:由于 start_date 加密存储 + 设备特征派生密钥,
-             简单修改系统时间无法绕过
+2026-08-06 简化:
+    - 删除本地内测时间锁(BetaTimelock / BETA_HARD_DEADLINE / BETA_MAX_VALID_DAYS)
+      全部授权与有效期由云端 PrismaticaAPI 接管,本地不再做日期限制。
+    - 保留本地 HMAC 激活码的生成 / 验签能力,以兼容运营 CLI 工具。
 """
 
 import base64
@@ -22,18 +21,7 @@ from .encryption import AESCipherGCM, deriveKey, hash256
 from .setting import LICENSE_SECRET
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
-from loguru import logger
-
-# ============================================================================
-# 内测时间锁常量
-# ============================================================================
-# 内测截止日(绝对硬上限,任何内测用户均受此日期约束)
-BETA_HARD_DEADLINE = "2026-08-10"
-# 内测模式最大有效期(天):从首次启动算起,防止无限延期
-BETA_MAX_VALID_DAYS = 30
-# 内测模式启动时记录的密钥标识(派生自设备特征,防止复制 license.dat 到另一台机器)
-# 这里的常量本身不参与加密,仅作为 license.dat 内字段的命名空间
-BETA_MODE = "beta_timelock"
+from app.core.utils import logger
 
 
 class LicenseManager:
@@ -121,15 +109,13 @@ class LicenseManager:
             return False
 
     def isActivated(self) -> bool:
-        """检查是否已激活
+        """检查是否已激活(本地 HMAC 激活码体系,2026-08-06 仅保留兼容路径)。
 
         激活判断条件(必须同时满足):
             1. activationData 不为 None
             2. 包含 validityPeriod 字段
             3. 当前日期 <= validityPeriod
             4. 包含 deviceCode 字段(绑定设备)
-
-        仅包含 betaLock(内测锁)不算激活 — 那是另一套机制。
         """
         if self.activationData is None:
             return False
@@ -322,16 +308,11 @@ class LicenseManager:
         ).decode("ascii")
 
     def activate(self, activationCode: str, deviceCode: str) -> dict:
-        """激活软件
+        """激活软件(2026-08-06 简化:删除 IS_BETA 内测版硬开关)
 
         P1-fix(2026-07-18):返回值改为 dict,保留失败原因给上层 UI 展示。
         旧的 bool 返回会让上层吞掉所有异常,用户只看到「数据保存失败」,
         客服难以定位问题。
-
-        P1-fix(2026-07-18,二次):内测版(IS_BETA=True)下**不允许激活**,
-        即便用户输入了正确的激活码,也直接拒绝并返回明确错误。
-        内测用户走 beta_timelock 机制(30 天 / 2026-07-30 截止日),无需激活码。
-        这是 setting.IS_BETA = True 决定的硬开关,在 publish 正式版时改为 False。
 
         Args:
             activationCode: 激活码
@@ -344,29 +325,7 @@ class LicenseManager:
                 "data": Optional[dict],   # 成功时为激活数据
             }
         """
-        # 1) 内测版硬开关:不允许激活
-        try:
-            from app.core.utils.setting import IS_BETA
-
-            if IS_BETA:
-                logger.warning(
-                    "[License] 内测版拒绝激活请求 "
-                    f"(activationCode={activationCode[:8]}...)"
-                )
-                return {
-                    "success": False,
-                    "message": (
-                        "当前为内测版本,不支持激活码激活。"
-                        "内测期间所有功能可免费使用,"
-                        "正式版发布后再使用激活码。"
-                    ),
-                    "data": None,
-                }
-        except Exception as e:
-            # 设置模块加载失败不应阻断主流程(其它地方已捕获),但这里至少打日志
-            logger.warning(f"[License] 检查 IS_BETA 失败: {e}")
-
-        # 2) 先做 HMAC 验签 + 设备码匹配 + 有效期校验
+        # 1) 先做 HMAC 验签 + 设备码匹配 + 有效期校验
         try:
             result = self.verifyActivationCode(activationCode, deviceCode)
         except Exception as e:
@@ -386,7 +345,7 @@ class LicenseManager:
                 "data": None,
             }
 
-        # 3) 通过校验 → 保存激活数据(落盘 + 加密)
+        # 2) 通过校验 → 保存激活数据(落盘 + 加密)
         try:
             self.activationData = result["data"]
             self.activationData["activatedAt"] = datetime.now().strftime(
@@ -441,294 +400,6 @@ class LicenseManager:
             return max(0, remaining)
         except Exception:
             return -1
-
-    # ========================================================================
-    # 内测时间锁(Beta Time-Lock)
-    # ========================================================================
-    # 工作机制:
-    #   1. 首次启动:isBetaActive() 返回 True 时调用 ensureBetaTimelock()
-    #      → 记录当前日期为 beta_start_date(加密存储在 activation.dat)
-    #      → 同时计算 HMAC 签名(start_date + deadline + 设备特征派生 secret)
-    #   2. 后续启动:每次都验证 HMAC + 截止日 + 最大有效期
-    #   3. 修改系统时间无法绕过,因为:
-    #      a) start_date 一旦写入就加密,不能回拨
-    #      b) 即使回拨系统时间,start_date + MAX_VALID_DAYS 已固定
-    #      c) 截止日 2026-7-30 是硬上限,与系统时间无关
-    #      d) license.dat 复制到另一台机器将无法解密(密钥来自设备特征)
-    # ========================================================================
-
-    def _getBetaSecret(self) -> bytes:
-        """派生内测签名密钥(基于设备特征)
-
-        Returns:
-            32 字节密钥(从设备指纹派生)
-        """
-        from .device_id import getDeviceIdentifier
-
-        device = getDeviceIdentifier()
-        if not device.deviceFeatures:
-            device.collectDeviceFeatures()
-
-        sortedFeatures = sorted(device.deviceFeatures.items())
-        # 设备特征 → 哈希作为内测签名密钥
-        fingerprint = "|".join(f"{k}:{v}" for k, v in sortedFeatures)
-        # 用 SHA-256 截断得到稳定 32 字节
-        return hashlib.sha256(f"beta_lock_v1::{fingerprint}".encode("utf-8")).digest()
-
-    def _computeBetaSignature(
-        self,
-        startDate: str,
-        deadline: str,
-        secret: bytes,
-    ) -> str:
-        """计算内测时间锁的 HMAC 签名
-
-        Args:
-            startDate: 内测启动日期 YYYY-MM-DD
-            deadline:  截止日期 YYYY-MM-DD
-            secret:    派生自设备特征的密钥
-
-        Returns:
-            16 进制签名字符串
-        """
-        payload = f"{startDate}|{deadline}|{BETA_MAX_VALID_DAYS}"
-        return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
-
-    def _isBetaActiveOrExpired(self) -> dict:
-        """检测内测模式当前状态
-
-        安全检查层级:
-            1. BETA_HARD_DEADLINE 绝对硬上限
-            2. 系统时间回拨检测(latsSeen 单调递增)
-            3. 签名校验失败 → 篡改检测
-            4. startDate + BETA_MAX_VALID_DAYS 上限
-
-        Returns:
-            dict:
-                status: "in_beta" | "expired_hard" | "expired_30d"
-                daysRemaining: 内测剩余天数(若在期内)
-                deadline: 截止日期
-                startDate: 首次启动日期(若有)
-        """
-        today = datetime.now().strftime("%Y-%m-%d")
-        todayDt = datetime.now()
-
-        # 1. 绝对硬上限:超过 2026-7-30 立即失效
-        if today > BETA_HARD_DEADLINE:
-            return {
-                "status": "expired_hard",
-                "daysRemaining": 0,
-                "deadline": BETA_HARD_DEADLINE,
-                "startDate": (
-                    self.activationData.get("betaStartDate")
-                    if self.activationData
-                    else None
-                ),
-                "reason": f"内测期已结束(截止 {BETA_HARD_DEADLINE})",
-            }
-
-        # 2. 检查已存储的内测起始日(若已记录)
-        betaRecord = (
-            self.activationData.get("betaLock") if self.activationData else None
-        )
-        if betaRecord:
-            startDate = betaRecord.get("startDate")
-            deadline = betaRecord.get("deadline", BETA_HARD_DEADLINE)
-            signature = betaRecord.get("signature", "")
-
-            # 2a. 系统时间回拨检测:lastSeen 必须单调递增
-            lastSeen = betaRecord.get("lastSeen", "")
-            if lastSeen:
-                try:
-                    lastSeenDt = datetime.strptime(lastSeen, "%Y-%m-%d")
-                    # 允许最多 1 天的时钟漂移（跨时区/夏令时）
-                    from datetime import timedelta
-
-                    if todayDt < lastSeenDt - timedelta(days=1):
-                        logger.warning(
-                            f"[License] 检测到系统时间回拨: "
-                            f"lastSeen={lastSeen}, today={today}"
-                        )
-                        return {
-                            "status": "expired_hard",
-                            "daysRemaining": 0,
-                            "deadline": BETA_HARD_DEADLINE,
-                            "startDate": startDate,
-                            "reason": "检测到系统时间异常(时钟回拨),内测已失效",
-                        }
-                except Exception as e:
-                    logger.warning(f"[License] lastSeen 解析失败: {e}")
-
-            # 2b. 验证 startDate 不在未来(防止写入时系统时间已错误)
-            try:
-                startDt = datetime.strptime(startDate, "%Y-%m-%d")
-                if startDt > todayDt + timedelta(days=1):
-                    logger.warning(f"[License] startDate({startDate}) 在未来,可疑")
-                    return {
-                        "status": "expired_hard",
-                        "daysRemaining": 0,
-                        "deadline": BETA_HARD_DEADLINE,
-                        "startDate": startDate,
-                        "reason": "内测时间锁数据异常(startDate 在未来)",
-                    }
-            except Exception:
-                pass
-
-            # 2c. 签名校验:HMAC-SHA256(设备特征派生密钥)
-            secret = self._getBetaSecret()
-            expectedSig = self._computeBetaSignature(startDate, deadline, secret)
-
-            # 签名校验失败:license.dat 被篡改或复制到其他机器
-            if not hmac.compare_digest(signature, expectedSig):
-                logger.warning("[License] 内测时间锁签名校验失败")
-                return {
-                    "status": "expired_hard",
-                    "daysRemaining": 0,
-                    "deadline": BETA_HARD_DEADLINE,
-                    "startDate": startDate,
-                    "reason": "内测时间锁签名校验失败(可能 license.dat 被篡改)",
-                }
-
-            # 3. 起始日 + 30 天检查(防止无限延期)
-            try:
-                from datetime import timedelta
-
-                start = datetime.strptime(startDate, "%Y-%m-%d")
-                maxExpiry = start + timedelta(days=BETA_MAX_VALID_DAYS)
-                deadlineDt = datetime.strptime(BETA_HARD_DEADLINE, "%Y-%m-%d")
-                effectiveDeadline = min(maxExpiry, deadlineDt)
-                if datetime.now() > effectiveDeadline:
-                    return {
-                        "status": "expired_30d",
-                        "daysRemaining": 0,
-                        "deadline": effectiveDeadline.strftime("%Y-%m-%d"),
-                        "startDate": startDate,
-                        "reason": f"内测 {BETA_MAX_VALID_DAYS} 天体验期已过",
-                    }
-                # 还在期内
-                remaining = (effectiveDeadline - datetime.now()).days
-                return {
-                    "status": "in_beta",
-                    "daysRemaining": max(0, remaining),
-                    "deadline": effectiveDeadline.strftime("%Y-%m-%d"),
-                    "startDate": startDate,
-                    "reason": None,
-                }
-            except Exception as e:
-                logger.warning(f"[License] 内测时间锁解析失败: {e}")
-                return {
-                    "status": "expired_hard",
-                    "daysRemaining": 0,
-                    "deadline": BETA_HARD_DEADLINE,
-                    "startDate": startDate,
-                    "reason": "内测时间锁数据损坏",
-                }
-
-        # 4. 首次启动:在硬上限前都视为可激活
-        return {
-            "status": "in_beta",
-            "daysRemaining": -1,  # 尚未记录 startDate
-            "deadline": BETA_HARD_DEADLINE,
-            "startDate": None,
-            "reason": None,
-        }
-
-    def ensureBetaTimelock(self) -> dict:
-        """确保内测时间锁已建立(在主窗口创建前调用)
-
-        行为:
-            - 首次启动:记录 start_date = today + 签名
-            - 后续启动:验证签名/截止日/有效期
-            - 过期:返回 status="expired_*",主程序应阻止运行
-
-        Returns:
-            dict: 内测状态
-                status: "in_beta" | "expired_hard" | "expired_30d"
-                daysRemaining: int
-                deadline: str
-                startDate: Optional[str]
-                reason: Optional[str] (仅过期时存在)
-        """
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # 1. 绝对硬上限:超过 2026-7-30 立即失效(无需任何数据)
-        if today > BETA_HARD_DEADLINE:
-            logger.warning(f"[License] 内测期已结束(超过 {BETA_HARD_DEADLINE})")
-            return {
-                "status": "expired_hard",
-                "daysRemaining": 0,
-                "deadline": BETA_HARD_DEADLINE,
-                "startDate": None,
-                "reason": f"内测期已结束(截止 {BETA_HARD_DEADLINE})",
-            }
-
-        # 2. 如果已有正式激活码,优先使用(内测锁仅适用于无激活码的用户)
-        if self.activationData and self.isActivated():
-            return {
-                "status": "activated",
-                "daysRemaining": self.getDaysRemaining(),
-                "deadline": self.getExpiryDate() or "",
-                "startDate": None,
-                "reason": None,
-            }
-
-        # 3. 已有内测记录 → 校验 + 更新 lastSeen
-        betaRecord = (
-            self.activationData.get("betaLock") if self.activationData else None
-        )
-        if betaRecord:
-            result = self._isBetaActiveOrExpired()
-            # 校验通过 → 更新 lastSeen(防止后续时间回拨绕过)
-            if result.get("status") == "in_beta" and self.activationData:
-                self.activationData["betaLock"]["lastSeen"] = today
-                try:
-                    self._saveActivationData()
-                except Exception as e:
-                    logger.warning(f"[License] 更新 lastSeen 失败: {e}")
-            return result
-
-        # 4. 首次启动:写入内测时间锁记录
-        if self.activationData is None:
-            self.activationData = {}
-
-        secret = self._getBetaSecret()
-        deadline = BETA_HARD_DEADLINE
-        signature = self._computeBetaSignature(today, deadline, secret)
-        self.activationData["betaLock"] = {
-            "startDate": today,
-            "deadline": deadline,
-            "maxValidDays": BETA_MAX_VALID_DAYS,
-            "signature": signature,
-            "lastSeen": today,  # 首次记录 lastSeen,用于后续回拨检测
-            "createdAt": datetime.now().isoformat(),
-        }
-        # 同时记录激活类型
-        self.activationData["mode"] = BETA_MODE
-        # 写入磁盘
-        if self._saveActivationData():
-            logger.info(
-                f"[License] 内测时间锁已建立: startDate={today}, "
-                f"deadline={deadline}"
-            )
-        else:
-            logger.error("[License] 内测时间锁写入失败")
-
-        return {
-            "status": "in_beta",
-            "daysRemaining": BETA_MAX_VALID_DAYS,
-            "deadline": deadline,
-            "startDate": today,
-            "reason": None,
-        }
-
-    def isBetaExpired(self) -> bool:
-        """快速判断:内测是否已过期(用于启动时阻止主窗口)
-
-        Returns:
-            True 表示已过期,应阻止启动
-        """
-        status = self.ensureBetaTimelock()
-        return status.get("status") in ("expired_hard", "expired_30d")
 
 
 # 创建全局单例

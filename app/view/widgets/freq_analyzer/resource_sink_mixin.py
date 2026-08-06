@@ -30,7 +30,7 @@ import traceback
 from typing import Any, Dict, Optional
 
 from app.core.services import projectManager
-from loguru import logger
+from app.core.utils import logger
 
 
 class ResourceSinkMixin:

@@ -97,7 +97,7 @@ from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.core.models.project import RESOURCE_TYPE_NETWORK
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
-from loguru import logger
+from app.core.utils import logger
 
 
 # ---------------------------------------------------------------------------

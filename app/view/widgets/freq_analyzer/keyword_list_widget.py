@@ -99,7 +99,7 @@ from app.view.widgets.freq_analyzer.worker_utils import (
 )
 
 # P0-A2 fix 2026-07-18:统一的 loguru logger
-from loguru import logger
+from app.core.utils import logger
 
 
 # ---------------------------------------------------------------------------

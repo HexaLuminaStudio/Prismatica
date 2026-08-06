@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.utils.setting import CONFIG_FOLDER
 

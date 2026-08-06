@@ -1,5 +1,5 @@
 # coding: utf-8
-"""启动门 - 内测凭证兑换对话框
+"""启动门 - 内测激活码兑换对话框
 
 修复(2026-08-05)「黑边 + 显示不全」:
     原实现继承 qfluentwidgets.MessageBoxBase → MaskDialogBase → QDialog,
@@ -23,6 +23,11 @@
     - 三个 Tab 独立 _CodeForm,不再共用 LineEdit
     - reentryMode 支持账户页重新激活
     - 重复激活时显示「立即注销并重试」按钮
+
+2026-08-06 精简:
+    - 内测版只允许「内测激活码」一种凭证,删除「邀请码」「体验码」两个 Tab
+    - 移除 Pivot,只显示一个 _CodeForm
+    - 窗口高度相应下调
 """
 
 from __future__ import annotations
@@ -33,7 +38,6 @@ from PySide6.QtCore import Qt, QEventLoop
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
-    QStackedWidget,
     QVBoxLayout,
     QHBoxLayout,
     QFrame,
@@ -49,7 +53,6 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
-    Pivot,
 )
 
 from app.core.services.auth_service import getAuthService
@@ -102,21 +105,17 @@ class _CodeForm(QWidget):
 
 
 class LoginDialog(QWidget):
-    """启动门:输入邀请码/体验码/激活码
+    """启动门:输入内测激活码(2026-08-06 精简后只剩激活码 Tab)
 
     - 独立 QWidget,无遮罩
-    - 固定 540×560 尺寸
+    - 固定 540×420 尺寸(去掉了 Pivot + 两个 Tab,整体高度下调)
     - exec() 用 QEventLoop 阻塞
     - reject()/accept() 关闭 event loop
     """
 
-    TAB_INVITE = 0
-    TAB_TRIAL = 1
-    TAB_ACTIVATION = 2
-
     # 固定尺寸(像素)
     WINDOW_WIDTH = 540
-    WINDOW_HEIGHT = 560
+    WINDOW_HEIGHT = 420
 
     def __init__(
         self,
@@ -180,50 +179,20 @@ class LoginDialog(QWidget):
         self.titleLabel.setStyleSheet("color: #202020;")
         cardLayout.addWidget(self.titleLabel)
 
-        self.hintLabel = BodyLabel("请输入运营下发的内测凭证", self._card)
-        self.hintLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.hintLabel.setStyleSheet("color: #888;")
-        cardLayout.addWidget(self.hintLabel)
-
-        # ---- Pivot(2026-08-05:TabBar → Pivot,用户要求)----
-        self.pivot = Pivot(self._card)
-        self.pivot.addItem("invite", "邀请码")
-        self.pivot.addItem("trial", "体验码")
-        self.pivot.addItem("activation", "激活码")
-        self.pivot.setCurrentItem("invite")
-        cardLayout.addWidget(self.pivot)
-
-        # ---- 三个独立表单(以 _card 为 parent) ----
-        self.inviteForm = _CodeForm(
-            "INV-XXXX-XXXX-XXXX-XXXX", showName=True, parent=self._card
-        )
-        self.trialForm = _CodeForm(
-            "TRY-XXXX-XXXX-XXXX-XXXX", showName=True, parent=self._card
-        )
-        self.activationForm = _CodeForm(
-            "粘贴激活码", showName=False, parent=self._card
-        )
-
-        self.activationHint = BodyLabel(
-            "激活码已接入云端,输入后即可激活,无需重启软件。",
+        self.hintLabel = BodyLabel(
+            "请输入运营下发的内测激活码,粘贴后点击下方「激活」即可。",
             self._card,
         )
-        self.activationHint.setStyleSheet("color: #888; padding: 4px 0;")
-        self.activationHint.setWordWrap(True)
+        self.hintLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hintLabel.setStyleSheet("color: #888;")
+        self.hintLabel.setWordWrap(True)
+        cardLayout.addWidget(self.hintLabel)
 
-        actContainer = QWidget(self._card)
-        actLayout = QVBoxLayout(actContainer)
-        actLayout.setContentsMargins(0, 8, 0, 0)
-        actLayout.setSpacing(4)
-        actLayout.addWidget(self.activationHint)
-        actLayout.addWidget(self.activationForm)
-        actLayout.addStretch(1)
-
-        self.stack = QStackedWidget(self._card)
-        self.stack.addWidget(self.inviteForm)
-        self.stack.addWidget(self.trialForm)
-        self.stack.addWidget(actContainer)
-        cardLayout.addWidget(self.stack, 1)
+        # ---- 2026-08-06:删除 Pivot + 邀请码/体验码 Tab,只保留激活码 ----
+        self.activationForm = _CodeForm(
+            "粘贴激活码", showName=True, parent=self._card
+        )
+        cardLayout.addWidget(self.activationForm, 1)
 
         # ---- 重复激活时显示的内联按钮(默认隐藏) ----
         self.reactivateRow = QWidget(self._card)
@@ -256,22 +225,13 @@ class LoginDialog(QWidget):
 
         cardLayout.addLayout(buttonRow)
 
-        # 信号 —— Pivot 的 currentItemChanged() 不带参数,需要 lambda 适配
-        self.pivot.currentItemChanged.connect(self._onPivotChanged)
-        # 初始化时主动触发一次,确保 hintLabel 默认文案正确
-        self._onPivotChanged()
-
     def _routeKeyToIndex(self, key: Optional[str]) -> int:
-        """Pivot routeKey → 内部 TAB_* 整数索引。"""
-        return {
-            "invite": self.TAB_INVITE,
-            "trial": self.TAB_TRIAL,
-            "activation": self.TAB_ACTIVATION,
-        }.get(key or "", self.TAB_INVITE)
+        """保留兼容接口(2026-08-06 删除 Pivot 后,_activeForm 已不再使用)。
 
-    def _onPivotChanged(self) -> None:
-        """Pivot 切换时回调:把 routeKey 转换为 int 索引,转发到 _onTabChanged。"""
-        self._onTabChanged(self._routeKeyToIndex(self.pivot.currentRouteKey()))
+        旧调用方若传 key,仍返回 0(invite 的旧值)以避免崩溃;
+        新代码应直接调用 _activeForm()。
+        """
+        return 0
 
     # ============================================================
     # 模态执行(用 QEventLoop)
@@ -323,22 +283,14 @@ class LoginDialog(QWidget):
     # ============================================================
 
     def _onTabChanged(self, index: int) -> None:
-        if index == self.TAB_INVITE:
-            self.hintLabel.setText("邀请码格式:INV-XXXX-XXXX-XXXX-XXXX,激活赠送 100 币")
-            self.yesButton.setText("激活")
-        elif index == self.TAB_TRIAL:
-            self.hintLabel.setText("体验码格式:TRY-XXXX-XXXX-XXXX-XXXX,激活赠送 20 币")
-            self.yesButton.setText("激活")
-        else:
-            self.hintLabel.setText("激活码已接入云端,输入后即可激活")
-            self.yesButton.setText("激活")
+        """保留兼容接口(2026-08-06):现仅剩激活码 Tab,不再根据 index 切换文案。"""
+        # 旧行为:Pivot 切换时刷新 hintLabel / 按钮文案
+        # 新行为:只有一个 Tab,hintLabel 在 __init__ 中已写定,无需再改
+        del index  # 显式标记未使用
+        self.yesButton.setText("激活")
 
     def _activeForm(self) -> _CodeForm:
-        idx = self._routeKeyToIndex(self.pivot.currentRouteKey())
-        if idx == self.TAB_INVITE:
-            return self.inviteForm
-        if idx == self.TAB_TRIAL:
-            return self.trialForm
+        """返回当前激活的表单。2026-08-06 精简后只剩 activationForm。"""
         return self.activationForm
 
     def _onActivate(self) -> None:

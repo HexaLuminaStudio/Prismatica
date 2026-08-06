@@ -11,7 +11,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from loguru import logger
+from app.core.utils import logger
 
 from .encryption import AESCipherGCM, deriveKey, hash256
 

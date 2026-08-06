@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from loguru import logger
+from app.core.utils import audit, logger
 
 from app.core.models.billing_models import (
     Account,
@@ -101,13 +101,20 @@ class BillingGateway:
             taskId=taskId,
             description=description,
         )
-        return PreauthResult(
+        result = PreauthResult(
             success=True,
             message="ok",
             billId=str(data.get("billId") or ""),
             estimatedCost=int(data.get("estimatedCost", 0) or 0),
             balanceAfter=int(data.get("balanceAfter", 0) or 0),
         )
+        # 计费审计(2026-08-06):预占成功落 audit_<date>.log(90 天)
+        audit(
+            "BILL_PREAUTH",
+            f"action={action.value} billId={result.billId} "
+            f"estimated={result.estimatedCost} balanceAfter={result.balanceAfter}",
+        )
+        return result
 
     def settle(self, billId: str, realResourceUsed: int) -> Optional[BillItem]:
         """调 /v1/billing/settle,转 BillItem。失败返回 None。"""
@@ -121,13 +128,19 @@ class BillingGateway:
             )
         except CloudApiError as e:
             logger.warning(f"[BillingGateway] settle 失败: {e.code} {e.message}")
+            audit("BILL_SETTLE_FAIL", f"billId={billId} code={e.code}")
             return None
         except Exception as e:  # noqa: BLE001
             logger.exception(f"[BillingGateway] settle 异常: {e}")
+            audit("BILL_SETTLE_FAIL", f"billId={billId} exc={type(e).__name__}")
             return None
         billIdOut = str(data.get("billId") or billId)
         realCost = int(data.get("realCost", 0) or 0)
         balanceAfter = int(data.get("balanceAfter", 0) or 0)
+        audit(
+            "BILL_SETTLE",
+            f"billId={billIdOut} realCost={realCost} balanceAfter={balanceAfter}",
+        )
         return BillItem(
             billId=billIdOut,
             userId="",  # 云端 settle 响应里没有 userId,业务方若有需要再拉详情
@@ -148,10 +161,18 @@ class BillingGateway:
             data = self._api.refund(billId=billId)
         except CloudApiError as e:
             logger.warning(f"[BillingGateway] refund 失败: {e.code} {e.message}")
+            audit("BILL_REFUND_FAIL", f"billId={billId} code={e.code}")
             return None
         except Exception as e:  # noqa: BLE001
             logger.exception(f"[BillingGateway] refund 异常: {e}")
+            audit("BILL_REFUND_FAIL", f"billId={billId} exc={type(e).__name__}")
             return None
+        refunded = int(data.get("refundedAmount", 0) or 0)
+        balanceAfter = int(data.get("balanceAfter", 0) or 0)
+        audit(
+            "BILL_REFUND",
+            f"billId={billId} refunded={refunded} balanceAfter={balanceAfter}",
+        )
         return BillItem(
             billId=str(data.get("billId") or billId),
             userId="",

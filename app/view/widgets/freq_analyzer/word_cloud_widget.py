@@ -74,7 +74,7 @@ from app.view.widgets.freq_analyzer.word_cloud_engine import (
     _WORDCLOUD_AVAILABLE,
 )
 
-from loguru import logger
+from app.core.utils import logger
 
 
 # ---------------------------------------------------------------------------

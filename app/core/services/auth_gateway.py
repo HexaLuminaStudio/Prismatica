@@ -21,8 +21,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from loguru import logger
-
+from app.core.utils import audit, logger
 from app.core.models.auth_models import (
     AuthMode,
     License,
@@ -80,7 +79,15 @@ class AuthGateway:
                 message=f"云端不可达: {e}",
             )
 
-        return _buildRedeemResult(data)
+        result = _buildRedeemResult(data)
+        # 鉴权审计(2026-08-06):落地到 audit_<date>.log,保留 90 天
+        if result.success and result.userId:
+            audit(
+                "AUTH_REDEEM_SUCCESS",
+                f"mode={result.license.authMode.value if result.license else 'unknown'} "
+                f"user={result.userId} granted={result.grantedBalance}",
+            )
+        return result
 
     def refreshSession(self) -> bool:
         """主动调用 refresh(目前由 CloudApi._request 内部自动处理,这里预留)。"""
@@ -89,19 +96,28 @@ class AuthGateway:
             return False
         try:
             self._api.refresh(rt)
+            audit("AUTH_REFRESH_SUCCESS", "manual refresh ok")
             return True
         except CloudApiError as e:
             logger.warning(f"[AuthGateway] refreshSession 失败: {e.code} {e.message}")
+            audit(
+                "AUTH_REFRESH_FAIL",
+                f"code={e.code} msg={e.message}",
+            )
             return False
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[AuthGateway] refreshSession 异常: {e}")
+            audit("AUTH_REFRESH_FAIL", f"unexpected exc={type(e).__name__}")
             return False
 
     def logout(self) -> None:
         """best-effort 注销(失败也清理本地)。"""
         try:
             self._api.logout()
-        except Exception:  # noqa: BLE001
-            pass
+            audit("AUTH_LOGOUT", "logout ok")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[AuthGateway] logout 异常(忽略): {e}")
+            audit("AUTH_LOGOUT_FAIL", f"exc={type(e).__name__}")
         finally:
             try:
                 signalBus.activationStatusChanged.emit(False)

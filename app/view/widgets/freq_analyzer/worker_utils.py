@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, List, Optional, Sequence
 
-from loguru import logger
+from app.core.utils import logger
 
 # 性能优化:只在主线程使用 QTableWidget,所以 PySide6 始终要导入
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal

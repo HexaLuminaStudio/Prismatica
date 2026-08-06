@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.models.auth_models import (
     AuthMode,

@@ -12,7 +12,7 @@ import re
 from typing import Any, Dict, List
 
 import pandas as pd
-from loguru import logger
+from app.core.utils import logger
 
 
 # 字段映射：原始键 -> 输出列名

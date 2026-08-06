@@ -23,15 +23,16 @@ DEV_BASE_URL = "http://103.236.55.211:8000"
 STAGING_BASE_URL = "http://103.236.55.211:8000/staging"
 
 # 当前激活 profile(运行时由环境变量 PRISMATICA_CLOUD_PROFILE 注入)
-DEFAULT_BASE_URL = PROD_BASE_URL
+# 2026-08-06:本地联调阶段默认 dev,运营打包发布时再切回 prod。
+DEFAULT_BASE_URL = DEV_BASE_URL
 
 
 def getDefaultProfile() -> Literal["prod", "dev", "staging"]:
-    """从环境变量解析 profile(未设置 → prod)。"""
+    """从环境变量解析 profile(未设置 → dev,2026-08-06 本地联调阶段)。"""
     raw = (os.environ.get("PRISMATICA_CLOUD_PROFILE") or "").strip().lower()
     if raw in ("dev", "staging", "prod"):
         return raw  # type: ignore[return-value]
-    return "prod"
+    return "dev"
 
 
 def getBaseUrlForProfile(profile: Literal["prod", "dev", "staging"]) -> str:

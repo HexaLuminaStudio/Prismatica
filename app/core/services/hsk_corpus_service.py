@@ -36,7 +36,7 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.utils.data_paths import HSK_CORPUS_DB, HSK_CORPUS_SCHEMA_VERSION
 

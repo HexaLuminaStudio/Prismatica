@@ -26,7 +26,7 @@ import platform as _platform
 from typing import Any, Optional
 
 import httpx
-from loguru import logger
+from app.core.utils import logger
 
 from app.core.services.cloud_config import getCloudConfig
 from app.core.services.cloud_device import getOrCreateDeviceId
