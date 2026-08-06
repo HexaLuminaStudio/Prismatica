@@ -2,7 +2,6 @@
 import os
 import sys
 import warnings
-import time as _startTime
 
 warnings.filterwarnings(
     "ignore",
@@ -30,72 +29,55 @@ from PySide6.QtGui import QImageReader
 from PySide6.QtWidgets import QApplication
 from qfluentwidgetspro import setLicense
 
-# =====================================================================
-# 冷启动埋点 ① :模块导入阶段已耗时,在这里初始化 profiler(最早)
-# =====================================================================
-from app.core.utils import cfg, qconfig, autoSetup, logger, getStartupProfiler
+from app.core.utils import cfg, configureLogging, log, qconfig
 from app.core.utils.setting import MODE
+
+# 日志只允许在应用入口初始化一次，业务模块导入不会创建日志文件。
+configureLogging(MODE)
+
 from app.view.main_window import (
     MainWindow,
-)  # noqa: F401(主窗口构造期会再次用到,先 import 用于计时)
+)  # noqa: F401(主窗口构造期会再次使用)
 from app.view.resource.resource import *
 
-_startupProfiler = getStartupProfiler()
-# 记录从进程起到"刚完成 import"的总耗时(模块级 import 通常是冷启动大头)
-importImportSec = _startTime.perf_counter()
-_startupProfiler.mark(
-    "import_done",
-    f"进程启动至所有 import 完成 = {(importImportSec - _startupProfiler._bootStart) * 1000.0:.1f} ms",
+setLicense(
+    "jGEwKHNnQYGLMk+G3DD0REwDKhaSyZ3jj+st63emdDJPlj2M1D2aJ8ediZJVyVG75FyXv56z1BBUk7LFrFBwh2DuEy8f3YuMtezFbY/PSiMRXFdLKM23VSZuEatCBjunKrsOo3Y5D+/0/6B/ulVDxm2YIstlNar6OedvxZSDf4R8tQzIvrrfg0DEMEdqnHvHNcGny39/U2iGzF6HjA+OwKEqZSdP1tG+icDOlfT5AmxWG0oGH1uAzylMnip+NB4OeFQQOG3xGyyVARwPVp35Xg=="
 )
 
-with _startupProfiler.stage("set_license", "qfluentwidgetspro.setLicense"):
-    setLicense(
-        "jGEwKHNnQYGLMk+G3DD0REwDKhaSyZ3jj+st63emdDJPlj2M1D2aJ8ediZJVyVG75FyXv56z1BBUk7LFrFBwh2DuEy8f3YuMtezFbY/PSiMRXFdLKM23VSZuEatCBjunKrsOo3Y5D+/0/6B/ulVDxm2YIstlNar6OedvxZSDf4R8tQzIvrrfg0DEMEdqnHvHNcGny39/U2iGzF6HjA+OwKEqZSdP1tG+icDOlfT5AmxWG0oGH1uAzylMnip+NB4OeFQQOG3xGyyVARwPVp35Xg=="
-    )
+# enable dpi scale
+_dpi_scale = cfg.get(cfg.DpiScale)
+if _dpi_scale != "Auto":
+    try:
+        scale = float(_dpi_scale)
+        if scale <= 0:
+            raise ValueError(f"Invalid scale factor: {scale}")
+        os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+        os.environ["QT_SCALE_FACTOR"] = str(scale)
+    except (TypeError, ValueError) as e:
+        log.warning(
+            f"[Main] DPI缩放配置无效 ({_dpi_scale!r})，使用系统自动缩放: {e}"
+        )
 
-with _startupProfiler.stage("logger_setup", "loguru 初始化(autoSetup)"):
-    # 配置日志系统
-    autoSetup(MODE)
-
-with _startupProfiler.stage("dpi_scale", "DPI 缩放环境变量设置"):
-    # enable dpi scale
-    _dpi_scale = cfg.get(cfg.DpiScale)
-    if _dpi_scale != "Auto":
-        try:
-            scale = float(_dpi_scale)
-            if scale <= 0:
-                raise ValueError(f"Invalid scale factor: {scale}")
-            os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
-            os.environ["QT_SCALE_FACTOR"] = str(scale)
-            logger.info(f"[Main] DPI缩放已设置为 {scale}x")
-        except (TypeError, ValueError) as e:
-            logger.warning(
-                f"[Main] DPI缩放配置无效 ({_dpi_scale!r})，使用系统自动缩放: {e}"
-            )
-
-with _startupProfiler.stage("qapplication_init", "QApplication 构造"):
-    # create application
-    app = QApplication(sys.argv)
-    app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
+# create application
+app = QApplication(sys.argv)
+app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 
 from app.view.widgets.splash_window import SplashWindow
 from app.core.services.splash_loader import SplashLoader
 from qfluentwidgets import InfoBar, InfoBarPosition
 
 
-with _startupProfiler.stage("splash_create", "SplashWindow 构造 + 首帧显示"):
-    _splashWindow = SplashWindow()
-    # 初始目标 5%(SplashWindow 内部已设);自由增长定时器会从 0 自动爬升
-    _splashWindow.setProgress(5, "正在初始化…")
-    _splashWindow.show()
-    # 强制把 splash 顶到最前并抢焦点,确保启动期用户看到的第一窗口就是它
-    _splashWindow.raise_()
-    _splashWindow.activateWindow()
-    QApplication.processEvents()  # 强制首帧绘制,避免被后续阻塞逻辑遮挡
+_splashWindow = SplashWindow()
+# 初始目标 5%(SplashWindow 内部已设);自由增长定时器会从 0 自动爬升
+_splashWindow.setProgress(5, "正在初始化…")
+_splashWindow.show()
+# 强制把 splash 顶到最前并抢焦点,确保启动期用户看到的第一窗口就是它
+_splashWindow.raise_()
+_splashWindow.activateWindow()
+QApplication.processEvents()  # 强制首帧绘制,避免被后续阻塞逻辑遮挡
 
 # 2) 创建加载协调器(持有 splash 强引用,避免被 GC)
-with _startupProfiler.stage("splash_loader_init", "SplashLoader 构造"):
-    _splashLoader = SplashLoader(splashWindow=_splashWindow)
+_splashLoader = SplashLoader(splashWindow=_splashWindow)
 
 # 3) 持有主窗口的强引用,避免被 GC
 _mainWindowRef = None
@@ -106,15 +88,6 @@ _mainWindowRef = None
 def _onMainWindowReady(window) -> None:
     global _mainWindowRef
     _mainWindowRef = window
-    # 冷启动埋点:主窗口已构造完毕(此后只剩 splash 淡出 + show)
-    try:
-        _startupProfiler.mark(
-            "mainwindow_ready",
-            "MainWindow 已构造完成,等待 splash 淡出后再展示",
-        )
-    except Exception as _profErr:
-        logger.warning(f"[StartupProfiler] mark 失败(非致命): {_profErr}")
-    logger.info("[Main] MainWindow 已构造完成,等待 splash 淡出后再展示")
     # 把"启动彻底完成"通知延迟到下一轮事件循环,确保子线程/异步信号链
     # 完全处理完毕后,主窗口才进入展示流程
     from PySide6.QtCore import QTimer
@@ -126,25 +99,12 @@ def _onMainWindowReady(window) -> None:
 def _onStartupCompleted() -> None:
     try:
         if _mainWindowRef is None:
-            logger.warning("[Main] startupCompleted 触发但 _mainWindowRef 为空")
+            log.warning("[Main] startupCompleted 触发但 _mainWindowRef 为空")
             return
         _mainWindowRef._showAfterStartup()
-        logger.info("[Main] 主窗口已展示(启动彻底完成)")
-        # 启动审计(2026-08-06):主窗口展示完成落 audit,
-        # 用于事后追溯「启动耗时 / 异常中止」等关键里程碑。
-        try:
-            from app.core.utils import audit
-            totalMs = (time.perf_counter() - _startupProfiler._bootStart) * 1000.0
-            audit("STARTUP_MAIN_WINDOW_READY", f"totalMs={totalMs:.1f}")
-        except Exception as _auditErr:
-            logger.debug(f"[Main] audit 写入失败(非致命): {_auditErr}")
-        # 冷启动埋点:此时用户已看到主窗口,落盘冷启动耗时汇总
-        try:
-            _startupProfiler.finish()
-        except Exception as _pfErr:
-            logger.warning(f"[StartupProfiler] finish 失败(非致命): {_pfErr}")
+        log.info("应用程序启动完成")
     except Exception as e:
-        logger.exception(f"[Main] 主窗口展示失败: {e}")
+        log.exception(f"[Main] 主窗口展示失败: {e}")
         try:
             InfoBar.error(
                 title="启动失败",
@@ -159,7 +119,7 @@ def _onStartupCompleted() -> None:
 
 # 4) 加载失败:展示错误信息并退出
 def _onLoadFailed(exc) -> None:
-    logger.error(f"[Main] 主窗口构造失败,程序退出: {exc}")
+    log.error(f"[Main] 主窗口构造失败,程序退出: {exc}")
     try:
         InfoBar.error(
             title="启动失败",
@@ -192,20 +152,16 @@ _splashLoader.startupCompleted.connect(_onStartupCompleted)
 #       用户看到的第一个窗口。
 # =====================================================================
 try:
-    with _startupProfiler.stage(
-        "project_manager_warmup", "ProjectManager.instance() 预热"
-    ):
-        from app.core.services.project_manager import ProjectManager
+    from app.core.services.project_manager import ProjectManager
 
-        _splashWindow.setProgress(10, "正在加载项目数据…")
-        _splashWindow.raise_()
-        QApplication.processEvents()
-        logger.info("[Main] 预热:提前加载项目元数据(splash 之后)")
-        ProjectManager.instance()
-        _splashWindow.setProgress(15, "项目数据加载完成")
-        QApplication.processEvents()
+    _splashWindow.setProgress(10, "正在加载项目数据…")
+    _splashWindow.raise_()
+    QApplication.processEvents()
+    ProjectManager.instance()
+    _splashWindow.setProgress(15, "项目数据加载完成")
+    QApplication.processEvents()
 except Exception as _pmWarmupErr:
-    logger.warning(f"[Main] 预热 ProjectManager 失败(非致命,继续): {_pmWarmupErr}")
+    log.warning(f"[Main] 预热 ProjectManager 失败(非致命,继续): {_pmWarmupErr}")
 
 # ============================================================
 # 首次启动引导(2026-07-21 新增)
@@ -234,34 +190,28 @@ if qconfig.get(cfg.FirstLaunch):
         #   - exec() 返回后调用 splash.release():让 splash 重新显示
         #   - 配合 SplashLoader 的 fadedOut → startupCompleted 推迟逻辑,
         #     整个启动序列不会出现"两个窗口叠加"
-        logger.info("[Main] 检测到首次启动,显示引导窗口(暂存 splash)")
         _guideWindow = GuideWindow()
         try:
             _splashWindow.hold()
         except Exception as _holdErr:
-            logger.warning(f"[Main] 暂存 splash 失败(非致命): {_holdErr}")
+            log.warning(f"[Main] 暂存 splash 失败(非致命): {_holdErr}")
         QApplication.processEvents()
 
-        with _startupProfiler.stage(
-            "guide_window_exec", "首次启动 GuideWindow.exec()"
-        ):
-            # 修复(2026-08-05):hold/release 用 try/finally 配对,
-            # 哪怕 exec 抛异常也要恢复 splash,避免「软件无反应」。
+        # 修复(2026-08-05):hold/release 用 try/finally 配对,
+        # 哪怕 exec 抛异常也要恢复 splash,避免「软件无反应」。
+        try:
+            _guideCompleted = _guideWindow.exec()
+        finally:
+            # 引导结束后让 splash 重新接管(若进度已推进过,这里继续推一格)
             try:
-                _guideCompleted = _guideWindow.exec()
-            finally:
-                # 引导结束后让 splash 重新接管(若进度已推进过,这里继续推一格)
-                try:
-                    _splashWindow.release(
-                        progress=25, text="引导完成,准备启动主窗口…"
-                    )
-                except Exception as _relErr:
-                    logger.warning(f"[Main] 恢复 splash 失败(非致命): {_relErr}")
+                _splashWindow.release(progress=25, text="引导完成,准备启动主窗口…")
+            except Exception as _relErr:
+                log.warning(f"[Main] 恢复 splash 失败(非致命): {_relErr}")
 
         if not _guideCompleted:
             # 用户在未完成时尝试关闭引导 -> 退出整个程序
             # cfg.FirstLaunch 保持 True,下次启动仍会引导
-            logger.warning("[Main] 引导未完成,退出程序,保留 FirstLaunch=True")
+            log.info("[Main] 用户未完成首次引导,程序退出")
             # 释放引导窗口,避免悬挂引用
             _guideWindow = None
             # 关闭 splash,再退出
@@ -273,7 +223,7 @@ if qconfig.get(cfg.FirstLaunch):
             # 跳过后续主窗口创建逻辑(用 sys.exit 跳出整个模块底部)
             sys.exit(0)
     except Exception as _guideErr:
-        logger.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
+        log.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
 
 # ============================================================
 # 启动主窗口异步加载
@@ -284,14 +234,11 @@ if qconfig.get(cfg.FirstLaunch):
 # 引导完成(或跳过引导) → 推进到 26%,留 4% 给 SplashLoader 衔接 30%
 _splashWindow.setProgress(26, "准备启动主窗口…")
 QApplication.processEvents()
-with _startupProfiler.stage(
-    "splash_loader_start", "SplashLoader.start() 触发异步加载"
-):
-    _splashLoader.start()  # 立即返回,异步构造
+_splashLoader.start()  # 立即返回,异步构造
 
 # 应用程序退出处理
 result = app.exec()
 
-logger.info("应用程序退出")
+log.info("应用程序退出")
 # 确保线程被正确停止
 sys.exit(result)

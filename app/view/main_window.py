@@ -48,7 +48,6 @@ class MainWindow(MSFluentWindow):
         # 项目管理页「锁定态」:AI 报告生成期间锁住页面交互,
         # 此时不允许通过导航栏离开项目管理页,也不允许直接关闭主窗口。
         self._projectBusy: bool = False
-        logger.info("[MainWindow] 开始初始化主窗口")
         # 主窗口构造区间:30% ~ 95%(由 SplashLoader 协调,前面 0~30% 是
         # 项目预热 / 许可证 / 引导窗口)。拆成多个小步,每个子界面独立上报,
         # 让 splash 进度条在追赶动画下能看到数字持续变化。
@@ -94,7 +93,6 @@ class MainWindow(MSFluentWindow):
         self._reportProgress(90, "加载导航菜单")
         self.initNavigation()
         self._reportProgress(95, "准备完成")
-        logger.info("[MainWindow] 主窗口初始化完成")
 
     def _reportProgress(self, pct: int, text: str) -> None:
         """上报当前加载阶段。
@@ -111,7 +109,6 @@ class MainWindow(MSFluentWindow):
             logger.warning(f"[MainWindow] 进度回调异常: {e}")
 
     def connectSignalToSlot(self):
-        logger.debug("[MainWindow] 连接信号和槽")
         # PRD-002:顶栏项目切换器的「项目管理」入口 → 切到项目管理页
         # 「新建项目」入口 → 弹出 NewProjectDialog
         try:
@@ -320,7 +317,6 @@ class MainWindow(MSFluentWindow):
             logger.warning(f"[MainWindow] _onNavigateToSubInterface 失败: {e}")
 
     def initNavigation(self):
-        logger.info("[MainWindow] 开始初始化导航界面")
         self.addSubInterface(
             self.hskInterface,
             QIcon(":app/icons/Hsk.svg"),
@@ -383,39 +379,27 @@ class MainWindow(MSFluentWindow):
             position=NavigationItemPosition.BOTTOM,
         )
         self.splashScreen.finish()
-        logger.info("[MainWindow] 导航界面初始化完成")
 
     def initWindow(self):
-        logger.info("[MainWindow] 开始初始化窗口设置")
         self.resize(1250, 850)
         self.setMinimumWidth(900)
         self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))
         self.setWindowTitle("棱溯客户端")
 
-        logger.debug("[MainWindow] 已设置窗口基本属性")
 
         self.splashScreen = SplashScreen(self.windowIcon(), self)
         self.splashScreen.setIconSize(QSize(106, 106))
         self.splashScreen.raise_()
-        logger.debug("[MainWindow] 已创建并设置启动屏幕")
 
         desktop = QApplication.primaryScreen().availableGeometry()
         w, h = desktop.width(), desktop.height()
         self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
-        logger.debug("[MainWindow] 已移动窗口到屏幕中心")
 
-        if self._startHidden:
-            # 启动 splash 流程:此时窗口隐藏(避免「未初始化完成」闪现),
-            # 等外部在启动彻底完成后调用 _showAfterStartup() 再显示。
-            logger.info(
-                "[MainWindow] startHidden=True,窗口暂不显示,等待 _showAfterStartup()"
-            )
-        else:
+        if not self._startHidden:
             # 兼容旧调用方:照常 show
             self.show()
             QApplication.processEvents()
-            logger.info("[MainWindow] 窗口初始化完成并显示")
 
     def _showAfterStartup(self) -> None:
         """启动彻底完成后由外部调用:显示主窗口。
@@ -451,7 +435,6 @@ class MainWindow(MSFluentWindow):
             self.activateWindow()
             # 再 processEvents 一次,确保事件循环消化后窗口层级稳定
             QApplication.processEvents()
-            logger.info("[MainWindow] 启动彻底完成,窗口已显示")
             # 主窗口首次进入引导遮罩:用半透明黑幕遮住主窗口,
             # 突出关键控件 + 展示说明文字,引导用户认识主界面。
             # - 仅当 cfg.MainTourShown=False 时弹出(默认未展示)
@@ -485,7 +468,6 @@ class MainWindow(MSFluentWindow):
                         return
                     overlay = MainTourOverlay(self)
                     overlay.start()
-                    logger.info("[MainWindow] 主窗口引导遮罩已弹出")
                 except Exception as e:
                     logger.warning(f"[MainWindow] 启动引导遮罩失败: {e}")
 

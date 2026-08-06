@@ -965,7 +965,6 @@ class GuideWindow(QObject):
 
         self._buildPages()
         self._wireEvents()
-        logger.info("[Guide] 首次启动引导窗口已初始化")
 
     def _buildPages(self):
         """注册引导页"""

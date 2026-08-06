@@ -204,7 +204,6 @@ class DownloadCard(CardWidget):
     def _onRedownloadClicked(self):
         """重新下载按钮点击"""
         from app.core.services import taskManager
-        from loguru import logger
         from qfluentwidgets import InfoBar, InfoBarIcon, InfoBarPosition
 
         # 从 infoDict 获取下载参数
@@ -394,7 +393,6 @@ class DownloadCard(CardWidget):
         import os
         import platform
         import subprocess
-        from loguru import logger
 
         # 从数据库获取下载路径
         # P0-A1 fix 2026-07-18:走 taskManager.getDownloadPath() 高阶接口

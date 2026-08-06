@@ -117,10 +117,6 @@ class AiInsightMixin:
                 # 极端情况:有其他 slot 但不是 _openAiInsight → 放过即可
                 pass
         button.clicked.connect(self._openAiInsight)
-        logger.info(
-            f"[{self.__class__.__name__}] 已接入 AI 解读按钮 "
-            f"(panel='{self._AI_INSIGHT_PANEL_NAME}', type='{self._AI_INSIGHT_TYPE}')"
-        )
 
     def enableAiInsightButton(self) -> None:
         btn = getattr(self, "_aiInsightBtn", None)

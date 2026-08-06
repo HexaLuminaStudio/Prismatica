@@ -496,10 +496,6 @@ class HanLPDependencyParser(DependencyParser):
                 language=self._language,
                 timeout=int(self._timeout),
             )
-            logger.info(
-                f"[HanLPDepParser] HanLP 客户端初始化成功: "
-                f"url={self._url}, language={self._language}"
-            )
         except ImportError:
             self._lastError = "hanlp_restful 未安装(pip install hanlp_restful)"
             logger.debug(f"[HanLPDepParser] {self._lastError}")

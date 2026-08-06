@@ -113,7 +113,6 @@ class SplashWindow(QWidget):
         # 进度信号由外部跨线程触发,槽函数内部已做线程安全处理
         self.progressChanged.connect(self._onProgressChanged)
 
-        logger.info("[Splash] 启动等待窗口已创建")
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -336,7 +335,6 @@ class SplashWindow(QWidget):
         if self._isFinished:
             return
         self._isFinished = True
-        logger.info("[Splash] 主程序加载完成,准备关闭启动等待窗口")
 
         # 推进到 100% + 显示完成文案
         self.progressChanged.emit(100, "启动完成")
@@ -407,7 +405,6 @@ class SplashWindow(QWidget):
         try:
             self.hide()
             self._isHeld = True
-            logger.info("[Splash] 临时退场(引导窗口交互期间)")
         except Exception:
             logger.debug("[Splash] hold() hide 失败")
 
@@ -438,7 +435,6 @@ class SplashWindow(QWidget):
             from PySide6.QtWidgets import QApplication
 
             QApplication.processEvents()
-            logger.info("[Splash] 重新显示(引导结束后)")
         except Exception:
             # 释放失败时也要清掉守卫,避免后续 release() 永远 no-op,
             # 导致 splash 永久不可见。

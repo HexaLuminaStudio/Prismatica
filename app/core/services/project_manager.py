@@ -263,11 +263,6 @@ class ProjectManager(QObject):
             for project in self._memCache.values():
                 project.resources.sort(key=lambda x: x.createdAt or "", reverse=True)
                 project.aiInsights.sort(key=lambda x: x.createdAt or "", reverse=True)
-            logger.info(
-                f"[ProjectManager] 加载项目 {len(self._memCache)} 个, "
-                f"资源 {sum(len(p.resources) for p in self._memCache.values())} 条, "
-                f"AI 解读 {sum(len(p.aiInsights) for p in self._memCache.values())} 条"
-            )
         except Exception as e:
             logger.exception(f"[ProjectManager] 加载项目元数据失败: {e}")
 
@@ -291,13 +286,6 @@ class ProjectManager(QObject):
                 if activeId and activeId in self._memCache:
                     self._activeProjectId = activeId
                     restoredFromState = True
-                    logger.info(
-                        f"[ProjectManager] 恢复激活项目 id={activeId}(来源 project_state.json)"
-                    )
-                elif activeId:
-                    logger.info(
-                        f"[ProjectManager] project_state.json 中 id={activeId} 不存在,忽略"
-                    )
             except Exception as e:
                 logger.warning(f"[ProjectManager] 读取 project_state.json 失败: {e}")
 
@@ -312,10 +300,6 @@ class ProjectManager(QObject):
                 key=lambda p: (p.updatedAt or "", p.createdAt or ""),
             )
             self._activeProjectId = recent.id
-            logger.info(
-                f"[ProjectManager] 未找到有效 state,自动激活最近项目 "
-                f"id={recent.id}, name={recent.name}"
-            )
             # 把这个选择也回写到 state,保证下次启动一致
             self._saveActiveProjectState(recent.id)
 

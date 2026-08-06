@@ -28,7 +28,7 @@
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
-from app.core.utils import logger
+from app.core.utils import log
 
 
 class SplashLoader(QObject):
@@ -68,7 +68,7 @@ class SplashLoader(QObject):
             try:
                 splashWindow.fadedOut.connect(self._onSplashFadedOut)
             except Exception:
-                logger.debug("[SplashLoader] 订阅 splash.fadedOut 失败(可能已销毁)")
+                log.debug("[SplashLoader] 订阅 splash.fadedOut 失败(可能已销毁)")
         self._pendingStartupCompleted = False
 
     # ------------------------------------------------------------------
@@ -82,7 +82,7 @@ class SplashLoader(QObject):
             try:
                 self._splash.setProgress(int(pct), str(text))
             except Exception:
-                logger.debug("[SplashLoader] splash.setProgress 失败(可能已销毁)")
+                log.debug("[SplashLoader] splash.setProgress 失败(可能已销毁)")
         try:
             self.progressChanged.emit(int(pct), str(text))
         except (RuntimeError, AttributeError):
@@ -94,7 +94,7 @@ class SplashLoader(QObject):
     def start(self) -> None:
         """启动加载流程。立即返回,不阻塞调用者。"""
         if self._started:
-            logger.warning("[SplashLoader] 已启动,忽略重复 start()")
+            log.warning("[SplashLoader] 已启动,忽略重复 start()")
             return
         self._started = True
 
@@ -112,7 +112,6 @@ class SplashLoader(QObject):
         """
         from PySide6.QtCore import QTimer
 
-        logger.info("[SplashLoader] 主线程 + processEvents 加载方案已启动")
         # 用 0 延迟触发,确保 start() 立即返回;splash 才会立刻拿到事件循环
         QTimer.singleShot(0, self._buildMainWindowSafely)
 
@@ -132,31 +131,10 @@ class SplashLoader(QObject):
             # 在此之前先推进到 28%,留 2% 的 gap 让动画从外部衔接过来。
             self._reportProgress(28, "开始构造主窗口…")
             self._processEventsBriefly()
-            # 冷启动埋点:MainWindow() 真正构造耗时(通常是冷启动第二大头)
-            try:
-                from app.core.utils.logger import getStartupProfiler
-
-                _profiler = getStartupProfiler()
-                _profiler.mark(
-                    "mainwindow_build_start",
-                    "MainWindow() 构造开始(走 SplashLoader 主线程方案)",
-                )
-            except Exception as _profErr:
-                logger.debug(f"[SplashLoader] profiler mark 失败(非致命): {_profErr}")
             mainWindow = MainWindow(
                 progressCallback=self._reportProgress,
                 startHidden=True,  # 关键:构造期间隐藏主窗口,避免闪现
             )
-            try:
-                from app.core.utils.logger import getStartupProfiler
-
-                _profiler = getStartupProfiler()
-                _profiler.mark(
-                    "mainwindow_build_end",
-                    "MainWindow() 构造结束",
-                )
-            except Exception as _profErr:
-                logger.debug(f"[SplashLoader] profiler mark 失败(非致命): {_profErr}")
 
             # 阶段 2:构造完毕,主动再 processEvents 一次,让 splash 看到 100%
             self._processEventsBriefly()
@@ -165,11 +143,8 @@ class SplashLoader(QObject):
             # 等 main.py 在合适时机调用 loader.notifyStartupCompleted() 后
             # 才会真正淡出 splash 并触发 startupCompleted 信号。
             self.mainWindowReady.emit(mainWindow)
-            logger.info(
-                "[SplashLoader] MainWindow 构造完成(主线程方案) — 等待外部通知启动完成"
-            )
         except Exception as e:
-            logger.exception(f"[SplashLoader] MainWindow 构造失败: {e}")
+            log.exception(f"[SplashLoader] MainWindow 构造失败: {e}")
             self._handleBuildError(e)
 
     def notifyStartupCompleted(self) -> None:
@@ -186,13 +161,12 @@ class SplashLoader(QObject):
             - 不会出现「splash 淡出残留与主窗口并排」或「splash 盖在
               主窗口上 220ms 残留」的情况
         """
-        logger.info("[SplashLoader] 外部通知启动完成,准备淡出 splash")
         self._pendingStartupCompleted = True
         if self._splash is not None:
             try:
                 self._splash.finish()
             except Exception:
-                logger.debug("[SplashLoader] splash.finish 调用失败(可能已销毁)")
+                log.debug("[SplashLoader] splash.finish 调用失败(可能已销毁)")
                 # splash 已无法 fadeOut(可能已销毁),直接放行 startupCompleted,
                 # 避免主流程被卡死。
                 self._pendingStartupCompleted = False
@@ -217,7 +191,6 @@ class SplashLoader(QObject):
         if not self._pendingStartupCompleted:
             return
         self._pendingStartupCompleted = False
-        logger.info("[SplashLoader] splash 已淡出销毁,放行 startupCompleted")
         try:
             self.startupCompleted.emit()
         except (RuntimeError, AttributeError):
@@ -256,7 +229,7 @@ class SplashLoader(QObject):
                     # 注意:此处不主动关闭 splash,等待外部 notifyStartupCompleted
                     outerSelf._loader.mainWindowReady.emit(window)
                 except Exception as e:
-                    logger.exception(f"[SplashLoader](子线程) MainWindow 构造失败: {e}")
+                    log.exception(f"[SplashLoader](子线程) MainWindow 构造失败: {e}")
                     outerSelf._loader._handleBuildError(e)
 
         thread = QThread()
@@ -266,7 +239,6 @@ class SplashLoader(QObject):
         builder.destroyed.connect(thread.quit)
         thread.finished.connect(thread.deleteLater)
         thread.start()
-        logger.info("[SplashLoader] 子线程构造方案已启动")
 
     # ------------------------------------------------------------------
     # 工具

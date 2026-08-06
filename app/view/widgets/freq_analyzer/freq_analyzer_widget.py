@@ -484,12 +484,6 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             self.unigramMinFreq = int(data.get("unigramMinFreq", self.unigramMinFreq))
             self.ngramN = int(data.get("ngramN", self.ngramN))
             self.ngramMinFreq = int(data.get("ngramMinFreq", self.ngramMinFreq))
-            logger.info(
-                f"[FreqAnalyzerWidget] 已恢复高级设置: "
-                f"unigramMinFreq={self.unigramMinFreq}, "
-                f"ngramN={self.ngramN}, "
-                f"ngramMinFreq={self.ngramMinFreq}"
-            )
         except Exception as e:
             logger.warning(f"[FreqAnalyzerWidget] 读取高级设置失败: {e}")
 

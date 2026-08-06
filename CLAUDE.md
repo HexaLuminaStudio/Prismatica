@@ -37,7 +37,7 @@ uv run python main.py            # 在 venv 中运行
 ## 架构
 
 ### 入口与生命周期
-- [main.py](main.py) —— 入口脚本。设置 `qfluentwidgetspro` License、`autoSetup(MODE)` 初始化日志、配置 DPI 缩放、创建 `QApplication`、实例化 `MainWindow`。
+- [main.py](main.py) —— 入口脚本。设置 `qfluentwidgetspro` License、通过 `configureLogging(MODE)` 初始化统一日志、配置 DPI 缩放、创建 `QApplication`、实例化 `MainWindow`。
 - `MainWindow` (`app/view/main_window.py`) 继承自 `MSFluentWindow`，通过 `qfluentwidgets` 的 `NavigationItemPosition` 注册 6 个子界面（Hsk / Global / Bias / FreqAnalyzer 顶部，Task / Setting 底部）。`closeEvent` 会拦截有未完成任务时的退出。
 
 ### 分层（视图只能调服务，服务可调 API + Models）
@@ -110,7 +110,7 @@ app/
 - `TaskManager.taskManager` (`app/core/services/task_manager.py`) 全局单例，统一管理所有下载 / 业务任务的 pending / in_progress / done / failed 状态；`main_window.closeEvent` 会询问并 `stopAllTasks()`。
 
 ### 日志
-使用 loguru（`app/core/utils/logger.py`），启动时通过 `autoSetup(MODE)` 接管。日志文件落在 `<INSTALL_DIR>/logs/`。模块自带敏感信息过滤（API key、Token、邮箱、手机号、身份证号等正则模式在 `SENSITIVE_PATTERNS_LIST`）。`logger` 通过 `app.core.utils` 包统一导入使用，**不要直接 `from loguru import logger`**。
+使用 loguru（`app/core/utils/logger.py`），仅允许入口脚本通过 `configureLogging(MODE)` 初始化一次。运行日志统一写入 `<INSTALL_DIR>/logs/prismatica.log`，不再拆分 debug / error / audit / startup 文件。业务代码统一从 `app.core.utils` 导入 `log`，**不要直接 `from loguru import logger`**。模块自带 API key、Token、邮箱、手机号、身份证号等敏感信息过滤。
 
 ### 关键第三方依赖
 - `PySide6` + `qfluentwidgetspro`（本地 whl）—— UI

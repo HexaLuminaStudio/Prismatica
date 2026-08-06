@@ -7,7 +7,7 @@
 import threading
 from typing import Any, Dict, List, Optional
 
-from app.core.utils import audit, logger
+from app.core.utils import logger
 from PySide6.QtCore import QObject, Signal
 
 from app.core.api.task_control import taskControl
@@ -44,12 +44,15 @@ class TaskManager(QObject):
     def restorePendingTasks(self):
         """恢复数据库中pending状态的任务到内存队列"""
         try:
+            restoredCount = 0
             pendingTasks = taskControl.getTasksByStatus("pending")
             for task in pendingTasks:
                 taskId = task.get("id")
                 if taskId and taskId not in self.pendingQueue:
                     self.pendingQueue.append(taskId)
-                    logger.info(f"[TaskManager] 恢复pending任务: {taskId}")
+                    restoredCount += 1
+            if restoredCount:
+                logger.info(f"[TaskManager] 已恢复 {restoredCount} 个等待任务")
         except Exception as e:
             logger.error(f"[TaskManager] 恢复pending任务失败: {e}")
 
@@ -64,9 +67,6 @@ class TaskManager(QObject):
             self.pendingQueue.append(taskId)
 
             logger.info(f"[TaskManager] 创建任务: {taskId}, 类型: {taskType}")
-            # 下载审计(2026-08-06):记录任务创建,便于事后追溯
-            audit("DOWNLOAD_TASK_CREATE", f"taskId={taskId} type={taskType}")
-
             # 尝试启动队列中的任务
             self.processQueue()
 
@@ -519,14 +519,10 @@ class TaskManager(QObject):
                 )
                 self.taskCompleted.emit(taskId, filePath or "")
                 logger.info(f"[TaskManager] 任务完成: {taskId}, filePath={filePath}")
-                # 下载审计(2026-08-06):任务完成落 audit,filePath 可用于回溯
-                audit("DOWNLOAD_TASK_DONE", f"taskId={taskId} filePath={filePath or ''}")
             else:
                 taskControl.failTask(taskId, message)
                 self.taskFailed.emit(taskId, message)
                 logger.error(f"[TaskManager] 任务失败: {taskId}, {message}")
-                # 下载审计(2026-08-06):任务失败落 audit,记录原因
-                audit("DOWNLOAD_TASK_FAIL", f"taskId={taskId} msg={message[:120]}")
 
             self.processQueue()
 

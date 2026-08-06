@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QHBoxLayout, QWidget
 from qfluentwidgets import ComboBox
 
 from app.core.services import projectManager
+from app.core.utils import log
 
 
 # 切换器中的特殊项数据(用字符串 sentinel 与正常项目 id 区分)
@@ -155,9 +156,7 @@ class ProjectSwitcher(QWidget):
                 self._comboBox.blockSignals(False)
                 self._suppressEmit = False
         except Exception as e:
-            from loguru import logger
-
-            logger.warning(f"[ProjectSwitcher] refresh 失败: {e}")
+            log.warning(f"[ProjectSwitcher] refresh 失败: {e}")
 
     # ------------------------------------------------------------------
     # 槽
@@ -212,9 +211,7 @@ class ProjectSwitcher(QWidget):
                     self.refresh()
                     return
         except Exception as e:
-            from loguru import logger
-
-            logger.warning(f"[ProjectSwitcher] _onActiveProjectChanged 失败: {e}")
+            log.warning(f"[ProjectSwitcher] _onActiveProjectChanged 失败: {e}")
         finally:
             self._comboBox.blockSignals(False)
             self._suppressEmit = False

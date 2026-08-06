@@ -298,7 +298,6 @@ class MainTourOverlay(QWidget):
         # 构建步骤定义
         self._buildSteps()
 
-        logger.info(f"[MainTour] 引导遮罩已创建(共 {len(self._steps)} 步)")
 
     # ------------------------------------------------------------------
     # 步骤定义
@@ -466,7 +465,6 @@ class MainTourOverlay(QWidget):
         self._showStep()
         self.show()
         self.raise_()
-        logger.info("[MainTour] 主窗口引导遮罩已启动")
 
     def _showStep(self) -> None:
         """渲染当前步骤。"""

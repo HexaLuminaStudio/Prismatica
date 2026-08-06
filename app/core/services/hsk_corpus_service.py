@@ -388,7 +388,6 @@ class HskCorpusService:
                 (str(self._schemaVersion),),
             )
             conn.commit()
-            logger.info(f"[HskCorpusService] schema 已就绪: db={self._dbPath}")
         finally:
             conn.close()
         # 通知订阅者

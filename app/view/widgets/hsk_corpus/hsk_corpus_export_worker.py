@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from PySide6.QtCore import QThread, Signal
 
+from app.core.utils import log
+
 
 # ---------------------------------------------------------------------------
 # 文件名清洗
@@ -109,8 +111,6 @@ class HskCorpusExportWorker(QThread):
     # 主循环
     # ------------------------------------------------------------------
     def run(self) -> None:
-        from loguru import logger
-
         from app.core.services.hsk_local_corpus_service import (
             hskLocalCorpusService,
         )
@@ -119,7 +119,7 @@ class HskCorpusExportWorker(QThread):
         try:
             self._outputDir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            logger.error(f"[HskCorpusExportWorker] 创建输出目录失败: {e}")
+            log.error(f"[HskCorpusExportWorker] 创建输出目录失败: {e}")
             self.failed.emit(f"无法创建输出目录: {e}")
             return
 
@@ -132,13 +132,13 @@ class HskCorpusExportWorker(QThread):
 
         total = len(self._zwhaoList)
         if total == 0:
-            logger.info("[HskCorpusExportWorker] 命中列表为空,跳过")
+            log.info("[HskCorpusExportWorker] 命中列表为空,跳过")
             self.finishedWithResult.emit(0, 0, 0)
             return
 
         # 2. 一次性取所有记录
         modeLabel = "合并" if self._mergeMode else "分文件"
-        logger.info(
+        log.info(
             f"[HskCorpusExportWorker] 开始导出: {total} 条 → "
             f"{self._outputDir}, 格式={self._fileFormat}, "
             f"模式={modeLabel}, skipMissingTitle={self._skipMissingTitle}"
@@ -150,7 +150,7 @@ class HskCorpusExportWorker(QThread):
         recordByZwhao: Dict[str, Dict[str, Any]] = {
             r["zwhao"]: r for r in records
         }
-        logger.info(
+        log.info(
             f"[HskCorpusExportWorker] 从 local db 取出 {len(records)} 条"
         )
 
@@ -181,7 +181,7 @@ class HskCorpusExportWorker(QThread):
 
         for zwhao in self._zwhaoList:
             if not self._isRunning:
-                logger.info("[HskCorpusExportWorker] 用户取消")
+                log.info("[HskCorpusExportWorker] 用户取消")
                 break
 
             processedCount += 1
@@ -189,7 +189,7 @@ class HskCorpusExportWorker(QThread):
 
             if rec is None:
                 # zwhao 不在 local db(11337 vs 11328 差异)
-                logger.warning(
+                log.warning(
                     f"[HskCorpusExportWorker] zwhao 不在 local db: {zwhao}"
                 )
                 skippedCount += 1
@@ -211,7 +211,7 @@ class HskCorpusExportWorker(QThread):
                     self.wroteFile.emit(str(filePath))
                 successCount += 1
             except Exception as e:
-                logger.error(
+                log.error(
                     f"[HskCorpusExportWorker] 写入 {zwhao} 失败: "
                     f"{type(e).__name__}: {e}"
                 )
@@ -224,23 +224,23 @@ class HskCorpusExportWorker(QThread):
             try:
                 mergeDoc.save(str(mergeFilePath))
                 self.wroteFile.emit(str(mergeFilePath))
-                logger.info(
+                log.info(
                     f"[HskCorpusExportWorker] 合并文件已保存: {mergeFilePath}"
                 )
             except Exception as e:
-                logger.error(
+                log.error(
                     f"[HskCorpusExportWorker] 保存合并文件失败: {e}"
                 )
                 failCount += 1
                 successCount = max(0, successCount - 1)
         elif self._mergeMode and self._fileFormat == "txt":
             # txt 已在 _appendToMerge 内逐条写入
-            logger.info(
+            log.info(
                 f"[HskCorpusExportWorker] txt 合并文件已写入: {mergeFilePath}"
             )
 
         elapsed = time.time() - t0
-        logger.info(
+        log.info(
             f"[HskCorpusExportWorker] 完成:成功 {successCount},"
             f"跳过 {skippedCount},失败 {failCount},"
             f"耗时 {elapsed:.2f}s"

@@ -16,6 +16,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
+from app.core.utils import log
 from app.view.widgets.hsk_corpus.hsk_corpus_browser import HskCorpusBrowser
 
 
@@ -40,6 +41,4 @@ class HskCorpusInterface(QWidget):
         try:
             HskCorpusService.instance().ensureSchema()
         except Exception as e:
-            from loguru import logger
-
-            logger.warning(f"[HskCorpusInterface] ensureSchema 失败: {e}")
+            log.warning(f"[HskCorpusInterface] ensureSchema 失败: {e}")

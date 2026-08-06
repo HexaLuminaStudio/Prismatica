@@ -42,4 +42,4 @@ DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 LOG_FOLDER.mkdir(parents=True, exist_ok=True)
 DATA_FOLDER.mkdir(parents=True, exist_ok=True)
 
-MODE: Literal["DEV", "TEST", "RES"] = "DEV"
+MODE: Literal["DEV", "TEST", "RES"] = "DEV" if DEBUG else "RES"
