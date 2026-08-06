@@ -30,16 +30,19 @@ APP_NAME = "Prismatica"
 # =====================================================================
 
 
-
 IS_BETA: bool = True
 
 
 def _getLicenseSecret() -> str:
-    """获取激活码 HMAC 签名密钥(优先环境变量,其次常量默认值)。
+    """获取激活码 HMAC 签名密钥(2026-08-06 对齐服务端 .env.example)。
+
+    优先级:
+        1. 环境变量 LICENSE_SECRET(推荐,便于运营切换密钥)
+        2. 与服务端 PrismaticaAPI/.env.example 默认值一致
 
     安全提示:
         - 生产部署必须通过环境变量 LICENSE_SECRET 注入,不要在源码中硬编码
-        - 默认值为开发占位,正式发布前请轮换为强随机字符串(>=32 字节)
+        - 默认值为与本地联调后端(雨云公网 MySQL)对齐的密钥,正式发布前请轮换
         - 客户端无法仅凭本字段伪造激活码,但泄露本字段会大幅降低伪造门槛
     """
     import os as _os
@@ -47,8 +50,8 @@ def _getLicenseSecret() -> str:
     envSecret = _os.environ.get("LICENSE_SECRET")
     if envSecret:
         return envSecret
-    # 开发期默认值:正式发布前必须替换为环境变量或强随机串
-    return "DEV-LICENSE-HMAC-SECRET-PLEASE-OVERRIDE-IN-PROD"
+    # 默认值与 PrismaticaAPI/.env.example 的 LICENSE_SECRET 完全一致
+    return "ec41f548431eb9ab3502b00dafd5bb3c192c81c38091b38cddfdbfc1a0b9ca65"
 
 
 # 激活码签名 HMAC 密钥(项目内统一引用)

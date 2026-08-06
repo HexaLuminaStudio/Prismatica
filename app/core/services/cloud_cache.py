@@ -9,8 +9,9 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from app.core.utils import logger
 
@@ -20,6 +21,15 @@ from app.core.utils.setting import CONFIG_FOLDER
 CACHE_DIR: Path = CONFIG_FOLDER / "cache"
 USER_CACHE: Path = CACHE_DIR / "user.json"
 BILLS_CACHE: Path = CACHE_DIR / "bills.json"
+
+
+def _jsonDefault(obj: Any) -> Any:
+    """JSON 默认编码器:支持 datetime / date / 带 isoformat 的对象"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def _ensure() -> None:
@@ -33,7 +43,8 @@ def writeUser(user: dict) -> None:
     _ensure()
     try:
         USER_CACHE.write_text(
-            json.dumps(user, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(user, ensure_ascii=False, indent=2, default=_jsonDefault),
+            encoding="utf-8",
         )
     except Exception as e:
         logger.warning(f"[CloudCache] 写 user.json 失败: {e}")
@@ -53,7 +64,8 @@ def writeBills(bills: list[dict]) -> None:
     _ensure()
     try:
         BILLS_CACHE.write_text(
-            json.dumps(bills, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(bills, ensure_ascii=False, indent=2, default=_jsonDefault),
+            encoding="utf-8",
         )
     except Exception as e:
         logger.warning(f"[CloudCache] 写 bills.json 失败: {e}")
