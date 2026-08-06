@@ -1,5 +1,5 @@
 # coding: utf-8
-"""已完成任务列表。"""
+"""失败与取消任务列表。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -13,12 +13,12 @@ from .download_card import DownloadCard, buildTaskCardInfo
 from .task_empty_state import TaskEmptyState
 
 
-class DownloadedScrollArea(SmoothScrollArea):
-    """仅展示成功完成的任务。"""
+class FailedScrollArea(SmoothScrollArea):
+    """展示失败和用户取消的终态任务。"""
 
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        self.completedCards: dict[str, DownloadCard] = {}
+        self.failedCards: dict[str, DownloadCard] = {}
 
         self.scrollWidget = QWidget(self)
         self.vBoxLayout = QVBoxLayout(self.scrollWidget)
@@ -27,20 +27,21 @@ class DownloadedScrollArea(SmoothScrollArea):
         self.vBoxLayout.setSpacing(12)
 
         self.emptyCard = TaskEmptyState(
-            "暂无已完成任务",
-            "成功完成的下载任务会自动归档在这里。",
-            icon=FluentIcon.ACCEPT,
+            "暂无失败任务",
+            "执行异常、重试耗尽或手动取消的任务会显示在这里。",
+            icon=FluentIcon.CLOSE,
             parent=self.scrollWidget,
         )
         self.vBoxLayout.addWidget(self.emptyCard)
         self._initWidget()
 
-        taskManager.taskCompleted.connect(self._onTaskCompleted)
+        taskManager.taskFailed.connect(self._onTaskFailed)
+        taskManager.taskCancelled.connect(self._onTaskCancelled)
         taskManager.taskDeleted.connect(self.removeCard)
         self.reloadTasks()
 
     def _initWidget(self) -> None:
-        self.setObjectName("DownloadedScrollArea")
+        self.setObjectName("FailedScrollArea")
         self.setViewportMargins(0, 12, 0, 20)
         self.setWidget(self.scrollWidget)
         self.setWidgetResizable(True)
@@ -52,38 +53,46 @@ class DownloadedScrollArea(SmoothScrollArea):
     def reloadTasks(self) -> None:
         self._clearCards()
         try:
-            tasks = taskManager.getCompletedTasks()
+            tasks = taskManager.getFailedTasks(includeCancelled=True)
             for task in reversed(tasks):
                 self._addTask(task)
-            logger.info(f"[DownloadedArea] 已刷新完成任务, count={len(tasks)}")
+            logger.info(f"[FailedArea] 已刷新失败任务, count={len(tasks)}")
         except Exception as exc:
-            logger.exception(f"[DownloadedArea] 恢复已完成任务失败: {exc}")
+            logger.exception(f"[FailedArea] 恢复失败任务失败: {exc}")
         self._updateEmptyState()
 
     def _clearCards(self) -> None:
-        for card in self.completedCards.values():
+        for card in self.failedCards.values():
             self.vBoxLayout.removeWidget(card)
             card.hide()
             card.deleteLater()
-        self.completedCards.clear()
+        self.failedCards.clear()
 
     def _addTask(self, task: dict) -> None:
         taskId = task.get("id")
-        if not taskId or taskId in self.completedCards:
+        if not taskId or taskId in self.failedCards:
             return
         card = DownloadCard(buildTaskCardInfo(task), self.scrollWidget)
-        card.setCompleted()
-        self.completedCards[taskId] = card
+        if task.get("status") == "cancelled":
+            card.setCancelled()
+        else:
+            card.setFailed(task.get("error") or "任务执行失败,未返回详细原因")
+        self.failedCards[taskId] = card
         self.vBoxLayout.insertWidget(0, card)
         self._updateEmptyState()
 
-    def _onTaskCompleted(self, taskId: str, _filePath: str = "") -> None:
+    def _onTaskFailed(self, taskId: str, _error: str) -> None:
+        task = taskManager.getTask(taskId)
+        if task:
+            self._addTask(task)
+
+    def _onTaskCancelled(self, taskId: str) -> None:
         task = taskManager.getTask(taskId)
         if task:
             self._addTask(task)
 
     def removeCard(self, taskId: str) -> None:
-        card = self.completedCards.pop(taskId, None)
+        card = self.failedCards.pop(taskId, None)
         if card is not None:
             try:
                 self.vBoxLayout.removeWidget(card)
@@ -93,9 +102,5 @@ class DownloadedScrollArea(SmoothScrollArea):
                 pass
         self._updateEmptyState()
 
-    def clearAll(self) -> None:
-        self._clearCards()
-        self._updateEmptyState()
-
     def _updateEmptyState(self) -> None:
-        self.emptyCard.setVisible(not self.completedCards)
+        self.emptyCard.setVisible(not self.failedCards)

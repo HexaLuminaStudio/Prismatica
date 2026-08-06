@@ -17,6 +17,7 @@ class TaskManager(QObject):
     """任务管理器，统一管理所有下载任务"""
 
     # 信号定义
+    taskCreated = Signal(str)  # 任务入库信号,包括尚未获得执行槽位的排队任务
     taskStarted = Signal(str)  # 任务启动信号
     taskProgress = Signal(str, dict)  # 任务进度信号
     taskCompleted = Signal(str, str)  # 任务完成信号 (taskId, filePath)
@@ -71,10 +72,12 @@ class TaskManager(QObject):
             self.pendingQueue.append(taskId)
 
             logger.info(f"[TaskManager] 创建任务: {taskId}, 类型: {taskType}")
-            # 尝试启动队列中的任务
-            self.processQueue()
 
-            return taskId
+        # 先通知 UI 显示「排队中」卡片,再尝试申请执行槽位。信号放在锁外,
+        # 避免视图回调查询任务时重入 TaskManager 锁。
+        self.taskCreated.emit(taskId)
+        self.processQueue()
+        return taskId
 
     def processQueue(self):
         """处理任务队列，启动可执行的任务"""
@@ -376,6 +379,49 @@ class TaskManager(QObject):
         except Exception as e:
             logger.error(f"[TaskManager] getDoneTasks 失败: {e}")
             return []
+
+    def getCompletedTasks(self) -> List[Dict[str, Any]]:
+        """获取成功完成的任务,供「已完成」标签页使用。"""
+        try:
+            tasks = taskControl.getTasksByStatus("completed")
+            tasks.sort(
+                key=lambda task: task.get("endedAt") or task.get("createdAt") or "",
+                reverse=True,
+            )
+            return tasks
+        except Exception as e:
+            logger.error(f"[TaskManager] getCompletedTasks 失败: {e}")
+            return []
+
+    def getFailedTasks(self, includeCancelled: bool = True) -> List[Dict[str, Any]]:
+        """获取失败任务;可同时返回用户取消的终态任务。"""
+        try:
+            tasks = taskControl.getTasksByStatus("failed")
+            if includeCancelled:
+                tasks.extend(taskControl.getTasksByStatus("cancelled"))
+                tasks.sort(
+                    key=lambda task: task.get("endedAt") or task.get("createdAt") or "",
+                    reverse=True,
+                )
+            return tasks
+        except Exception as e:
+            logger.error(f"[TaskManager] getFailedTasks 失败: {e}")
+            return []
+
+    def getTaskStats(self) -> Dict[str, int]:
+        """获取任务状态数量,供任务标签页徽标使用。"""
+        try:
+            return taskControl.getStats()
+        except Exception as e:
+            logger.error(f"[TaskManager] getTaskStats 失败: {e}")
+            return {
+                "total": 0,
+                "pending": 0,
+                "inProgress": 0,
+                "completed": 0,
+                "failed": 0,
+                "cancelled": 0,
+            }
 
     def getInProgressTasks(self) -> List[Dict[str, Any]]:
         """获取正在进行的任务列表(视图层入口)
