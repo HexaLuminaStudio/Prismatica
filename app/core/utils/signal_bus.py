@@ -10,22 +10,6 @@ from PySide6.QtCore import QObject, Signal
 class SignalBus(QObject):
     """Signal bus for component communication"""
 
-    # 激活状态变更信号
-    activationStatusChanged = Signal(bool)
-
-    # 余额变更信号:参数为 (userId: str, balance: int)
-    balanceChanged = Signal(str, int)
-
-    # 账单新增信号:参数为 userId
-    billCreated = Signal(str)
-
-    # 凭证损坏信号:参数为损坏原因字符串(str)
-    licenseCorrupted = Signal(str)
-
-    # 云端鉴权失效信号(2026-08-05 F5):refresh token 失效,
-    # 调用方应引导用户重新激活(redeemCode)。参数为失败原因(str)。
-    sessionExpired = Signal(str)
-
     # HSK Token刷新信号
     hskTokenRefreshSignal = Signal(str)
     # 参数: token (str) - 新的Token值

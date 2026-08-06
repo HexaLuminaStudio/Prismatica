@@ -207,70 +207,6 @@ try:
 except Exception as _pmWarmupErr:
     logger.warning(f"[Main] 预热 ProjectManager 失败(非致命,继续): {_pmWarmupErr}")
 
-# =====================================================================
-# 启动门(2026-08-06 简化:删除本地内测时间锁)
-#
-# 历史背景:
-#   - 旧版本:本地维护 BETA_HARD_DEADLINE + 30 天有效期,过期强制弹窗。
-#   - 新版本:全部授权与有效期由云端 PrismaticaAPI 接管,本地不再做日期限制。
-# 行为规则:
-#   - IS_BETA=True  → 仍保留启动门(强制先激活才能进主界面)
-#   - IS_BETA=False → 不弹启动门,允许进入主界面,付费功能按需激活
-# =====================================================================
-from app.core.utils.setting import IS_BETA
-from app.core.services.auth_service import getAuthService  # 启动门
-
-_splashWindow.setProgress(18, "正在准备启动…")
-_splashWindow.raise_()
-QApplication.processEvents()
-
-logger.info(f"[Main] IS_BETA={IS_BETA},本地时间锁已下线(2026-08-06)")
-
-# ============================================================
-# 启动门(REQ-BETA-002,2026-08-06 调整):
-# - 内测版(IS_BETA=True):未激活用户必须先激活才能进入主窗口
-# - 正式版(IS_BETA=False):不再弹启动门,允许进入主界面,付费功能按需再激活
-# ============================================================
-_authService = getAuthService()
-if IS_BETA and not _authService.isAuthenticated():
-    # 云端恢复:本地凭证完好但 token 过期 / expireAt 陈旧时,先尝试
-    # 用 refresh token 从云端恢复会话(失败不阻断,进入登录门)
-    try:
-        _authService.restoreSession()
-    except Exception as _restoreErr:  # noqa: BLE001
-        logger.warning(f"[Main] 云端会话恢复失败(忽略): {_restoreErr}")
-    if not _authService.isAuthenticated():
-        try:
-            with _startupProfiler.stage("auth_gate", "AuthGate 启动门"):
-                from app.view.auth_interface import showAuthGate
-
-                _splashWindow.setProgress(20, "正在校验激活凭证…")
-                _splashWindow.raise_()
-                QApplication.processEvents()
-                # 修复(2026-08-05 启动门卡死):
-                #   1) 不再 hold splash —— splash 已 hide 时其子 dialog 也
-                #      不可见不响应,会导致 exec() 永久阻塞。
-                #   2) showAuthGate(parent=None) → 内部 fallback 到 activeWindow,
-                #      让 LoginDialog 作为独立顶层弹窗显示。
-                #   3) splash 仍作为 WindowStaysOnTopHint 在最下层,登录完成
-                #      后主窗口上来时 splash 才 finish。
-                activated = showAuthGate(parent=None)
-                if not activated:
-                    logger.warning("[Main] 用户未激活,退出程序")
-                    try:
-                        _splashWindow.finish()
-                    except Exception:
-                        pass
-                    QApplication.instance().quit()
-                    sys.exit(0)
-        except Exception as _authErr:
-            logger.exception(f"[Main] AuthGate 异常(非致命,继续): {_authErr}")
-elif not IS_BETA:
-    # 正式版:仅尝试云端恢复(若本地有未过期凭证),不做强制拦截。
-    try:
-        _authService.restoreSession()
-    except Exception as _restoreErr:  # noqa: BLE001
-        logger.info(f"[Main] 正式版跳过启动门,云端会话恢复失败(忽略): {_restoreErr}")
 # ============================================================
 # 首次启动引导(2026-07-21 新增)
 # - 读取 cfg.FirstLaunch;为 True 时先弹出引导窗口
@@ -278,7 +214,6 @@ elif not IS_BETA:
 # - 若用户在未完成时点关闭按钮,引导窗口拒绝关闭并请求退出主程序
 # ============================================================
 _guideWindow = None
-# 启动门通过 → 推进到 22%(给引导窗口留 6%)
 _splashWindow.setProgress(22, "启动门已通过")
 QApplication.processEvents()
 if qconfig.get(cfg.FirstLaunch):
