@@ -388,20 +388,35 @@ class CloudApi:
         return headers
 
     def _handleResponse(self, resp: httpx.Response) -> dict:
-        """统一处理 HTTP 响应:2xx 返回 dict,4xx/5xx 抛 CloudApiError。"""
+        """统一处理 HTTP 响应(2026-08-06 适配后端 envelope):
+
+        - 2xx:返回 `data` 字段(后端 envelope = {code, data, requestId})
+              若 body 不是 envelope 形态(老接口/健康检查),回退到原 dict 兜底
+        - 4xx/5xx:从顶层 code/message 解出 CloudApiError(后端已统一为顶层 envelope)
+        """
         if resp.status_code >= 200 and resp.status_code < 300:
             try:
-                return resp.json()
+                body = resp.json()
             except Exception:  # noqa: BLE001
                 return {}
 
-        # 尝试解析 error envelope
+            # 兼容老接口:body 没有 code/data 字段就当成裸数据返回
+            if not isinstance(body, dict) or "code" not in body or "data" not in body:
+                return body if isinstance(body, dict) else {}
+            return body.get("data") or {}
+
+        # 尝试解析 error envelope(2026-08-06 起为顶层 code/message,兼容旧 error.* 结构)
         try:
             data = resp.json()
-            err = data.get("error") or {}
-            code = err.get("code") or CODE_INTERNAL_ERROR
-            msg = err.get("message") or resp.text or ""
-            details = err.get("details") or {}
+            if isinstance(data, dict) and "code" in data and "message" in data:
+                code = data.get("code") or CODE_INTERNAL_ERROR
+                msg = data.get("message") or resp.text or ""
+                details = data.get("details") or {}
+            else:
+                err = (data or {}).get("error") or {}
+                code = err.get("code") or CODE_INTERNAL_ERROR
+                msg = err.get("message") or resp.text or ""
+                details = err.get("details") or {}
         except Exception:  # noqa: BLE001
             code = _statusToCode(resp.status_code)
             msg = resp.text or ""
