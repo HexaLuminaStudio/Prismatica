@@ -229,6 +229,10 @@ class ProjectManager(QObject):
             for r in resourceRows:
                 project = self._memCache.get(r[1])
                 if project is None:
+                    logger.warning(
+                        f"[ProjectManager] 发现孤立资源记录, "
+                        f"resourceId={r[0]}, projectId={r[1]}"
+                    )
                     continue
                 resource = Resource(
                     id=r[0],
@@ -247,6 +251,10 @@ class ProjectManager(QObject):
             for r in insightRows:
                 project = self._memCache.get(r[1])
                 if project is None:
+                    logger.warning(
+                        f"[ProjectManager] 发现孤立AI解读记录, "
+                        f"insightId={r[0]}, projectId={r[1]}"
+                    )
                     continue
                 insight = AiInsight(
                     id=r[0],
@@ -286,6 +294,10 @@ class ProjectManager(QObject):
                 if activeId and activeId in self._memCache:
                     self._activeProjectId = activeId
                     restoredFromState = True
+                elif activeId:
+                    logger.warning(
+                        f"[ProjectManager] 激活项目状态失效, projectId={activeId}"
+                    )
             except Exception as e:
                 logger.warning(f"[ProjectManager] 读取 project_state.json 失败: {e}")
 
@@ -896,8 +908,15 @@ def _jsonLoadList(raw: Optional[str]) -> List[str]:
         v = json.loads(raw)
         if isinstance(v, list):
             return [str(x) for x in v]
-    except Exception:
-        pass
+        logger.warning(
+            f"[ProjectManager] JSON列表字段类型错误, "
+            f"actual={type(v).__name__}, length={len(raw)}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ProjectManager] JSON列表字段解析失败, length={len(raw)}, "
+            f"type={type(e).__name__}: {e}"
+        )
     return []
 
 
@@ -909,8 +928,15 @@ def _jsonLoadDict(raw: Optional[str]) -> Dict[str, Any]:
         v = json.loads(raw)
         if isinstance(v, dict):
             return v
-    except Exception:
-        pass
+        logger.warning(
+            f"[ProjectManager] JSON对象字段类型错误, "
+            f"actual={type(v).__name__}, length={len(raw)}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ProjectManager] JSON对象字段解析失败, length={len(raw)}, "
+            f"type={type(e).__name__}: {e}"
+        )
     return {}
 
 
@@ -921,9 +947,22 @@ def _jsonLoadListOfDict(raw: Optional[str]) -> List[Dict[str, Any]]:
     try:
         v = json.loads(raw)
         if isinstance(v, list):
-            return [x for x in v if isinstance(x, dict)]
-    except Exception:
-        pass
+            result = [x for x in v if isinstance(x, dict)]
+            if len(result) != len(v):
+                logger.warning(
+                    f"[ProjectManager] JSON对象列表包含无效元素, "
+                    f"valid={len(result)}, total={len(v)}"
+                )
+            return result
+        logger.warning(
+            f"[ProjectManager] JSON对象列表字段类型错误, "
+            f"actual={type(v).__name__}, length={len(raw)}"
+        )
+    except Exception as e:
+        logger.warning(
+            f"[ProjectManager] JSON对象列表解析失败, length={len(raw)}, "
+            f"type={type(e).__name__}: {e}"
+        )
     return []
 
 

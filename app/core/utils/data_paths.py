@@ -126,7 +126,7 @@ def ensureDataDirs() -> None:
         2. 检测旧路径并自动迁移数据到新位置
     """
     # 1. 确保新目录存在
-    for d in (
+    directories = (
         DATA_DIR,
         CORPORA_DIR,
         EXPORTS_DIR,
@@ -135,8 +135,13 @@ def ensureDataDirs() -> None:
         EXPORT_CSV_DIR,
         # PRD-002:研究项目目录
         PROJECTS_DIR,
-    ):
-        d.mkdir(parents=True, exist_ok=True)
+    )
+    try:
+        for directory in directories:
+            directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.exception("[DataPaths] 创建运行时数据目录失败")
+        raise
 
     # 2. 自动迁移(如果有旧数据)
     _migrateLegacyData()
@@ -237,24 +242,36 @@ def _cleanupLegacyFiles() -> None:
                 cleanup_targets.append(Path(str(legacy_db) + "-wal"))
 
     for path in cleanup_targets:
+        if not path.exists():
+            continue
         try:
             os.remove(path)
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning(
+                "[DataPaths] 清理旧数据文件失败: file={} error={}",
+                path.name,
+                exc,
+            )
 
     # 如果旧 corpora 目录为空,尝试删除
     if _LEGACY_CORPORA_DIR.exists():
         try:
             _LEGACY_CORPORA_DIR.rmdir()
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug(
+                "[DataPaths] 旧语料目录未清理(可能仍有保留文件): error={}",
+                exc,
+            )
 
     # 如果旧 app/data 目录为空,尝试删除
     if _LEGACY_APP_DATA_DIR.exists():
         try:
             _LEGACY_APP_DATA_DIR.rmdir()
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug(
+                "[DataPaths] 旧数据目录未清理(可能仍有保留文件): error={}",
+                exc,
+            )
 
 
 # 模块导入时自动执行目录初始化(轻量、可重复)

@@ -71,11 +71,16 @@ class LLMThread(QThread):
             prompt: 系统提示词;为空则使用 cfg.AiSystemPrompt
             fileText: 附加文件内容(如用户上传的文件内容);为空则忽略
         """
-        if self.isRunning() or not message:
+        if self.isRunning():
+            logger.warning("[LLMThread] 已有对话进行中,忽略新请求")
+            return
+        if not message:
+            logger.debug("[LLMThread] 消息为空,忽略请求")
             return
 
         apiKey = qconfig.get(cfg.AiApiKey) or ""
         if not apiKey:
+            logger.warning("[LLMThread] 未配置API Key,拒绝发起对话")
             self.failed.emit("未配置 API Key,请在「设置 → AI 聊天」中填写。")
             return
 
@@ -191,13 +196,18 @@ class LLMThread(QThread):
                     len(self._history) - self._maxHistory * 2 :
                 ]
 
+            logger.info(
+                f"[LLMThread] 对话完成, model={self._model}, "
+                f"responseChars={len(self._responseText)}, tokens={self._tokenUsage}"
+            )
             self.chatFinished.emit()
 
         except Exception as e:
-            import traceback
-
             errorMsg = str(e) or type(e).__name__
-            logger.error(f"[LLMThread] 调用失败: {traceback.format_exc()}")
+            logger.exception(
+                f"[LLMThread] 调用失败, model={self._model}, "
+                f"historyLen={len(self._history)}: {e}"
+            )
             # 不覆盖用户已看到的内容,只追加错误标记
             self._responseText += "\n\n[请求发生错误,请稍后再试]"
             self.failed.emit(errorMsg)

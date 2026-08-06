@@ -674,6 +674,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
     def _onImported(self, rows: int) -> None:
         self._updateDbStatus()
         if rows > 0:
+            logger.info(f"[HskCorpusBrowser] 语料导入完成, rows={rows}")
             InfoBar.success(
                 title="导入完成",
                 content=f"已导入 {rows:,} 行,可开始检索",
@@ -717,6 +718,11 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         # 状态条描述:把所有条件的描述拼起来
         descList = [r.describe() for r in self._conditionRows if r.describe()]
         queryDesc = " AND ".join(descList)
+        columns = [str(item.get("column", "")) for item in conditions]
+        logger.info(
+            f"[HskCorpusBrowser] 开始检索, conditions={len(conditions)}, "
+            f"columns={columns}"
+        )
         self.model.setLastQuery("(多条件)", queryDesc)
         self._searchStartTs = time.perf_counter()
         self._setStatusRunning(f"正在检索:{queryDesc}")
@@ -827,11 +833,18 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._lastSearchFinished = True
         if hasattr(self, "exportAllBtn") and self._matchTotal > 0:
             self.exportAllBtn.setEnabled(True)
+        logger.info(
+            f"[HskCorpusBrowser] 检索完成, hits={self._matchTotal}, "
+            f"elapsedMs={elapsedMs:.1f}"
+        )
 
     def _onWorkerFailed(self, errMsg: str) -> None:
         self._pullTimer.stop()
         self._currentWorker = None
-        logger.error(f"[HskCorpusBrowser] 检索失败: {errMsg}")
+        elapsedMs = (time.perf_counter() - self._searchStartTs) * 1000.0
+        logger.error(
+            f"[HskCorpusBrowser] 检索失败, elapsedMs={elapsedMs:.1f}: {errMsg}"
+        )
         self._setStatusBad(f"检索失败:{errMsg}")
         InfoBar.error(
             title="检索失败",

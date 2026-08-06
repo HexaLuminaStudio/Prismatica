@@ -52,14 +52,35 @@ class TaskControl:
     @contextmanager
     def getCursor(self):
         """获取数据库游标的上下文管理器"""
-        conn = self.getConnection()
-        cursor = conn.cursor()
+        conn = None
+        cursor = None
         try:
+            conn = self.getConnection()
+            cursor = conn.cursor()
             yield cursor
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            if conn is not None:
+                try:
+                    conn.rollback()
+                except Exception as rollbackError:
+                    logger.error(
+                        f"[TaskControl] 数据库回滚失败, "
+                        f"type={type(rollbackError).__name__}: {rollbackError}"
+                    )
+            logger.exception(
+                f"[TaskControl] 数据库事务失败, db={self.dbPath}: {e}"
+            )
+            raise
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception as closeError:
+                    logger.warning(
+                        f"[TaskControl] 关闭数据库游标失败, "
+                        f"type={type(closeError).__name__}: {closeError}"
+                    )
 
     def initDatabase(self):
         """初始化数据库表结构"""
@@ -106,8 +127,15 @@ class TaskControl:
                         cursor.execute(
                             f"ALTER TABLE tasks ADD COLUMN {colName} {colType}"
                         )
-                    except sqlite3.OperationalError:
-                        pass  # 列已存在
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" in str(exc).lower():
+                            logger.debug(
+                                f"[TaskControl] 数据库列已存在,跳过迁移: {colName}"
+                            )
+                            continue
+                        raise sqlite3.OperationalError(
+                            f"字段迁移失败 column={colName}: {exc}"
+                        ) from exc
 
     def rowToDict(self, row: sqlite3.Row) -> Dict[str, Any]:
         """将数据库行转换为字典"""
@@ -117,13 +145,21 @@ class TaskControl:
         if result.get("info"):
             try:
                 result["info"] = json.loads(result["info"])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"[TaskControl] 任务info字段损坏, taskId={result.get('id')}, "
+                    f"error={e}"
+                )
                 result["info"] = {}
 
         if result.get("result"):
             try:
                 result["result"] = json.loads(result["result"])
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    f"[TaskControl] 任务result字段损坏, taskId={result.get('id')}, "
+                    f"error={e}"
+                )
                 result["result"] = None
 
         return result
@@ -181,6 +217,11 @@ class TaskControl:
                 result = cursor.fetchone()
 
                 if not result or result["status"] != "pending":
+                    currentStatus = result["status"] if result else "missing"
+                    logger.warning(
+                        f"[TaskControl] 拒绝启动任务, taskId={taskId}, "
+                        f"status={currentStatus}"
+                    )
                     return None
 
                 now = datetime.now().isoformat()
@@ -202,6 +243,7 @@ class TaskControl:
                 row = cursor.fetchone()
 
                 if not row:
+                    logger.warning(f"[TaskControl] 完成任务失败,任务不存在: {taskId}")
                     return None
 
                 now = datetime.now().isoformat()
@@ -225,6 +267,7 @@ class TaskControl:
                 row = cursor.fetchone()
 
                 if not row:
+                    logger.warning(f"[TaskControl] 标记失败无效,任务不存在: {taskId}")
                     return None
 
                 now = datetime.now().isoformat()
@@ -245,6 +288,11 @@ class TaskControl:
                 row = cursor.fetchone()
 
                 if not row or row["status"] not in ["pending", "in_progress"]:
+                    currentStatus = row["status"] if row else "missing"
+                    logger.warning(
+                        f"[TaskControl] 拒绝取消任务, taskId={taskId}, "
+                        f"status={currentStatus}"
+                    )
                     return None
 
                 now = datetime.now().isoformat()
@@ -283,6 +331,9 @@ class TaskControl:
                 row = cursor.fetchone()
 
                 if not row:
+                    logger.warning(
+                        f"[TaskControl] 更新下载信息失败,任务不存在: {taskId}"
+                    )
                     return None
 
                 # 构建更新语句
@@ -398,8 +449,11 @@ class TaskControl:
             for conn in list(self._connections):
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"[TaskControl] 关闭数据库连接失败: "
+                        f"{type(e).__name__}: {e}"
+                    )
             self._connections.clear()
 
             # 关闭当前线程 connection(若未被登记集包含,兜底处理)
@@ -407,8 +461,11 @@ class TaskControl:
             if localConn is not None:
                 try:
                     localConn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        f"[TaskControl] 关闭线程数据库连接失败: "
+                        f"{type(e).__name__}: {e}"
+                    )
                 self.local.connection = None
 
 

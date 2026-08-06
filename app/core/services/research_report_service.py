@@ -238,6 +238,7 @@ class ResearchReportService(QObject):
             self._chat.stop()
         except Exception as e:
             logger.warning(f"[ResearchReport] cancel 失败: {e}")
+        logger.info(f"[ResearchReport] 用户取消生成, project={self._currentProjectId}")
         self._running = False
         self._currentBuffer = ""
 
@@ -296,7 +297,8 @@ class ResearchReportService(QObject):
         model = ""
         try:
             model = self._chat._thread._model  # noqa: SLF001 — 取模型名做归档
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[ResearchReport] 获取模型名失败: {e}")
             model = ""
 
         # 重置状态(先重置,避免回调里再次触发 cancel 时双重清空)
@@ -305,6 +307,10 @@ class ResearchReportService(QObject):
         self._currentProjectId = ""
 
         if not content:
+            logger.error(
+                f"[ResearchReport] AI返回空内容, project={projectId}, "
+                f"resourceScope={resourceScope or 'all'}"
+            )
             self.reportFailed.emit("AI 未返回任何内容")
             return
 
@@ -318,6 +324,10 @@ class ResearchReportService(QObject):
                 resourceId=resourceScope,
             )
             if insight is None:
+                logger.error(
+                    f"[ResearchReport] 归档失败, project={projectId}, "
+                    f"reason=project_missing"
+                )
                 self.reportFailed.emit("归档 AI 解读失败(项目可能已被删除)")
                 return
             logger.info(
@@ -331,9 +341,14 @@ class ResearchReportService(QObject):
     def _onChatFailed(self, errorMsg: str) -> None:
         if not self._running:
             return
+        projectId = self._currentProjectId
         self._running = False
         self._currentBuffer = ""
         self._currentProjectId = ""
+        logger.error(
+            f"[ResearchReport] AI调用失败, project={projectId}: "
+            f"{errorMsg or '未知错误'}"
+        )
         try:
             self.reportFailed.emit(errorMsg or "AI 调用失败")
         except Exception as e:

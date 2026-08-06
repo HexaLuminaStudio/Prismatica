@@ -9,6 +9,8 @@ import json
 import requests
 from PySide6.QtCore import QThread, Signal
 
+from app.core.utils import log
+
 
 class GlobalTokenRefreshThread(QThread):
     """Global Token刷新线程"""
@@ -37,10 +39,12 @@ class GlobalTokenRefreshThread(QThread):
 
     def run(self):
         if not self.userId or not self.password:
+            log.warning("[GlobalTokenRefresh] 缺少登录账号或密码,取消刷新")
             self.error.emit("请先在设置中配置Global登录账号密码")
             return
 
         try:
+            log.info("[GlobalTokenRefresh] 开始刷新Token")
             url = "https://qqk.blcu.edu.cn/sys/index/login"
             headers = {
                 "Content-Type": "application/json",
@@ -57,6 +61,9 @@ class GlobalTokenRefreshThread(QThread):
             responseText = response.text.strip()
 
             if not responseText:
+                log.error(
+                    f"[GlobalTokenRefresh] 服务器响应为空, status={response.status_code}"
+                )
                 self.error.emit("服务器响应为空")
                 return
 
@@ -68,17 +75,30 @@ class GlobalTokenRefreshThread(QThread):
             if result.get("stats") == "1":
                 token = result.get("token")
                 if token:
+                    log.info("[GlobalTokenRefresh] Token刷新成功")
                     self.finished.emit(token)
                 else:
+                    log.error("[GlobalTokenRefresh] 响应成功但缺少Token")
                     self.error.emit("登录失败")
             else:
-                self.error.emit(result.get("msg", "登录失败"))
+                message = result.get("msg", "登录失败")
+                log.warning(
+                    f"[GlobalTokenRefresh] Token刷新被服务端拒绝, "
+                    f"status={response.status_code}, message={message}"
+                )
+                self.error.emit(message)
 
         except requests.Timeout:
+            log.error("[GlobalTokenRefresh] 请求超时")
             self.error.emit("请求超时，请检查网络连接")
         except requests.ConnectionError:
+            log.error("[GlobalTokenRefresh] 网络连接失败")
             self.error.emit("网络连接失败，请检查网络")
         except requests.RequestException as e:
+            log.error(
+                f"[GlobalTokenRefresh] 网络请求失败: {type(e).__name__}: {e}"
+            )
             self.error.emit("网络请求错误: " + str(e))
         except Exception as e:
+            log.exception(f"[GlobalTokenRefresh] 刷新异常: {e}")
             self.error.emit("刷新异常: " + str(e))

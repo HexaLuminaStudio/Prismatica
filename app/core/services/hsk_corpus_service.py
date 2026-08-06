@@ -377,8 +377,11 @@ class HskCorpusService:
         """启动期建表 + 建索引(幂等,IF NOT EXISTS)。"""
         try:
             self._dbPath.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"[HskCorpusService] 创建数据库目录失败, "
+                f"path={self._dbPath.parent}: {e}"
+            )
         conn = sqlite3.connect(str(self._dbPath), timeout=10.0)
         try:
             conn.executescript(_buildSchemaSql())

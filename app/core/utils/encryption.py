@@ -13,6 +13,8 @@ from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
 
+from .logger import log as logger
+
 ENCRYPTKEY = b"lunminalinguaai_"
 
 # PBKDF2 迭代次数
@@ -212,7 +214,12 @@ def verifyPassword(plainPassword: str, hashedPassword: str) -> bool:
 
         hashedBytes = hashedPassword.encode("utf-8")
         return bcrypt.checkpw(passwordBytes, hashedBytes)
-    except Exception as e:
+    except Exception as exc:
+        # 不记录明文或哈希内容,仅保留异常类型用于定位损坏的凭据数据。
+        logger.warning(
+            "[Encryption] 密码哈希校验异常: errorType={}",
+            type(exc).__name__,
+        )
         return False
 
 

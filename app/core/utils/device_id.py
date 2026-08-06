@@ -87,7 +87,11 @@ class DeviceIdentifier:
 
             mac = uuid.UUID(int=uuid.getnode()).hex[-12:]
             return ":".join([mac[e : e + 2] for e in range(0, 11, 2)])
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] MAC 地址采集失败: errorType={}",
+                type(exc).__name__,
+            )
             return ""
 
     def _collectMotherboardSerial(self) -> str:
@@ -107,13 +111,20 @@ class DeviceIdentifier:
                 serial = result.stdout.strip().split("\n")[-1].strip()
                 if serial and serial != "SerialNumber":
                     return serial
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] 主板序列号主方案失败,尝试备用方案: errorType={}",
+                type(exc).__name__,
+            )
 
         try:
             # 备选方案：使用机器的UUID
             return uuid.getnode().__str__()
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] 主板序列号备用方案失败: errorType={}",
+                type(exc).__name__,
+            )
             return ""
 
     def _collectDiskSerial(self) -> str:
@@ -132,8 +143,11 @@ class DeviceIdentifier:
                 serial = result.stdout.strip().split("\n")[-1].strip()
                 if serial and serial != "SerialNumber":
                     return serial
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] 磁盘序列号主方案失败,尝试备用方案: errorType={}",
+                type(exc).__name__,
+            )
 
         try:
             # 备选方案：使用驱动器序列号
@@ -157,7 +171,11 @@ class DeviceIdentifier:
                 261,
             )
             return hex(serialNumber.value)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] 磁盘序列号备用方案失败: errorType={}",
+                type(exc).__name__,
+            )
             return ""
 
     def _collectDeviceName(self) -> str:
@@ -168,7 +186,11 @@ class DeviceIdentifier:
         """
         try:
             return platform.node() or platform.node()
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] 设备名称采集失败: errorType={}",
+                type(exc).__name__,
+            )
             return ""
 
     def collectDeviceFeatures(self) -> dict:
@@ -292,10 +314,15 @@ class DeviceIdentifier:
             storagePath = self._getAppDataPath()
             storagePath.write_bytes(encryptedData.encode("utf-8"))
 
+            logger.info(
+                "[DeviceID] 设备标识已保存: storage={} featureCount={}",
+                storagePath.name,
+                len(self.deviceFeatures),
+            )
             return True
 
-        except Exception as e:
-            print(f"保存设备标识失败: {e}")
+        except Exception:
+            logger.exception("[DeviceID] 保存设备标识失败")
             return False
 
     def load(self) -> bool:
@@ -308,6 +335,7 @@ class DeviceIdentifier:
             storagePath = self._getAppDataPath()
 
             if not storagePath.exists():
+                logger.debug("[DeviceID] 本地设备标识不存在: storage={}", storagePath.name)
                 return False
 
             # 读取加密数据
@@ -335,14 +363,18 @@ class DeviceIdentifier:
             if storageData.get("deviceId") == currentDeviceId:
                 self.deviceId = storageData["deviceId"]
                 self.deviceFeatures = storageData.get("features", {})
+                logger.info(
+                    "[DeviceID] 已加载并验证本地设备标识: featureCount={}",
+                    len(self.deviceFeatures),
+                )
                 return True
             else:
                 # 设备特征不匹配，可能是硬件变更
-                print("警告: 设备特征已变更，设备标识无效")
+                logger.warning("[DeviceID] 设备特征已变更,本地设备标识失效")
                 return False
 
-        except Exception as e:
-            print(f"加载设备标识失败: {e}")
+        except Exception:
+            logger.exception("[DeviceID] 加载或解密本地设备标识失败")
             return False
 
     def verify(self) -> bool:
@@ -373,9 +405,10 @@ class DeviceIdentifier:
             self.deviceFeatures = {}
             self._cipher = None
 
+            logger.info("[DeviceID] 本地设备标识已重置")
             return True
-        except Exception as e:
-            print(f"重置设备标识失败: {e}")
+        except Exception:
+            logger.exception("[DeviceID] 重置本地设备标识失败")
             return False
 
 
@@ -416,7 +449,9 @@ def generateOrLoadDeviceId() -> str:
     # 此处直接透传给调用方。
     device.collectDeviceFeatures()
     deviceId = device.generateDeviceId()
-    device.save()
+    saved = device.save()
+    if not saved:
+        logger.error("[DeviceID] 新设备标识已生成,但持久化失败")
 
     return deviceId
 

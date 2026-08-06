@@ -60,7 +60,11 @@ class TaskManager(QObject):
         """创建新任务"""
         with self.lock:
             # 添加任务到数据库
-            taskId = taskControl.addTask(taskType, taskInfo)
+            try:
+                taskId = taskControl.addTask(taskType, taskInfo)
+            except Exception:
+                logger.exception(f"[TaskManager] 创建任务失败: type={taskType}")
+                raise
             taskInfo["taskId"] = taskId
 
             # 添加到待处理队列
@@ -108,14 +112,20 @@ class TaskManager(QObject):
 
         # 创建对应的下载worker
         worker = None
-        if taskType == "hskDownload":
-            from app.core.services.hsk_download import HSKDownloadWorker
+        try:
+            if taskType == "hskDownload":
+                from app.core.services.hsk_download import HSKDownloadWorker
 
-            worker = HSKDownloadWorker(info)
-        elif taskType == "globalDownload":
-            from app.core.services.global_download import GlobalDownloadWorker
+                worker = HSKDownloadWorker(info)
+            elif taskType == "globalDownload":
+                from app.core.services.global_download import GlobalDownloadWorker
 
-            worker = GlobalDownloadWorker(info)
+                worker = GlobalDownloadWorker(info)
+        except Exception:
+            logger.exception(
+                f"[TaskManager] 创建任务执行器失败: taskId={taskId}, type={taskType}"
+            )
+            raise
 
         if not worker:
             logger.error(f"[TaskManager] 未知任务类型: {taskType}")
@@ -139,7 +149,13 @@ class TaskManager(QObject):
             return False
 
         # 启动worker
-        worker.start()
+        try:
+            worker.start()
+        except Exception:
+            logger.exception(
+                f"[TaskManager] 启动任务线程失败: taskId={taskId}, type={taskType}"
+            )
+            raise
         self.workers[taskId] = worker
 
         self.taskStarted.emit(taskId)
@@ -198,7 +214,7 @@ class TaskManager(QObject):
                 return False
 
             worker = self.workers.pop(taskId)
-            self._requestStopLocked(worker)
+            self._requestStopLocked(worker, taskId)
             cancelOk = True
 
         # 阶段 2:锁外做短超时 wait(不阻塞其他持锁者)
@@ -213,7 +229,7 @@ class TaskManager(QObject):
 
         return cancelOk
 
-    def _requestStopLocked(self, worker) -> None:
+    def _requestStopLocked(self, worker, taskId: str) -> None:
         """在持锁状态下请求 worker 停止(不等待)。
 
         优先调用 requestInterruption()(非阻塞、跨平台),
@@ -221,13 +237,17 @@ class TaskManager(QObject):
         """
         try:
             worker.requestInterruption()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                f"[TaskManager] 请求线程中断失败: taskId={taskId}, error={exc}"
+            )
         try:
             if hasattr(worker, "stop"):
                 worker.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                f"[TaskManager] 调用任务停止接口失败: taskId={taskId}, error={exc}"
+            )
 
     def _waitWorkerOutsideLock(
         self, worker, taskId: str, timeoutMs: int = 2000
@@ -447,7 +467,7 @@ class TaskManager(QObject):
         stoppedCount = len(workersToStop)
         # 阶段 2:锁外统一请求停止(不阻塞 UI)
         for taskId, worker in workersToStop:
-            self._requestStopLocked(worker)
+            self._requestStopLocked(worker, taskId)
         for taskId, worker in workersToStop:
             self._waitWorkerOutsideLock(worker, taskId, timeoutMs=2000)
 

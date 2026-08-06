@@ -169,7 +169,17 @@ class GlobalDownloadWorker(QThread):
 
                 if response.status_code != 200:
                     if attempt == self.maxRetries - 1:
+                        logger.error(
+                            f"[Global] 页面请求最终失败, taskId={self.taskId}, "
+                            f"page={page}, status={response.status_code}, "
+                            f"attempts={self.maxRetries}"
+                        )
                         return None
+                    logger.warning(
+                        f"[Global] 页面请求失败,准备重试, taskId={self.taskId}, "
+                        f"page={page}, status={response.status_code}, "
+                        f"attempt={attempt + 1}/{self.maxRetries}"
+                    )
                     continue
 
                 data = response.json()
@@ -177,11 +187,28 @@ class GlobalDownloadWorker(QThread):
 
             except requests.exceptions.Timeout:
                 if attempt == self.maxRetries - 1:
+                    logger.error(
+                        f"[Global] 页面请求最终超时, taskId={self.taskId}, "
+                        f"page={page}, attempts={self.maxRetries}"
+                    )
                     return None
+                logger.warning(
+                    f"[Global] 页面请求超时,准备重试, taskId={self.taskId}, "
+                    f"page={page}, attempt={attempt + 1}/{self.maxRetries}"
+                )
                 continue
-            except Exception:
+            except Exception as e:
                 if attempt == self.maxRetries - 1:
+                    logger.exception(
+                        f"[Global] 页面请求最终异常, taskId={self.taskId}, "
+                        f"page={page}, attempts={self.maxRetries}: {e}"
+                    )
                     return None
+                logger.warning(
+                    f"[Global] 页面请求异常,准备重试, taskId={self.taskId}, "
+                    f"page={page}, type={type(e).__name__}, "
+                    f"attempt={attempt + 1}/{self.maxRetries}"
+                )
                 continue
 
         return None
@@ -212,7 +239,11 @@ class GlobalDownloadWorker(QThread):
             # 保存Excel
             try:
                 df.to_excel(outputPath, index=False)
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    f"[Global] 首次写入Excel失败,清理非法字符后重试, "
+                    f"taskId={self.taskId}, type={type(e).__name__}"
+                )
                 for col in objectColumns:
                     df[col] = df[col].apply(cleanIllegal)
                 df.to_excel(outputPath, index=False)
@@ -239,6 +270,7 @@ class GlobalDownloadWorker(QThread):
             firstPage = self._downloadPage(1)
             if not firstPage:
                 errorMsg = "获取初始数据失败"
+                logger.error(f"[Global] {errorMsg}, taskId={self.taskId}")
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -252,6 +284,7 @@ class GlobalDownloadWorker(QThread):
 
             if total == 0:
                 errorMsg = "未找到相关数据"
+                logger.info(f"[Global] 查询结果为空, taskId={self.taskId}")
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -301,6 +334,10 @@ class GlobalDownloadWorker(QThread):
 
             if not self._isRunning:
                 errorMsg = "下载已取消"
+                logger.info(
+                    f"[Global] 下载任务已取消, taskId={self.taskId}, "
+                    f"completedPages={self.completedPages}/{self.totalPages}"
+                )
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -313,6 +350,10 @@ class GlobalDownloadWorker(QThread):
 
             if not mergedData:
                 errorMsg = "没有有效数据"
+                logger.error(
+                    f"[Global] 页面下载完成但没有有效数据, taskId={self.taskId}, "
+                    f"completedPages={self.completedPages}/{self.totalPages}"
+                )
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -387,13 +428,22 @@ class GlobalDownloadWorker(QThread):
                     f"下载完成！共{len(mergedData)}条数据，平均速度{avgSpeed:.2f}页/秒",
                     getattr(self, "filePath", "") or "",
                 )
+                logger.info(
+                    f"[Global] 下载任务完成, taskId={self.taskId}, "
+                    f"rows={len(mergedData)}, pages={self.totalPages}, "
+                    f"elapsed={elapsed:.2f}s, file={outputPath}"
+                )
             else:
                 errorMsg = "生成Excel文件失败"
+                logger.error(
+                    f"[Global] {errorMsg}, taskId={self.taskId}, rows={len(mergedData)}"
+                )
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
 
         except Exception as e:
             errorMsg = f"处理失败: {str(e)}"
+            logger.exception(f"[Global] 下载任务异常, taskId={self.taskId}: {e}")
             self.failed.emit(errorMsg)
             self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
 
@@ -460,15 +510,33 @@ class GlobalGetTotalWorker(QThread):
 
                 if response.status_code != 200:
                     if attempt == self.maxRetries - 1:
+                        logger.error(
+                            f"[GlobalGetTotal] 请求最终失败, "
+                            f"status={response.status_code}, attempts={self.maxRetries}"
+                        )
                         return None
+                    logger.warning(
+                        f"[GlobalGetTotal] 请求失败,准备重试, "
+                        f"status={response.status_code}, "
+                        f"attempt={attempt + 1}/{self.maxRetries}"
+                    )
                     continue
 
                 data = response.json()
                 return data
 
-            except Exception:
+            except Exception as e:
                 if attempt == self.maxRetries - 1:
+                    logger.exception(
+                        f"[GlobalGetTotal] 请求最终异常, "
+                        f"attempts={self.maxRetries}: {e}"
+                    )
                     return None
+                logger.warning(
+                    f"[GlobalGetTotal] 请求异常,准备重试, "
+                    f"type={type(e).__name__}, "
+                    f"attempt={attempt + 1}/{self.maxRetries}"
+                )
                 continue
 
         return None
@@ -476,8 +544,10 @@ class GlobalGetTotalWorker(QThread):
     def run(self):
         """执行任务"""
         try:
+            logger.info("[GlobalGetTotal] 开始查询语料总数")
             firstPage = self._makeRequest()
             if not firstPage:
+                logger.error("[GlobalGetTotal] 获取初始数据失败")
                 self.failed.emit("获取初始数据失败")
                 return
 
@@ -487,10 +557,13 @@ class GlobalGetTotalWorker(QThread):
                 total = total[0][0]["num"]
 
             if total == 0:
+                logger.info("[GlobalGetTotal] 查询结果为空")
                 self.failed.emit("未找到相关数据")
                 return
 
+            logger.info(f"[GlobalGetTotal] 查询成功, total={total}")
             self.finished.emit(total)
 
         except Exception as e:
+            logger.exception(f"[GlobalGetTotal] 处理异常: {e}")
             self.failed.emit(f"处理失败: {str(e)}")

@@ -190,6 +190,10 @@ class HSKDownloadWorker(QThread):
                 # 处理429错误
                 if response.status_code == 429:
                     waitTime = 10 * (attempt + 1)
+                    logger.warning(
+                        f"[HSK] 请求限流, taskId={self.taskId}, page={page}, "
+                        f"attempt={attempt + 1}/{self.maxRetries}, wait={waitTime}s"
+                    )
                     if self._isRunning:
                         self.progress.emit(
                             {
@@ -211,7 +215,17 @@ class HSKDownloadWorker(QThread):
                 # 处理其他错误
                 if response.status_code != 200:
                     if attempt == self.maxRetries - 1:
+                        logger.error(
+                            f"[HSK] 页面请求最终失败, taskId={self.taskId}, "
+                            f"page={page}, status={response.status_code}, "
+                            f"attempts={self.maxRetries}"
+                        )
                         return None
+                    logger.warning(
+                        f"[HSK] 页面请求失败,准备重试, taskId={self.taskId}, "
+                        f"page={page}, status={response.status_code}, "
+                        f"attempt={attempt + 1}/{self.maxRetries}"
+                    )
                     continue
 
                 # 解析响应
@@ -220,16 +234,45 @@ class HSKDownloadWorker(QThread):
                     return data
                 else:
                     if attempt == self.maxRetries - 1:
+                        logger.error(
+                            f"[HSK] API最终返回失败, taskId={self.taskId}, "
+                            f"page={page}, code={data.get('code')}, "
+                            f"attempts={self.maxRetries}"
+                        )
                         return None
+                    logger.warning(
+                        f"[HSK] API返回失败,准备重试, taskId={self.taskId}, "
+                        f"page={page}, code={data.get('code')}, "
+                        f"attempt={attempt + 1}/{self.maxRetries}"
+                    )
                     continue
 
             except requests.exceptions.Timeout:
                 if not self._isRunning or attempt == self.maxRetries - 1:
+                    if self._isRunning:
+                        logger.error(
+                            f"[HSK] 页面请求最终超时, taskId={self.taskId}, "
+                            f"page={page}, attempts={self.maxRetries}"
+                        )
                     return None
+                logger.warning(
+                    f"[HSK] 页面请求超时,准备重试, taskId={self.taskId}, "
+                    f"page={page}, attempt={attempt + 1}/{self.maxRetries}"
+                )
                 continue
-            except Exception:
+            except Exception as e:
                 if not self._isRunning or attempt == self.maxRetries - 1:
+                    if self._isRunning:
+                        logger.exception(
+                            f"[HSK] 页面请求最终异常, taskId={self.taskId}, "
+                            f"page={page}, attempts={self.maxRetries}: {e}"
+                        )
                     return None
+                logger.warning(
+                    f"[HSK] 页面请求异常,准备重试, taskId={self.taskId}, "
+                    f"page={page}, type={type(e).__name__}, "
+                    f"attempt={attempt + 1}/{self.maxRetries}"
+                )
                 continue
 
         return None
@@ -289,6 +332,7 @@ class HSKDownloadWorker(QThread):
             firstPage = self.downloadPage(1)
             if not firstPage:
                 errorMsg = "获取初始数据失败"
+                logger.error(f"[HSK] {errorMsg}, taskId={self.taskId}")
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -299,6 +343,7 @@ class HSKDownloadWorker(QThread):
 
             if total == 0:
                 errorMsg = "未找到相关数据"
+                logger.info(f"[HSK] 查询结果为空, taskId={self.taskId}")
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -334,6 +379,10 @@ class HSKDownloadWorker(QThread):
 
             if not self._isRunning:
                 errorMsg = "下载已取消"
+                logger.info(
+                    f"[HSK] 下载任务已取消, taskId={self.taskId}, "
+                    f"completedPages={self.completedPages}/{self.totalPages}"
+                )
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -346,6 +395,10 @@ class HSKDownloadWorker(QThread):
 
             if not mergedData:
                 errorMsg = "没有有效数据"
+                logger.error(
+                    f"[HSK] 页面下载完成但没有有效数据, taskId={self.taskId}, "
+                    f"completedPages={self.completedPages}/{self.totalPages}"
+                )
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
                 return
@@ -386,7 +439,6 @@ class HSKDownloadWorker(QThread):
                 self._emitProgress("下载完成")
                 # 保存文件路径供打开文件夹使用
                 self.filePath = outputPath
-                print(outputPath)
 
                 elapsed = time.time() - self.startTime
                 avgSpeed = self.totalPages / elapsed if elapsed > 0 else 0
@@ -413,12 +465,21 @@ class HSKDownloadWorker(QThread):
                     f"下载完成！共{len(mergedData)}条数据，平均速度{avgSpeed:.2f}页/秒",
                     getattr(self, "filePath", "") or "",
                 )
+                logger.info(
+                    f"[HSK] 下载任务完成, taskId={self.taskId}, "
+                    f"rows={len(mergedData)}, pages={self.totalPages}, "
+                    f"elapsed={elapsed:.2f}s, file={outputPath}"
+                )
             else:
                 errorMsg = "生成Excel文件失败"
+                logger.error(
+                    f"[HSK] {errorMsg}, taskId={self.taskId}, rows={len(mergedData)}"
+                )
                 self.failed.emit(errorMsg)
                 self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")
 
         except Exception as e:
             errorMsg = f"处理失败: {str(e)}"
+            logger.exception(f"[HSK] 下载任务异常, taskId={self.taskId}: {e}")
             self.failed.emit(errorMsg)
             self.finished.emit(False, errorMsg, getattr(self, "filePath", "") or "")

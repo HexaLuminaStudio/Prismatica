@@ -117,6 +117,9 @@ class AiInsightService(QObject):
             return False
 
         if not qconfig.get(cfg.AiApiKey):
+            logger.warning(
+                f"[AiInsightService] 未配置API Key, type={analysisType}"
+            )
             self.failed.emit("未配置 API Key，请在「设置 → AI 解读」中填写。")
             return False
 
@@ -134,12 +137,19 @@ class AiInsightService(QObject):
         # 触发数据守卫（summarizeXxx 返回 None / empty 时拒绝）
         guard = self._guardData(analysisType, data)
         if not guard.ok:
+            logger.info(
+                f"[AiInsightService] 数据守卫拒绝解读, "
+                f"type={analysisType}, reason={guard.reason}"
+            )
             self.failed.emit(guard.reason)
             return False
 
         style = qconfig.get(cfg.AiInsightStyle) or "学术"
         prompts = buildPrompt(analysisType, data, style=style)
         self._currentType = analysisType
+        logger.info(
+            f"[AiInsightService] 发起解读, type={analysisType}, style={style}"
+        )
         self._chat.ask(
             message=prompts["user"],
             prompt=prompts["system"],
@@ -313,12 +323,16 @@ class AiInsightService(QObject):
     # 内部信号中继
     # ------------------------------------------------------------------
     def _onChatFinished(self) -> None:
-        logger.info(f"[AiInsightService] 解读完成 type={self._currentType}")
+        logger.info(
+            f"[AiInsightService] 解读完成, type={self._currentType}, "
+            f"responseChars={len(self._chat.responseText)}, "
+            f"tokens={self._chat.tokenUsage}"
+        )
         self._currentType = None
         self.streamFinished.emit()
 
     def _onChatFailed(self, err: str) -> None:
-        logger.error(f"[AiInsightService] 解读失败 type={self._currentType}: {err}")
+        logger.error(f"[AiInsightService] 解读失败, type={self._currentType}: {err}")
         # 包装错误文案，让用户更易理解
         msg = err
         if not msg or "API Key" in msg:

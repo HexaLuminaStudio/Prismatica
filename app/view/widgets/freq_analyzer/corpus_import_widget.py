@@ -1018,7 +1018,11 @@ class CorpusImportWidget(QWidget):
         try:
             rule = self._collectCleanRule()
             ruleHash = self._corpusStore._ruleHash(rule)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"[CorpusImportWidget] 计算POS导出规则标识失败,将按空标识查询: "
+                f"type={type(e).__name__}"
+            )
             ruleHash = None
 
         # 检查覆盖率(若全无数据,提示用户先去开启「清洗时同时词性标注」)
@@ -1064,6 +1068,10 @@ class CorpusImportWidget(QWidget):
         if not filePath:
             return
 
+        logger.info(
+            f"[CorpusImportWidget] 开始导出POS语料: format={fmt}, "
+            f"cached={cov['cached']}, total={cov['total']}, file={filePath}"
+        )
         try:
             result = self._corpusStore.exportPosCorpus(
                 exportPath=filePath,
@@ -1071,6 +1079,10 @@ class CorpusImportWidget(QWidget):
                 format=fmt,
             )
         except Exception as e:
+            logger.exception(
+                f"[CorpusImportWidget] POS语料导出失败: format={fmt}, "
+                f"file={filePath}, error={e}"
+            )
             _showInfoBar(
                 "error",
                 "导出失败",
@@ -1080,6 +1092,10 @@ class CorpusImportWidget(QWidget):
             )
             return
 
+        logger.info(
+            f"[CorpusImportWidget] POS语料导出完成: format={fmt}, "
+            f"files={result['files']}, tokens={result['tokens']}, file={filePath}"
+        )
         _showInfoBar(
             "success",
             "导出完成",
@@ -1308,6 +1324,10 @@ class CorpusImportWidget(QWidget):
         try:
             os.makedirs(USER_PRESETS_DIR, exist_ok=True)
         except Exception as e:
+            logger.exception(
+                f"[CorpusImportWidget] 创建用户预设目录失败: "
+                f"dir={USER_PRESETS_DIR}, error={e}"
+            )
             _showInfoBar(
                 "error",
                 "创建目录失败",
@@ -1392,6 +1412,10 @@ class CorpusImportWidget(QWidget):
                 duration=2500,
             )
         except Exception as e:
+            logger.exception(
+                f"[CorpusImportWidget] 打开用户预设目录失败: "
+                f"dir={USER_PRESETS_DIR}, error={e}"
+            )
             _showInfoBar(
                 "error",
                 "打开目录失败",

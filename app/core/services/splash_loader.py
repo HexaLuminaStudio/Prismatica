@@ -97,6 +97,9 @@ class SplashLoader(QObject):
             log.warning("[SplashLoader] 已启动,忽略重复 start()")
             return
         self._started = True
+        log.info(
+            f"[SplashLoader] 启动主窗口加载: mode={'thread' if self._buildInThread else 'main'}"
+        )
 
         if self._buildInThread:
             self._startInThread()
@@ -172,15 +175,17 @@ class SplashLoader(QObject):
                 self._pendingStartupCompleted = False
                 try:
                     self.startupCompleted.emit()
-                except (RuntimeError, AttributeError):
-                    pass
+                except (RuntimeError, AttributeError) as exc:
+                    log.warning(
+                        f"[SplashLoader] 发送启动完成信号失败: error={exc}"
+                    )
         else:
             # 没有 splash,直接放行
             self._pendingStartupCompleted = False
             try:
                 self.startupCompleted.emit()
-            except (RuntimeError, AttributeError):
-                pass
+            except (RuntimeError, AttributeError) as exc:
+                log.warning(f"[SplashLoader] 发送启动完成信号失败: error={exc}")
 
     def _onSplashFadedOut(self) -> None:
         """splash 真正淡出+销毁后由 SplashWindow.fadedOut 信号触发。
@@ -193,8 +198,9 @@ class SplashLoader(QObject):
         self._pendingStartupCompleted = False
         try:
             self.startupCompleted.emit()
-        except (RuntimeError, AttributeError):
-            pass
+            log.info("[SplashLoader] 启动页已关闭,主窗口可显示")
+        except (RuntimeError, AttributeError) as exc:
+            log.warning(f"[SplashLoader] 发送启动完成信号失败: error={exc}")
 
     # ------------------------------------------------------------------
     # 子线程方案(可选,默认不启用)
@@ -250,8 +256,8 @@ class SplashLoader(QObject):
         """
         try:
             QApplication.processEvents()
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug(f"[SplashLoader] 处理 GUI 事件失败: error={exc}")
 
     def _handleBuildError(self, exc: Exception) -> None:
         """构造失败:推进 splash 到 100%(显示失败文案)+ 通知外部。
@@ -264,13 +270,19 @@ class SplashLoader(QObject):
         if self._splash is not None:
             try:
                 self._splash.setProgress(100, f"启动失败: {exc}")
-            except Exception:
-                pass
+            except Exception as setProgressError:
+                log.debug(
+                    f"[SplashLoader] 显示启动失败状态失败: error={setProgressError}"
+                )
             try:
                 self._splash.finish()
-            except Exception:
-                pass
+            except Exception as finishError:
+                log.debug(
+                    f"[SplashLoader] 启动失败后关闭启动页失败: error={finishError}"
+                )
         try:
             self.loadFailed.emit(exc)
-        except (RuntimeError, AttributeError):
-            pass
+        except (RuntimeError, AttributeError) as signalError:
+            log.error(
+                f"[SplashLoader] 发送主窗口构造失败信号失败: error={signalError}"
+            )
