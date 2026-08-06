@@ -64,7 +64,8 @@ class TaskInterface(QWidget):
     def __init_layout(self):
         """设置布局"""
         self.vBoxLayout = QVBoxLayout(self)
-        self.vBoxLayout.setContentsMargins(15, 15, 15, 5)
+        self.vBoxLayout.setContentsMargins(20, 18, 20, 12)
+        self.vBoxLayout.setSpacing(12)
         self.vBoxLayout.addWidget(
             self.pivot, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
         )
