@@ -149,6 +149,7 @@ class MainWindow(MSFluentWindow):
     def switchTo(self, interface: QWidget) -> None:
         """使用与侧边栏一致的快速减速节奏切换业务页面。"""
         current = self.stackedWidget.currentWidget()
+        self._syncAccountNavigationSelection(interface)
         if current is interface:
             return
         view = self.stackedWidget.view
@@ -167,6 +168,19 @@ class MainWindow(MSFluentWindow):
             )
             return
         QStackedWidget.setCurrentWidget(view, interface)
+
+    def _syncAccountNavigationSelection(self, interface: QWidget) -> None:
+        accountNav = getattr(self, "accountNav", None)
+        if (
+            accountNav is None
+            or not hasattr(self, "loginInterface")
+            or not hasattr(self, "accountInterface")
+        ):
+            return
+        isAccountPage = interface in {self.loginInterface, self.accountInterface}
+        accountNav.setSelected(isAccountPage)
+        if isAccountPage:
+            self.navigationInterface.clearCurrentItem()
 
     def _reportProgress(self, pct: int, text: str) -> None:
         """上报当前加载阶段。
@@ -231,10 +245,11 @@ class MainWindow(MSFluentWindow):
         ``stackedWidget.setCurrentWidget(...)``,这里在 currentChanged
         钩子里拦截,保证用户在 AI 报告生成中无法离开项目管理页。
         """
-        if not self._projectBusy:
-            return
         try:
             currentWidget = self.stackedWidget.widget(index)
+            self._syncAccountNavigationSelection(currentWidget)
+            if not self._projectBusy:
+                return
             if currentWidget is self.projectInterface:
                 return
             # 切到了其他页面 → 拉回项目管理页 + 提示用户

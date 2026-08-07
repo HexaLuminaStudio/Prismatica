@@ -678,6 +678,13 @@ class PrismaticaNavigationBar(NavigationBar):
             widget.setExpanded(self._expanded)
         return super().addWidget(routeKey, widget, onClick, position)
 
+    def clearCurrentItem(self) -> None:
+        self._stopIndicatorAnimation()
+        self._currentRouteKey = None
+        for item in self.items.values():
+            if item.isSelectable:
+                item.setSelected(False)
+
     def isExpanded(self) -> bool:
         return self._expanded
 

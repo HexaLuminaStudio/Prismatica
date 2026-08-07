@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QEasingCurve, Qt, QVariantAnimation, Signal
+from PySide6.QtCore import QEasingCurve, QRectF, Qt, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QApplication,
@@ -72,6 +72,7 @@ class AccountNavWidget(QWidget):
         self._expansionProgress = 1.0
         self._hovered = False
         self._hoverProgress = 0.0
+        self._selected = False
         self._lowBalance = False
         self._hoverAnimation = QVariantAnimation(self)
         self._hoverAnimation.setDuration(140)
@@ -192,9 +193,12 @@ class AccountNavWidget(QWidget):
         self._hoverAnimation.setEndValue(float(target))
         self._hoverAnimation.start()
 
-    def setSelected(self, _selected: bool) -> None:
-        """兼容 NavigationBar 的统一选择协议；账户入口不参与路由选中。"""
-        return
+    def setSelected(self, selected: bool) -> None:
+        self._selected = bool(selected)
+        self.update()
+
+    def isSelected(self) -> bool:
+        return self._selected
 
     # ------------------------------------------------------------------
     # 状态切换
@@ -254,14 +258,21 @@ class AccountNavWidget(QWidget):
         super().leaveEvent(event)
 
     def paintEvent(self, event) -> None:
-        if self._hoverProgress <= 0.01:
+        fillStrength = 1.0 if self._selected else self._hoverProgress
+        if fillStrength <= 0.01:
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        alpha = round((26 if isDarkTheme() else 16) * self._hoverProgress)
+        if self._selected:
+            alpha = 48 if isDarkTheme() else 34
+        else:
+            alpha = round((26 if isDarkTheme() else 16) * fillStrength)
         painter.setBrush(QColor(0, 176, 156, alpha))
         painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        if self._selected:
+            painter.setBrush(QColor("#00B09C"))
+            painter.drawRoundedRect(QRectF(0, 10, 2, 40), 1, 1)
 
 
 __all__ = ["AccountNavWidget"]

@@ -81,6 +81,7 @@ def test_account_entry_routes_to_embedded_account_or_login_page() -> None:
 
 def test_auth_page_bypasses_position_based_page_animation() -> None:
     switchTo = _mainWindowMethod("switchTo")
+    called = _calledAttributes(switchTo)
     directSwitches = [
         node
         for node in ast.walk(switchTo)
@@ -91,7 +92,41 @@ def test_auth_page_bypasses_position_based_page_animation() -> None:
         and node.func.attr == "setCurrentWidget"
     ]
 
+    assert "_syncAccountNavigationSelection" in called
     assert directSwitches
+
+
+def test_account_navigation_selection_tracks_login_and_account_pages() -> None:
+    syncMethod = _mainWindowMethod("_syncAccountNavigationSelection")
+    called = _calledAttributes(syncMethod)
+    referencedAttributes = {
+        node.attr for node in ast.walk(syncMethod) if isinstance(node, ast.Attribute)
+    }
+
+    assert "setSelected" in called
+    assert "clearCurrentItem" in called
+    assert "loginInterface" in referencedAttributes
+    assert "accountInterface" in referencedAttributes
+
+
+def test_navigation_bar_can_clear_regular_selection() -> None:
+    sourcePath = Path(__file__).parents[1] / "app" / "view" / "widgets" / "prismatica_navigation.py"
+    module = ast.parse(sourcePath.read_text(encoding="utf-8"))
+    navigationBar = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "PrismaticaNavigationBar"
+    )
+    clearCurrentItem = next(
+        node
+        for node in navigationBar.body
+        if isinstance(node, ast.FunctionDef) and node.name == "clearCurrentItem"
+    )
+
+    assert "_currentRouteKey" in {
+        node.attr for node in ast.walk(clearCurrentItem) if isinstance(node, ast.Attribute)
+    }
+    assert "setSelected" in _calledAttributes(clearCurrentItem)
 
 
 def test_project_switcher_uses_fluent_icons_for_actions() -> None:

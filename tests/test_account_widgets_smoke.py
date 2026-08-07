@@ -169,6 +169,11 @@ def test_account_nav_widget_starts_as_logged_out() -> None:
 
     nav = AccountNavWidget()
     assert nav.isSelectable is False
+    assert nav.isSelected() is False
+    nav.setSelected(True)
+    assert nav.isSelected() is True
+    nav.setSelected(False)
+    assert nav.isSelected() is False
     assert nav._loggedIn is False
     assert nav._emailLabel.text() == "未登录"
     assert nav._badge.isHidden()
