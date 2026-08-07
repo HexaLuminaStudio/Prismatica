@@ -1,9 +1,10 @@
 # coding: utf-8
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QEasingCurve, QSize, Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QStackedWidget, QWidget
 from qfluentwidgets import (
+    FluentIcon,
     NavigationItemPosition,
     SplashScreen,
     MSFluentWindow,
@@ -15,6 +16,8 @@ from app.core.utils import signalBus, logger
 from app.core.utils.config import cfg, qconfig
 from app.core.services import taskManager
 from .widgets.titlebar_widget import CustomTitleBar
+from .widgets.prismatica_navigation import PrismaticaNavigationBar
+from .widgets.prismatica_theme import shellPalette
 from .hsk_interface import HskInterface
 from .hsk_corpus_interface import HskCorpusInterface
 from .global_interface import GlobalInterface
@@ -54,6 +57,8 @@ class MainWindow(MSFluentWindow):
         self._reportProgress(30, "初始化主窗口框架")
         super().__init__()
         setThemeColor("#00b09c")
+        self._configurePrismaticaShell()
+        self._installPrismaticaNavigation()
         self.setTitleBar(CustomTitleBar(self))
         self.initWindow()
         self._reportProgress(35, "构造 HSK 下载界面")
@@ -93,6 +98,62 @@ class MainWindow(MSFluentWindow):
         self._reportProgress(90, "加载导航菜单")
         self.initNavigation()
         self._reportProgress(95, "准备完成")
+
+    def _configurePrismaticaShell(self) -> None:
+        """统一主窗口、内容画布与导航条的材质层级。"""
+        self.setMicaEffectEnabled(False)
+        self.stackedWidget.setObjectName("prismaticaContentSurface")
+        self.stackedWidget.view.setObjectName("prismaticaPageStack")
+        self._applyShellTheme()
+        qconfig.themeChangedFinished.connect(self._applyShellTheme)
+
+    def _applyShellTheme(self) -> None:
+        palette = shellPalette()
+        self.setCustomBackgroundColor(palette.window, palette.window)
+        content = palette.content
+        border = palette.border
+        self.stackedWidget.setStyleSheet(
+            "QFrame#prismaticaContentSurface {"
+            f"background-color: rgba({content.red()}, {content.green()}, "
+            f"{content.blue()}, 246);"
+            f"border: 1px solid {border.name()};"
+            "border-right: none; border-bottom: none;"
+            "border-top-left-radius: 16px;"
+            "}"
+        )
+        self.stackedWidget.view.setStyleSheet(
+            "QStackedWidget#prismaticaPageStack {"
+            "background: transparent; border: none;"
+            "}"
+        )
+        self.update()
+
+    def _installPrismaticaNavigation(self) -> None:
+        """用品牌侧边栏替换 MSFluentWindow 默认导航条。"""
+        oldNavigation = self.navigationInterface
+        newNavigation = PrismaticaNavigationBar(self)
+        self.hBoxLayout.replaceWidget(oldNavigation, newNavigation)
+        oldNavigation.hide()
+        oldNavigation.setParent(None)
+        oldNavigation.deleteLater()
+        self.navigationInterface = newNavigation
+
+    def switchTo(self, interface: QWidget) -> None:
+        """使用与侧边栏一致的快速减速节奏切换业务页面。"""
+        if self.stackedWidget.currentWidget() is interface:
+            return
+        view = self.stackedWidget.view
+        if QApplication.isEffectEnabled(Qt.UIEffect.UI_General):
+            view.setCurrentWidget(
+                
+                interface,
+                needPopOut=False,
+                showNextWidgetDirectly=True,
+                duration=220,
+                easingCurve=QEasingCurve.Type.OutCubic,
+            )
+            return
+        QStackedWidget.setCurrentWidget(view, interface)
 
     def _reportProgress(self, pct: int, text: str) -> None:
         """上报当前加载阶段。
@@ -376,38 +437,41 @@ class MainWindow(MSFluentWindow):
     def initNavigation(self):
         self.addSubInterface(
             self.hskInterface,
-            QIcon(":app/icons/Hsk.svg"),
+            FluentIcon.CLOUD_DOWNLOAD,
             "HSK下载",
             position=NavigationItemPosition.TOP,
         )
         # HSK 作文语料检索:与 HSK 下载同级,共用 Dictionary.svg
         self.addSubInterface(
             self.hskCorpusInterface,
-            QIcon(":app/icons/Dictionary.svg"),
+            FluentIcon.DICTIONARY,
             "HSK作文检索",
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
             self.globalInterface,
-            QIcon(":app/icons/Global.svg"),
+            FluentIcon.GLOBE,
             "全球中介下载",
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
             self.biasInterface,
-            QIcon(":app/icons/Bias.svg"),
+            FluentIcon.FLAG,
             "偏误统计",
             position=NavigationItemPosition.TOP,
         )
         self.addSubInterface(
             self.freqAnalyzerInterface,
-            QIcon(":app/icons/Analysis.svg"),
+            FluentIcon.PIE_SINGLE,
             "语料分析",
             position=NavigationItemPosition.TOP,
         )
+        self.navigationInterface.addSectionHeader(
+            "研究", NavigationItemPosition.SCROLL
+        )
         self.addSubInterface(
             self.chatInterface,
-            QIcon(":app/icons/Chat.svg"),
+            FluentIcon.CHAT,
             "AI 聊天",
             position=NavigationItemPosition.SCROLL,
         )
@@ -417,21 +481,24 @@ class MainWindow(MSFluentWindow):
         # 后续若新增 Folder.svg 图标可在此替换。
         self.addSubInterface(
             self.projectInterface,
-            QIcon(":app/icons/Save.svg"),
+            FluentIcon.FOLDER,
             "项目管理",
             position=NavigationItemPosition.SCROLL,
         )
 
-        self.addSubInterface(
+        self.navigationInterface.addSectionHeader(
+            "系统", NavigationItemPosition.BOTTOM
+        )
+        self.taskNavButton = self.addSubInterface(
             self.taskInterface,
-            QIcon(":app/icons/Task.svg"),
+            FluentIcon.COMPLETED,
             "任务管理",
             position=NavigationItemPosition.BOTTOM,
         )
 
         self.addSubInterface(
             self.settingInterface,
-            QIcon(":app/icons/Setting.svg"),
+            FluentIcon.SETTING,
             "设置",
             position=NavigationItemPosition.BOTTOM,
         )
@@ -448,8 +515,34 @@ class MainWindow(MSFluentWindow):
         )
         # 把 accountNav 的点击信号转成主窗口行为(打开 AccountPanel / LoginDialog)
         self.accountNav.clicked.connect(self._openAccountPanel)
+        self._connectTaskNavigationBadge()
 
         self.splashScreen.finish()
+
+    def _connectTaskNavigationBadge(self) -> None:
+        """让任务角标展示真实的运行中与排队任务数量。"""
+        for signal in (
+            taskManager.taskCreated,
+            taskManager.taskStarted,
+            taskManager.taskCompleted,
+            taskManager.taskFailed,
+            taskManager.taskCancelled,
+            taskManager.taskDeleted,
+        ):
+            signal.connect(self._refreshTaskNavigationBadge)
+        self._refreshTaskNavigationBadge()
+
+    def _refreshTaskNavigationBadge(self, *_args) -> None:
+        button = getattr(self, "taskNavButton", None)
+        if button is None or not hasattr(button, "setBadgeCount"):
+            return
+        try:
+            count = len(taskManager.getRunningTasks()) + len(
+                taskManager.getPendingTasks()
+            )
+            button.setBadgeCount(count)
+        except Exception as exc:
+            logger.warning(f"[MainWindow] 更新任务导航角标失败: {exc}")
 
     def initWindow(self):
         self.resize(1250, 850)

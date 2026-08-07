@@ -1,7 +1,9 @@
 """主窗口应用外壳视觉令牌与顶栏组件测试。"""
 from __future__ import annotations
 
+import ast
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
@@ -16,6 +18,29 @@ from app.view.widgets.project_switcher_widget import (
 _app = QApplication.instance() or QApplication(sys.argv)
 
 
+def _mainWindowMethod(name: str) -> ast.FunctionDef:
+    sourcePath = Path(__file__).parents[1] / "app" / "view" / "main_window.py"
+    module = ast.parse(sourcePath.read_text(encoding="utf-8"))
+    mainWindow = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "MainWindow"
+    )
+    return next(
+        node
+        for node in mainWindow.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
+
+
+def _calledAttributes(method: ast.FunctionDef) -> set[str]:
+    return {
+        node.func.attr
+        for node in ast.walk(method)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+
 def test_shell_palette_has_distinct_window_content_and_border_layers() -> None:
     light = shellPalette(False)
     dark = shellPalette(True)
@@ -25,6 +50,16 @@ def test_shell_palette_has_distinct_window_content_and_border_layers() -> None:
     assert light.border != light.content
     assert dark.window.lightness() < light.window.lightness()
     assert dark.text.lightness() > dark.window.lightness()
+
+
+def test_main_window_installs_committed_shell_and_navigation_components() -> None:
+    initCalls = _calledAttributes(_mainWindowMethod("__init__"))
+    navigationCalls = _calledAttributes(_mainWindowMethod("initNavigation"))
+
+    assert "_configurePrismaticaShell" in initCalls
+    assert "_installPrismaticaNavigation" in initCalls
+    assert "addSectionHeader" in navigationCalls
+    assert "_connectTaskNavigationBadge" in navigationCalls
 
 
 def test_project_switcher_uses_fluent_icons_for_actions() -> None:
@@ -39,4 +74,7 @@ def test_project_switcher_uses_fluent_icons_for_actions() -> None:
     assert switcher._comboBox.height() == 34
     assert set(actions) == {_SENTINEL_MANAGE, _SENTINEL_NEW}
     assert all(not item.icon.isNull() for item in actions.values())
-    assert all("📁" not in item.text and "➕" not in item.text for item in actions.values())
+    assert all(
+        "📁" not in item.text and "➕" not in item.text
+        for item in actions.values()
+    )
