@@ -19,10 +19,11 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QWidget
-from qfluentwidgets import ComboBox
+from qfluentwidgets import ComboBox, FluentIcon, IconWidget
 
 from app.core.services import projectManager
 from app.core.utils import log
+from app.view.widgets.prismatica_theme import ACCENT
 
 
 # 切换器中的特殊项数据(用字符串 sentinel 与正常项目 id 区分)
@@ -55,15 +56,16 @@ class ProjectSwitcher(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # 项目图标标识(纯装饰,用文字 emoji,不依赖额外图标资源)
-        from qfluentwidgets import CaptionLabel
-
-        self._iconLabel = CaptionLabel("📁", self)
-        self._iconLabel.setFixedWidth(16)
-        layout.addWidget(self._iconLabel)
+        self._iconWidget = IconWidget(
+            FluentIcon.FOLDER.icon(color=ACCENT),
+            self,
+        )
+        self._iconWidget.setFixedSize(18, 18)
+        layout.addWidget(self._iconWidget)
 
         self._comboBox = ComboBox(self)
-        self._comboBox.setMinimumWidth(160)
+        self._comboBox.setFixedHeight(34)
+        self._comboBox.setMinimumWidth(180)
         self._comboBox.setMaximumWidth(220)
         self._comboBox.setToolTip("切换当前研究项目")
         layout.addWidget(self._comboBox)
@@ -130,10 +132,14 @@ class ProjectSwitcher(QWidget):
                 # 末尾追加两个特殊入口
                 self._comboBox.addItem("──────────────", userData="__sep__")
                 self._comboItemManage = self._comboBox.addItem(
-                    "📁 项目管理…", userData=_SENTINEL_MANAGE
+                    "项目管理…",
+                    icon=FluentIcon.FOLDER,
+                    userData=_SENTINEL_MANAGE,
                 )
                 self._comboItemNew = self._comboBox.addItem(
-                    "➕ 新建项目…", userData=_SENTINEL_NEW
+                    "新建项目…",
+                    icon=FluentIcon.ADD,
+                    userData=_SENTINEL_NEW,
                 )
                 # 设置当前项
                 if activeProject is not None:

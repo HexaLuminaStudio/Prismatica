@@ -1,9 +1,11 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 from qframelesswindow import TitleBar
+from qfluentwidgets import qconfig
 
 from app.view.widgets.project_switcher_widget import ProjectSwitcher
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 class CustomTitleBar(TitleBar):
@@ -38,6 +40,13 @@ class CustomTitleBar(TitleBar):
         )
         self.hBoxLayout.insertSpacing(2, 10)
         self.titleLabel.setObjectName("titleLabel")
+        titleFont = QFont("Segoe UI")
+        titleFont.setFamilies(
+            ["Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei"]
+        )
+        titleFont.setPixelSize(14)
+        titleFont.setWeight(QFont.Weight.DemiBold)
+        self.titleLabel.setFont(titleFont)
         self.window().windowTitleChanged.connect(self.setTitle)
 
         # PRD-002:项目切换器(放到标题栏右侧)
@@ -61,6 +70,8 @@ class CustomTitleBar(TitleBar):
         self.vBoxLayout.addLayout(self.buttonLayout)
         self.vBoxLayout.addStretch(1)
         self.hBoxLayout.addLayout(self.vBoxLayout, 0)
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
 
     def setTitle(self, title):
         self.titleLabel.setText(title)
@@ -68,3 +79,19 @@ class CustomTitleBar(TitleBar):
 
     def setIcon(self, icon):
         self.iconLabel.setPixmap(QIcon(icon).pixmap(20, 20))
+
+    def _applyTheme(self) -> None:
+        palette = shellPalette()
+        self.titleLabel.setStyleSheet(
+            f"QLabel#titleLabel {{ color: {palette.text.name()}; "
+            "background: transparent; padding: 0; }}"
+        )
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        palette = shellPalette()
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), palette.titleBar)
+        painter.setPen(QPen(palette.border, 1))
+        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)

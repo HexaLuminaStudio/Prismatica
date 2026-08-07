@@ -4,17 +4,28 @@
 提供各种业务逻辑和网络请求服务
 """
 
-from .hsk_service import HskTokenRefreshThread, GetTotalWorker
-from .global_service import GlobalTokenRefreshThread
-from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
-from .task_manager import TaskManager, taskManager
-from .hsk_download import HSKDownloadWorker
-from .chat_service import ChatService, LLMThread
 from .ai_insight_service import AiInsightService
-from .project_manager import ProjectManager, projectManager
-from .hsk_corpus_service import HskCorpusService, hskCorpusService
-from .hsk_local_corpus_service import HskLocalCorpusService, hskLocalCorpusService
 from .batch_apply_service import BatchApplyService, BatchItem, batchApplyService
+from .chat_service import ChatService, LLMThread
+from .cloud_account import CloudAccount, getCloudAccount
+from .cloud_api import CloudApi, CloudApiError, CloudSession, getCloudApi
+from .cloud_auth import CloudAuth, getCloudAuth
+from .cloud_billing import CloudBilling, getCloudBilling
+from .cloud_insight_service import (
+    FEATURE_AI_INSIGHT,
+    CloudInsightService,
+    getCloudInsightService,
+)
+from .cloud_user import ensureBelowMaxDevices
+from .feature_gate import FeatureGate, GateResult, getFeatureGate
+from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
+from .global_service import GlobalTokenRefreshThread
+from .hsk_corpus_service import HskCorpusService, hskCorpusService
+from .hsk_download import HSKDownloadWorker
+from .hsk_local_corpus_service import HskLocalCorpusService, hskLocalCorpusService
+from .hsk_service import HskTokenRefreshThread, GetTotalWorker
+from .project_manager import ProjectManager, projectManager
+from .task_manager import TaskManager, taskManager
 
 __all__ = [
     "HskTokenRefreshThread",
@@ -35,4 +46,21 @@ __all__ = [
     "BatchApplyService",
     "BatchItem",
     "batchApplyService",
+    "CloudApi",
+    "CloudApiError",
+    "CloudSession",
+    "getCloudApi",
+    "CloudAuth",
+    "getCloudAuth",
+    "CloudAccount",
+    "getCloudAccount",
+    "CloudBilling",
+    "getCloudBilling",
+    "CloudInsightService",
+    "FEATURE_AI_INSIGHT",
+    "getCloudInsightService",
+    "FeatureGate",
+    "GateResult",
+    "getFeatureGate",
+    "ensureBelowMaxDevices",
 ]

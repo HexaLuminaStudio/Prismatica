@@ -137,6 +137,14 @@ class MainWindow(MSFluentWindow):
         except Exception as e:
             logger.warning(f"[MainWindow] 连接导航信号失败: {e}")
 
+        # 2026-08-07 P0-A(M11/M13):云端会话 / 余额 / 设备变化 → 通知 accountNav
+        try:
+            signalBus.sessionChanged.connect(self._onCloudSessionChanged)
+            signalBus.balanceChanged.connect(self._onCloudBalanceChanged)
+            signalBus.maxDevicesReached.connect(self._onMaxDevicesReached)
+        except Exception as e:
+            logger.warning(f"[MainWindow] 连接云端信号失败: {e}")
+
     def _onProjectBusyChanged(self, busy: bool) -> None:
         """项目管理页 AI 报告生成状态变化。"""
         self._projectBusy = bool(busy)
@@ -171,6 +179,55 @@ class MainWindow(MSFluentWindow):
             )
         except Exception as e:
             logger.warning(f"[MainWindow] busy 拦截切页失败: {e}")
+
+    # ------------------------------------------------------------------
+    # 2026-08-07 P0-A(M11/M13):云端账户 / 余额 / 设备上限处理
+    # ------------------------------------------------------------------
+
+    def _openAccountPanel(self) -> None:
+        """accountNav 点击 → 已登录开 AccountPanel,未登录开 LoginDialog。"""
+        try:
+            from app.core.services import getCloudAuth
+            from app.view.widgets.account.account_panel import AccountPanel
+            from app.view.widgets.account.login_dialog import LoginDialog
+
+            if getCloudAuth()._api.isLoggedIn():
+                panel = AccountPanel(self)
+                panel.exec()
+            else:
+                dlg = LoginDialog(self)
+                dlg.loginSucceeded.connect(self._onLoginSucceeded)
+                dlg.exec()
+        except Exception as exc:
+            logger.exception(f"[MainWindow] 打开账户面板失败: {exc}")
+
+    def _onLoginSucceeded(self) -> None:
+        try:
+            self._onCloudSessionChanged(True)
+        except Exception:
+            pass
+
+    def _onCloudSessionChanged(self, loggedIn: bool) -> None:
+        if hasattr(self, "accountNav"):
+            self.accountNav.setLoggedIn(bool(loggedIn))
+
+    def _onCloudBalanceChanged(self, balance: int) -> None:
+        if hasattr(self, "accountNav"):
+            self.accountNav.setBalance(int(balance))
+
+    def _onMaxDevicesReached(self, limit: int) -> None:
+        from qfluentwidgets import InfoBar, InfoBarPosition
+
+        try:
+            InfoBar.warning(
+                title="设备数量已达上限",
+                content=f"已达 {limit} 台设备上限,请到「账户 → 设备」中撤销旧设备。",
+                parent=self,
+                duration=4000,
+                position=InfoBarPosition.TOP,
+            )
+        except Exception:
+            logger.exception("[MainWindow] maxDevices InfoBar 失败")
 
     def _onProjectManageRequested(self) -> None:
         """用户从顶栏下拉选「项目管理」入口 — 切到项目管理页"""
@@ -378,6 +435,20 @@ class MainWindow(MSFluentWindow):
             "设置",
             position=NavigationItemPosition.BOTTOM,
         )
+
+        # 2026-08-07 P0-A(M11):账户入口(M13 信号总线驱动头像状态切换)
+        from app.view.widgets.account.account_nav import AccountNavWidget
+
+        self.accountNav = AccountNavWidget(self)
+        self.accountNav.setMaximumHeight(60)
+        self.navigationInterface.addWidget(
+            "accountNav",
+            self.accountNav,
+            position=NavigationItemPosition.BOTTOM,
+        )
+        # 把 accountNav 的点击信号转成主窗口行为(打开 AccountPanel / LoginDialog)
+        self.accountNav.clicked.connect(self._openAccountPanel)
+
         self.splashScreen.finish()
 
     def initWindow(self):

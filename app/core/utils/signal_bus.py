@@ -28,5 +28,17 @@ class SignalBus(QObject):
     # 跳转请求信号:参数为子界面 objectName (str),由 main_window 订阅后 switchTo
     navigateToSubInterface = Signal(str)
 
+    # 2026-08-07 P0-A(M13):
+    #   会话状态变化(bool 是否登录),头像 / 抽屉 / 登录窗 监听
+    sessionChanged = Signal(bool)
+    # 余额变化(int 可用余额),头像红点 / 抽屉数字
+    balanceChanged = Signal(int)
+    # 设备列表变化(无参),「我的账户 → 设备」子页签
+    devicesChanged = Signal()
+    # 触发多设备上限弹窗(int 上限值),登录 / 抽屉订阅
+    maxDevicesReached = Signal(int)
+    # AI 洞察等高级功能被阻断(reason, message),UI 弹通用对话框
+    featureBlocked = Signal(str, str)
+
 
 signalBus = SignalBus()
