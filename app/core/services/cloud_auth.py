@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import platform
+import sys
 import time
 import uuid
 from dataclasses import asdict
@@ -32,6 +34,16 @@ class CloudAuth:
         self._api.setRefreshCallback(self._refreshAccessToken)
         self._sessionFile: Optional[Path] = None
         self._lastRefreshAt: float = 0.0
+
+    def _deviceId(self) -> str:
+        return self._api._deviceId()
+
+    def _deviceName(self) -> str:
+        deviceName = platform.node().strip()
+        return (deviceName or "prismatica-desktop")[:128]
+
+    def _platformName(self) -> str:
+        return sys.platform[:32]
 
     # ------------------------------------------------------------------
     # 会话文件 IO(加密)
@@ -137,7 +149,7 @@ class CloudAuth:
         displayName: str = "",
     ) -> dict:
         try:
-            data = self._api.post(
+            self._api.post(
                 "/v1/auth/register",
                 body={
                     "email": email,
@@ -159,6 +171,9 @@ class CloudAuth:
                 body={
                     "email": email,
                     "password": password,
+                    "deviceId": self._deviceId(),
+                    "deviceName": self._deviceName(),
+                    "platform": self._platformName(),
                 },
                 withAuth=False,
             )

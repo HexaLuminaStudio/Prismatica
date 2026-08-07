@@ -163,6 +163,22 @@ try:
 except Exception as _pmWarmupErr:
     log.warning(f"[Main] 预热 ProjectManager 失败(非致命,继续): {_pmWarmupErr}")
 
+# =====================================================================
+# 云端会话恢复(2026-08-07)
+# - 同步加载 cloud_session.enc,若有效则复用上次的 access/refresh token
+# - bootstrap() 内部会后台异步调 /v1/auth/refresh,不阻塞启动期
+# - 必须先于 MainWindow 构造,否则 AccountNavWidget 初次渲染拿不到会话
+# =====================================================================
+try:
+    from app.core.services import getCloudAuth
+
+    _splashWindow.setProgress(16, "恢复云端会话…")
+    QApplication.processEvents()
+    ok = getCloudAuth().bootstrap()
+    log.info(f"[Main] 云端会话恢复结果: {'已恢复' if ok else '无历史会话'}")
+except Exception as _bootErr:
+    log.warning(f"[Main] 云端会话恢复失败(非致命,继续): {_bootErr}")
+
 # ============================================================
 # 首次启动引导(2026-07-21 新增)
 # - 读取 cfg.FirstLaunch;为 True 时先弹出引导窗口

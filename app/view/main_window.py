@@ -27,6 +27,7 @@ from .task_interface import TaskInterface
 from .chat_interface import ChatInterface
 from .setting_interface import SettingInterface
 from .project_interface import ProjectInterface
+from .account_interface import AccountInterface
 from .widgets.account.login_dialog import LoginInterface
 
 
@@ -89,7 +90,8 @@ class MainWindow(MSFluentWindow):
         # 认证是主窗口内的独立业务页面，不再使用模态登录弹窗。
         self.loginInterface = LoginInterface(self)
         self.loginInterface.loginSucceeded.connect(self._onLoginSucceeded)
-        self._accountReturnInterface: QWidget | None = None
+        self.accountInterface = AccountInterface(self)
+        self.accountInterface.loggedOut.connect(self._onAccountLoggedOut)
 
         # PRD-002:项目管理子界面(REQ-PROJ-001)
         self._reportProgress(80, "构造项目管理界面")
@@ -256,35 +258,41 @@ class MainWindow(MSFluentWindow):
     # 2026-08-07 P0-A(M11/M13):云端账户 / 余额 / 设备上限处理
     # ------------------------------------------------------------------
 
-    def _openAccountPanel(self) -> None:
-        """账户入口：已登录打开账户面板，未登录切换到认证页面。"""
+    def _openAccountPage(self) -> None:
+        """账户入口：已登录切到个人中心，未登录切到认证页面。"""
         try:
             from app.core.services import getCloudAuth
-            from app.view.widgets.account.account_panel import AccountPanel
 
             if getCloudAuth()._api.isLoggedIn():
-                panel = AccountPanel(self)
-                panel.exec()
+                self.switchTo(self.accountInterface)
+                self.accountInterface.refresh()
             else:
-                current = self.stackedWidget.currentWidget()
-                if current is not self.loginInterface:
-                    self._accountReturnInterface = current
                 self.switchTo(self.loginInterface)
         except Exception as exc:
-            logger.exception(f"[MainWindow] 打开账户面板失败: {exc}")
+            logger.exception(f"[MainWindow] 打开个人中心页面失败: {exc}")
 
     def _onLoginSucceeded(self) -> None:
         try:
             self._onCloudSessionChanged(True)
-            target = self._accountReturnInterface or self.hskInterface
-            self.switchTo(target)
-            self._accountReturnInterface = None
+            self.switchTo(self.accountInterface)
+            self.accountInterface.refresh()
         except Exception:
-            logger.exception("[MainWindow] 登录后恢复业务页面失败")
+            logger.exception("[MainWindow] 登录后打开个人中心失败")
+
+    def _onAccountLoggedOut(self) -> None:
+        """退出账户后停留在主窗口内，并切换到登录页。"""
+        self._onCloudSessionChanged(False)
+        self.switchTo(self.loginInterface)
 
     def _onCloudSessionChanged(self, loggedIn: bool) -> None:
         if hasattr(self, "accountNav"):
             self.accountNav.setLoggedIn(bool(loggedIn))
+        if (
+            not loggedIn
+            and hasattr(self, "accountInterface")
+            and self.stackedWidget.currentWidget() is self.accountInterface
+        ):
+            self.switchTo(self.loginInterface)
 
     def _onCloudBalanceChanged(self, balance: int) -> None:
         if hasattr(self, "accountNav"):
@@ -517,9 +525,10 @@ class MainWindow(MSFluentWindow):
             position=NavigationItemPosition.BOTTOM,
         )
 
-        # 认证页由账户入口驱动，不额外占用一个普通导航按钮。
-        self.loginInterface.setProperty("isStackedTransparent", False)
-        self.stackedWidget.addWidget(self.loginInterface)
+        # 认证页和个人中心都由账户入口驱动，不额外占用普通导航按钮。
+        for accountPage in (self.loginInterface, self.accountInterface):
+            accountPage.setProperty("isStackedTransparent", False)
+            self.stackedWidget.addWidget(accountPage)
 
         # 2026-08-07 P0-A(M11):账户入口(M13 信号总线驱动头像状态切换)
         from app.view.widgets.account.account_nav import AccountNavWidget
@@ -531,8 +540,8 @@ class MainWindow(MSFluentWindow):
             self.accountNav,
             position=NavigationItemPosition.BOTTOM,
         )
-        # 把 accountNav 的点击信号转成主窗口页面或已登录账户面板。
-        self.accountNav.clicked.connect(self._openAccountPanel)
+        # 账户入口始终在主窗口导航栈内完成切页。
+        self.accountNav.clicked.connect(self._openAccountPage)
         self._connectTaskNavigationBadge()
 
         self.splashScreen.finish()

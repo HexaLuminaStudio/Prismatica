@@ -131,13 +131,13 @@ class CloudApi:
         headers = {
             "Content-Type": "application/json",
             "X-Client-Platform": "prismatica-desktop",
+            "X-Device-Id": self._deviceId(),
             "X-Request-Id": requestId or str(uuid.uuid4()),
         }
         if idempotencyKey:
             headers["Idempotency-Key"] = idempotencyKey
         if withAuth and self._session.accessToken:
             headers["Authorization"] = f"Bearer {self._session.accessToken}"
-            headers["X-Device-Id"] = self._deviceId()
         return headers
 
     def _unwrapEnvelope(self, payload: Dict[str, Any] | Any) -> Any:

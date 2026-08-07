@@ -88,16 +88,22 @@ def test_cloud_auth_login_success(mockApi, monkeypatch) -> None:
     )
     from app.core.services import getCloudAuth, getCloudApi
 
-    # 不让 saveSession 真写盘
     monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._saveSession", lambda self: None)
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._deviceId", lambda self: "test-device")
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._deviceName", lambda self: "Test PC")
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._platformName", lambda self: "win32")
 
     sess = getCloudApi().getSession()
-    sess.accessToken = ""  # 起始为空
+    sess.accessToken = ""
 
     auth = getCloudAuth()
     data = auth.login("alice@example.com", "Prismatica2026!")
 
     assert data["user"]["email"] == "alice@example.com"
+    call = mockApi.calls[-1]
+    assert call["body"]["deviceId"] == "test-device"
+    assert call["body"]["deviceName"] == "Test PC"
+    assert call["body"]["platform"] == "win32"
     newSess = getCloudApi().getSession()
     assert newSess.accessToken == "a.t"
     assert newSess.userId == 1
@@ -159,9 +165,18 @@ def test_cloud_auth_register_then_login(mockApi, monkeypatch) -> None:
     from app.core.services import getCloudAuth, getCloudApi
 
     monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._saveSession", lambda self: None)
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._deviceId", lambda self: "new-device")
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._deviceName", lambda self: "New PC")
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._platformName", lambda self: "win32")
 
     auth = getCloudAuth()
     auth.register("new@user.com", "Prismatica2026!", "New")
+    registerCall = mockApi.calls[-2]
+    loginCall = mockApi.calls[-1]
+    assert "deviceId" not in registerCall["body"]
+    assert loginCall["body"]["deviceId"] == "new-device"
+    assert loginCall["body"]["deviceName"] == "New PC"
+    assert loginCall["body"]["platform"] == "win32"
     assert getCloudApi().getSession().accessToken == "a2"
 
 

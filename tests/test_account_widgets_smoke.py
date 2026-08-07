@@ -9,7 +9,7 @@ import sys
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QWidget
 
 # 必须在 import qfluentwidgets 之前保证 QApplication 存在
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -235,3 +235,142 @@ def test_account_panel_can_be_constructed() -> None:
     assert panel.windowTitle() == "我的账户"
     # 子页签已添加
     assert panel._stacks.count() == 3
+
+
+def test_account_interface_is_a_standalone_four_tab_page() -> None:
+    from app.view.account_interface import AccountInterface
+
+    page = AccountInterface()
+    assert page.objectName() == "accountInterface"
+    assert not isinstance(page, QDialog)
+    assert page._stack.count() == 4
+    assert page._pivot.currentRouteKey() == "overview"
+
+
+def test_account_overview_refresh_uses_background_task(monkeypatch) -> None:
+    from app.view import account_interface
+
+    dispatched = {}
+
+    def capture(operation, onSuccess, onFailure) -> None:
+        dispatched.update(
+            operation=operation,
+            onSuccess=onSuccess,
+            onFailure=onFailure,
+        )
+
+    monkeypatch.setattr(account_interface, "_runAccountTask", capture)
+    page = account_interface._OverviewPage()
+    page.refresh()
+
+    assert page._loading is True
+    assert not page._refreshButton.isEnabled()
+    assert set(dispatched) == {"operation", "onSuccess", "onFailure"}
+
+    dispatched["onSuccess"](
+        (
+            {"balance": 8420, "reserved": 120, "tier": "pro"},
+            {"activeCount": 2, "maxActive": 3},
+        )
+    )
+    assert page._loading is False
+    assert page._refreshButton.isEnabled()
+    assert page._balanceLabel.text() == "8,420"
+    assert page._devicesHint.text() == "已激活 2 / 3 台"
+
+
+def test_change_password_requires_matching_confirmation(monkeypatch) -> None:
+    from app.view import account_interface
+
+    answers = iter(
+        [
+            ("OldPassword123", True),
+            ("NewPassword123", True),
+            ("DifferentPassword123", True),
+        ]
+    )
+    messages = []
+
+    class _Message:
+        def __init__(self, title: str, content: str, _parent) -> None:
+            messages.append((title, content))
+
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(
+        account_interface.QInputDialog,
+        "getText",
+        staticmethod(lambda *_args, **_kwargs: next(answers)),
+    )
+    monkeypatch.setattr(account_interface, "MessageBox", _Message)
+    monkeypatch.setattr(
+        account_interface,
+        "_runAccountTask",
+        lambda *_args: pytest.fail("密码不一致时不应提交网络请求"),
+    )
+
+    page = account_interface._OverviewPage()
+    page._onChangePassword()
+
+    assert messages == [("两次输入不一致", "请重新输入并确认新密码。")]
+
+
+def test_device_revoke_is_locked_until_background_request_finishes(monkeypatch) -> None:
+    from app.view import account_interface
+
+    dispatched = []
+    monkeypatch.setattr(
+        account_interface.QMessageBox,
+        "question",
+        staticmethod(lambda *_args, **_kwargs: account_interface.QMessageBox.Yes),
+    )
+    monkeypatch.setattr(
+        account_interface,
+        "_runAccountTask",
+        lambda operation, onSuccess, onFailure: dispatched.append(
+            (operation, onSuccess, onFailure)
+        ),
+    )
+
+    page = account_interface._DevicesPage()
+    page._revokeDevice(7)
+    page._revokeDevice(8)
+
+    assert page._revokeInProgress is True
+    assert len(dispatched) == 1
+    dispatched[0][2]("网络不可用")
+    assert page._revokeInProgress is False
+    assert "网络不可用" in page._hint.text()
+
+
+def test_logout_uses_background_task_and_recovers_button(monkeypatch) -> None:
+    from app.view import account_interface
+
+    dispatched = {}
+    emitted = []
+    monkeypatch.setattr(
+        account_interface.QMessageBox,
+        "question",
+        staticmethod(lambda *_args, **_kwargs: account_interface.QMessageBox.Yes),
+    )
+    monkeypatch.setattr(
+        account_interface,
+        "_runAccountTask",
+        lambda operation, onSuccess, onFailure: dispatched.update(
+            operation=operation,
+            onSuccess=onSuccess,
+            onFailure=onFailure,
+        ),
+    )
+
+    page = account_interface.AccountInterface()
+    page.loggedOut.connect(lambda: emitted.append(True))
+    page._onLogout()
+
+    assert not page._logoutButton.isEnabled()
+    assert page._logoutButton.text() == "正在退出…"
+    dispatched["onSuccess"](None)
+    assert page._logoutButton.isEnabled()
+    assert page._logoutButton.text() == "退出登录"
+    assert emitted == [True]

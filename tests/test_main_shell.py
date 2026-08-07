@@ -62,17 +62,19 @@ def test_main_window_installs_committed_shell_and_navigation_components() -> Non
     assert "_connectTaskNavigationBadge" in navigationCalls
 
 
-def test_logged_out_account_entry_routes_to_embedded_login_page() -> None:
-    openAccount = _mainWindowMethod("_openAccountPanel")
+def test_account_entry_routes_to_embedded_account_or_login_page() -> None:
+    openAccount = _mainWindowMethod("_openAccountPage")
     called = _calledAttributes(openAccount)
     referencedAttributes = {
         node.attr for node in ast.walk(openAccount) if isinstance(node, ast.Attribute)
     }
 
     assert "loginInterface" in referencedAttributes
+    assert "accountInterface" in referencedAttributes
     assert "switchTo" in called
+    assert "exec" not in called
     assert not any(
-        isinstance(node, ast.Name) and node.id == "LoginDialog"
+        isinstance(node, ast.Name) and node.id in {"LoginDialog", "AccountPanel"}
         for node in ast.walk(openAccount)
     )
 
