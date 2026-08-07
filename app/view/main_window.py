@@ -27,6 +27,7 @@ from .task_interface import TaskInterface
 from .chat_interface import ChatInterface
 from .setting_interface import SettingInterface
 from .project_interface import ProjectInterface
+from .widgets.account.login_dialog import LoginInterface
 
 
 class MainWindow(MSFluentWindow):
@@ -85,6 +86,11 @@ class MainWindow(MSFluentWindow):
         self._reportProgress(72, "构建设置界面")
         self.settingInterface = SettingInterface(self)
 
+        # 认证是主窗口内的独立业务页面，不再使用模态登录弹窗。
+        self.loginInterface = LoginInterface(self)
+        self.loginInterface.loginSucceeded.connect(self._onLoginSucceeded)
+        self._accountReturnInterface: QWidget | None = None
+
         # PRD-002:项目管理子界面(REQ-PROJ-001)
         self._reportProgress(80, "构造项目管理界面")
         self.projectInterface = ProjectInterface(self)
@@ -140,12 +146,17 @@ class MainWindow(MSFluentWindow):
 
     def switchTo(self, interface: QWidget) -> None:
         """使用与侧边栏一致的快速减速节奏切换业务页面。"""
-        if self.stackedWidget.currentWidget() is interface:
+        current = self.stackedWidget.currentWidget()
+        if current is interface:
             return
         view = self.stackedWidget.view
+        # 认证页包含真实输入控件。位置型页面动画在 Windows 合成器下可能让
+        # 控件绘制坐标与命中区域短暂不同步，因此进入/离开认证页时直接切换。
+        if interface is self.loginInterface or current is self.loginInterface:
+            QStackedWidget.setCurrentWidget(view, interface)
+            return
         if QApplication.isEffectEnabled(Qt.UIEffect.UI_General):
             view.setCurrentWidget(
-                
                 interface,
                 needPopOut=False,
                 showNextWidgetDirectly=True,
@@ -246,27 +257,30 @@ class MainWindow(MSFluentWindow):
     # ------------------------------------------------------------------
 
     def _openAccountPanel(self) -> None:
-        """accountNav 点击 → 已登录开 AccountPanel,未登录开 LoginDialog。"""
+        """账户入口：已登录打开账户面板，未登录切换到认证页面。"""
         try:
             from app.core.services import getCloudAuth
             from app.view.widgets.account.account_panel import AccountPanel
-            from app.view.widgets.account.login_dialog import LoginDialog
 
             if getCloudAuth()._api.isLoggedIn():
                 panel = AccountPanel(self)
                 panel.exec()
             else:
-                dlg = LoginDialog(self)
-                dlg.loginSucceeded.connect(self._onLoginSucceeded)
-                dlg.exec()
+                current = self.stackedWidget.currentWidget()
+                if current is not self.loginInterface:
+                    self._accountReturnInterface = current
+                self.switchTo(self.loginInterface)
         except Exception as exc:
             logger.exception(f"[MainWindow] 打开账户面板失败: {exc}")
 
     def _onLoginSucceeded(self) -> None:
         try:
             self._onCloudSessionChanged(True)
+            target = self._accountReturnInterface or self.hskInterface
+            self.switchTo(target)
+            self._accountReturnInterface = None
         except Exception:
-            pass
+            logger.exception("[MainWindow] 登录后恢复业务页面失败")
 
     def _onCloudSessionChanged(self, loggedIn: bool) -> None:
         if hasattr(self, "accountNav"):
@@ -503,6 +517,10 @@ class MainWindow(MSFluentWindow):
             position=NavigationItemPosition.BOTTOM,
         )
 
+        # 认证页由账户入口驱动，不额外占用一个普通导航按钮。
+        self.loginInterface.setProperty("isStackedTransparent", False)
+        self.stackedWidget.addWidget(self.loginInterface)
+
         # 2026-08-07 P0-A(M11):账户入口(M13 信号总线驱动头像状态切换)
         from app.view.widgets.account.account_nav import AccountNavWidget
 
@@ -513,7 +531,7 @@ class MainWindow(MSFluentWindow):
             self.accountNav,
             position=NavigationItemPosition.BOTTOM,
         )
-        # 把 accountNav 的点击信号转成主窗口行为(打开 AccountPanel / LoginDialog)
+        # 把 accountNav 的点击信号转成主窗口页面或已登录账户面板。
         self.accountNav.clicked.connect(self._openAccountPanel)
         self._connectTaskNavigationBadge()
 

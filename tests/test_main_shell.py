@@ -62,6 +62,36 @@ def test_main_window_installs_committed_shell_and_navigation_components() -> Non
     assert "_connectTaskNavigationBadge" in navigationCalls
 
 
+def test_logged_out_account_entry_routes_to_embedded_login_page() -> None:
+    openAccount = _mainWindowMethod("_openAccountPanel")
+    called = _calledAttributes(openAccount)
+    referencedAttributes = {
+        node.attr for node in ast.walk(openAccount) if isinstance(node, ast.Attribute)
+    }
+
+    assert "loginInterface" in referencedAttributes
+    assert "switchTo" in called
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "LoginDialog"
+        for node in ast.walk(openAccount)
+    )
+
+
+def test_auth_page_bypasses_position_based_page_animation() -> None:
+    switchTo = _mainWindowMethod("switchTo")
+    directSwitches = [
+        node
+        for node in ast.walk(switchTo)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "QStackedWidget"
+        and node.func.attr == "setCurrentWidget"
+    ]
+
+    assert directSwitches
+
+
 def test_project_switcher_uses_fluent_icons_for_actions() -> None:
     switcher = ProjectSwitcher()
     actions = {

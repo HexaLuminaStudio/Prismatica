@@ -6,7 +6,7 @@
     - 已登录:头像 + 邮箱 / tier + 余额
     - 余额不足:头像右上角红点
 
-点击后由主窗口决定弹 LoginDialog 或 AccountPanel。
+点击后由主窗口切换到登录页面，或在已登录时打开 AccountPanel。
 """
 from __future__ import annotations
 
@@ -60,9 +60,7 @@ class AccountNavWidget(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        # NavigationBar._onWidgetClicked() requires every registered custom
-        # widget to expose this flag.  The account entry opens a panel instead
-        # of switching the current route, so it must remain non-selectable.
+        # 自定义账户入口由主窗口处理页面切换，不参与普通路由选中协议。
         self.isSelectable = False
         self.setFixedHeight(56)
         self.setCursor(Qt.PointingHandCursor)

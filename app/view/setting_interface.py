@@ -691,7 +691,7 @@ class AiChatSettingWidget(OverviewGroupCard):
             "color: #4B5563; background: #F7F8FA; border: 1px solid #E5E7EB; "
             "border-radius: 6px; padding: 7px 10px;"
         )
-        self.systemPromptFileButton = PushButton("选择提示词文件…")
+        self.systemPromptFileButton = PushButton("选择提示词")
         self.systemPromptFileButton.setIcon(FluentIcon.DOCUMENT)
         self.systemPromptFileButton.setFixedSize(152, 32)
         self.systemPromptClearButton = PushButton("清除")
