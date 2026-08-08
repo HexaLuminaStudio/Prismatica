@@ -122,12 +122,13 @@ def test_register_request_does_not_submit_display_name(monkeypatch) -> None:
     calls = []
 
     class _AuthStub:
-        def register(self, email: str, password: str, display_name: str) -> None:
-            calls.append((email, password, display_name))
+        def register(self, email: str, password: str, displayName: str, rememberMe: bool = True) -> None:
+            calls.append((email, password, displayName, rememberMe))
 
     monkeypatch.setattr(login_dialog, "getCloudAuth", lambda: _AuthStub())
     page = login_dialog.LoginInterface()
     page._baseUrl = "https://example.invalid"
+    page._rememberCheck.setChecked(False)
     page._switchTab(1, animate=False)
     page._regEmailEdit.setText("reader@example.com")
     page._regPasswordEdit.setText("StrongPass123!")
@@ -136,7 +137,96 @@ def test_register_request_does_not_submit_display_name(monkeypatch) -> None:
 
     page._onRegister()
 
-    assert calls == [("reader@example.com", "StrongPass123!", "")]
+    assert calls == [("reader@example.com", "StrongPass123!", "", False)]
+
+
+def test_login_remember_choice_is_forwarded(monkeypatch) -> None:
+    from app.view.widgets.account import login_dialog
+
+    calls = []
+
+    class _AuthStub:
+        def login(self, email: str, password: str, rememberMe: bool = True) -> None:
+            calls.append((email, password, rememberMe))
+
+    monkeypatch.setattr(login_dialog, "getCloudAuth", lambda: _AuthStub())
+    page = login_dialog.LoginInterface()
+    page._baseUrl = "https://example.invalid"
+    page._rememberCheck.setChecked(True)
+    page._refreshOfflineState()
+    page._loginEmailEdit.setText("reader@example.com")
+    page._loginPasswordEdit.setText("StrongPass123!")
+    page._onLogin()
+
+    assert calls == [("reader@example.com", "StrongPass123!", True)]
+
+
+def test_login_button_resets_after_successful_login(monkeypatch) -> None:
+    from app.view.widgets.account import login_dialog
+
+    class _AuthStub:
+        def login(self, email: str, password: str, rememberMe: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(login_dialog, "getCloudAuth", lambda: _AuthStub())
+    page = login_dialog.LoginInterface()
+    page._baseUrl = "https://example.invalid"
+    page._refreshOfflineState()
+    page._loginEmailEdit.setText("reader@example.com")
+    page._loginPasswordEdit.setText("StrongPass123!")
+
+    signals = []
+    page.loginSucceeded.connect(lambda: signals.append("ok"))
+    page._onLogin()
+
+    assert signals == ["ok"]
+    assert page._loginBtn.text() == "登录"
+    assert page._loginBtn.isEnabled()
+
+
+def test_register_button_resets_after_successful_register(monkeypatch) -> None:
+    from app.view.widgets.account import login_dialog
+
+    class _AuthStub:
+        def register(self, email: str, password: str, displayName: str, rememberMe: bool = True) -> None:
+            return None
+
+    monkeypatch.setattr(login_dialog, "getCloudAuth", lambda: _AuthStub())
+    page = login_dialog.LoginInterface()
+    page._baseUrl = "https://example.invalid"
+    page._refreshOfflineState()
+    page._switchTab(1, animate=False)
+    page._regEmailEdit.setText("reader@example.com")
+    page._regPasswordEdit.setText("StrongPass123!")
+    page._regConfirmEdit.setText("StrongPass123!")
+    page._agreementCheck.setChecked(True)
+
+    signals = []
+    page.loginSucceeded.connect(lambda: signals.append("ok"))
+    page._onRegister()
+
+    assert signals == ["ok"]
+    assert page._registerBtn.text() == "创建账号并登录"
+    assert page._registerBtn.isEnabled()
+
+
+def test_show_event_restores_action_buttons() -> None:
+    from app.view.widgets.account.login_dialog import LoginInterface
+
+    page = LoginInterface()
+    page._baseUrl = "https://example.invalid"
+    page._refreshOfflineState()
+    page._loginBtn.setEnabled(False)
+    page._loginBtn.setText("登录中…")
+    page._registerBtn.setEnabled(False)
+    page._registerBtn.setText("创建中…")
+
+    page.show()
+
+    assert page._loginBtn.text() == "登录"
+    assert page._loginBtn.isEnabled()
+    assert page._registerBtn.text() == "创建账号并登录"
+    assert page._registerBtn.isEnabled()
 
 
 def test_redeem_dialog_can_be_constructed() -> None:

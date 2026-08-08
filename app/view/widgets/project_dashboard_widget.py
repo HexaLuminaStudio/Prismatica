@@ -1,347 +1,830 @@
 # coding: utf-8
-"""项目仪表盘容器（PRD-002 REQ-PROJ-001 / F3 项目仪表盘）
-
-把三个面板组装成 3 栏布局:
-
-    ┌──────────┬────────────────┬────────────────┐
-    │ 资源池   │ 资源详情       │ 笔记 + AI 解读 │
-    │ (左)     │ (中)           │ (右,占位)      │
-    │ 240px    │ 自适应          │ 280px          │
-    └──────────┴────────────────┴────────────────┘
-
-面板之间通过容器协调:
-    - 资源池选中 → 详情面板更新 + 笔记面板聚焦「资源级笔记」(后续)
-    - 跳转按钮 → 容器路由到对应分析模块(emit jumpToModule(type) 信号)
-
-当前激活项目切换时:
-    - 监听 projectManager.activeProjectChanged → 自动 setProject(id)
-    - 监听 projectManager.projectListChanged → 自动 refresh
-"""
-
+"""项目详情仪表盘。"""
 from __future__ import annotations
 
-from typing import Optional
+from collections import Counter
+from typing import Dict, Iterable, Optional
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, PushButton
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+from qfluentwidgets import (
+    BodyLabel,
+    CaptionLabel,
+    FluentIcon,
+    IconWidget,
+    InfoBar,
+    InfoBarPosition,
+    MessageBox,
+    MessageBoxBase,
+    PlainTextEdit,
+    PrimaryPushButton,
+    PushButton,
+    ScrollArea,
+    StrongBodyLabel,
+    SubtitleLabel,
+    TransparentPushButton,
+    ToolButton,
+    isDarkTheme,
+    qconfig,
+)
 
-from app.core.models.project import Resource
+from app.core.models.project import AiInsight, Project, Resource
 from app.core.services import projectManager
 from app.core.services.research_report_service import researchReportService
 from app.core.utils import logger
-
-from .project_dashboard_widgets import (
-    AiInsightsPanel,
-    ResourceDetailPanel,
-    ResourcePoolPanel,
-)
+from app.view.widgets.project_manager_dialogs import RenameProjectDialog
+from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
 
 
-# 资源类型 → 对应分析模块的路由表(供跳转按钮使用)
-# 后续可扩展;此处映射对齐现有 freq_analyzer_interface 等命名
 _RESOURCE_TYPE_TO_MODULE = {
-    "freq": "freq_analyzer",  # 词频分析
-    "collocation": "freq_analyzer",  # 搭配(同一模块的子视图)
-    "network": "freq_analyzer",  # 共现网络
-    "kwic": "freq_analyzer",  # KWIC 检索
-    "construction": "freq_analyzer",  # 构式识别
-    "dependency": "freq_analyzer",  # 句法依存
-    "keyword_list": "freq_analyzer",  # 关键词
-    "ngram_cluster": "freq_analyzer",  # N-gram
-    "sentiment": "freq_analyzer",  # 情感分析
-    "word_cloud": "freq_analyzer",  # 词云
-    "word_analysis": "freq_analyzer",  # 词语分析
+    key: "freq_analyzer"
+    for key in (
+        "freq",
+        "collocation",
+        "network",
+        "kwic",
+        "construction",
+        "dependency",
+        "keyword_list",
+        "ngram_cluster",
+        "sentiment",
+        "word_cloud",
+        "word_analysis",
+    )
+}
+_RESOURCE_LABELS: Dict[str, str] = {
+    "freq": "词频分析",
+    "collocation": "搭配分析",
+    "network": "共现网络",
+    "kwic": "KWIC 检索",
+    "construction": "构式识别",
+    "dependency": "句法依存",
+    "keyword_list": "关键词表",
+    "ngram_cluster": "N-gram 聚类",
+    "sentiment": "情感分析",
+    "word_cloud": "词云",
+    "word_analysis": "词语分析",
+}
+_RESOURCE_ICONS = {
+    "all": FluentIcon.FOLDER,
+    "freq": FluentIcon.PIE_SINGLE,
+    "collocation": FluentIcon.LINK,
+    "network": FluentIcon.CONNECT,
+    "kwic": FluentIcon.SEARCH,
+    "construction": FluentIcon.TILES,
+    "dependency": FluentIcon.CONNECT,
+    "keyword_list": FluentIcon.MENU,
+    "ngram_cluster": FluentIcon.TILES,
+    "sentiment": FluentIcon.CHAT,
+    "word_cloud": FluentIcon.CLOUD,
+    "word_analysis": FluentIcon.DOCUMENT,
+}
+_STATUS_LABELS = {
+    "new": "新建",
+    "candidate": "候选",
+    "selected": "已采用",
+    "rejected": "已弃用",
+    "pending": "处理中",
 }
 
 
-class ProjectDashboardWidget(QWidget):
-    """项目仪表盘容器 — 3 栏布局。
+def _date(value: str) -> str:
+    if not value:
+        return "时间未知"
+    return value[:16].replace("T", " ")
 
-    Signals:
-        jumpToModule(str): 用户点击详情面板的「跳转分析模块」时发射,
-                          参数为目标模块的 key(参见 _RESOURCE_TYPE_TO_MODULE)
-        backRequested():  用户点击顶部 banner 的「← 返回列表」时发射,
-                          让父容器切回 ProjectManagerWidget 列表页。
-                          注:**不**修改 activeProjectId,用户再次进入仪表盘
-                          时仍在同一项目上下文。
-    """
+
+def _preview(value: str, length: int = 120) -> str:
+    text = " ".join((value or "").split())
+    return text if len(text) <= length else f"{text[:length].rstrip()}…"
+
+
+def _accentIcon(icon: FluentIcon):
+    color = QColor("#20B8A6" if isDarkTheme() else "#007C70")
+    return icon.icon(color=color)
+
+
+class _InsightMessageBox(MessageBoxBase):
+    """在 Fluent MessageBox 中展示完整 AI 解读。"""
+
+    def __init__(self, insight: AiInsight, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.widget.setMinimumWidth(620)
+        self.buttonGroup.setFixedHeight(92)
+        title = SubtitleLabel("AI 研究解读", self)
+        meta = CaptionLabel(
+            f"{_date(insight.createdAt)}  ·  {insight.model or '默认模型'}", self
+        )
+        content = PlainTextEdit(self)
+        content.setReadOnly(True)
+        content.setPlainText(insight.content or "暂无内容")
+        content.setMinimumHeight(340)
+        self.viewLayout.addWidget(title)
+        self.viewLayout.addWidget(meta)
+        self.viewLayout.addWidget(content)
+        self.yesButton.setText("关闭")
+        normalizeButton(self.yesButton, height=PRIMARY_HEIGHT, minimumWidth=110)
+        self.cancelButton.hide()
+
+
+class _ResourceRow(QFrame):
+    openRequested = Signal(str)
+    selected = Signal(str)
+
+    def __init__(self, resource: Resource, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.resource = resource
+        self.setObjectName("dashboardResourceRow")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(72)
+        self.setMaximumHeight(72)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 10, 8)
+        layout.setSpacing(10)
+        iconHost = QFrame(self)
+        iconHost.setObjectName("resourceRowIconHost")
+        iconHost.setFixedSize(32, 32)
+        iconLayout = QVBoxLayout(iconHost)
+        iconLayout.setContentsMargins(7, 7, 7, 7)
+        iconLayout.addWidget(
+            IconWidget(
+                _accentIcon(
+                    _RESOURCE_ICONS.get(resource.type, FluentIcon.DOCUMENT)
+                ),
+                iconHost,
+            )
+        )
+        layout.addWidget(iconHost)
+
+        textBox = QVBoxLayout()
+        textBox.setSpacing(3)
+        title = StrongBodyLabel(resource.title or "未命名资源", self)
+        title.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        textBox.addWidget(title)
+        meta = CaptionLabel(
+            f"{_RESOURCE_LABELS.get(resource.type, resource.type or '其他')} · "
+            f"{_preview(resource.summary, 46) or '暂无摘要'}",
+            self,
+        )
+        meta.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        textBox.addWidget(meta)
+        layout.addLayout(textBox, 1)
+
+        status = QLabel(_STATUS_LABELS.get(resource.status, resource.status or "新建"))
+        status.setObjectName("resourceStatusChip")
+        status.setProperty("status", resource.status or "new")
+        status.setFixedHeight(20)
+        layout.addWidget(status, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(
+            CaptionLabel(_date(resource.createdAt)[:10], self),
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
+        openButton = ToolButton(FluentIcon.CHEVRON_RIGHT_MED, self)
+        openButton.setToolTip("打开对应分析模块")
+        normalizeButton(openButton, height=30, square=True, iconSize=14)
+        openButton.clicked.connect(
+            lambda: self.openRequested.emit(self.resource.type)
+        )
+        layout.addWidget(openButton, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.selected.emit(self.resource.id)
+        super().mousePressEvent(event)
+
+
+class _InsightCard(QFrame):
+    openRequested = Signal(object)
+
+    def __init__(self, insight: AiInsight, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.insight = insight
+        self.setObjectName("dashboardInsightCard")
+        self.setMinimumHeight(118)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+        header = QHBoxLayout()
+        model = QLabel(_preview(insight.model, 16) or "AI 研究报告")
+        model.setObjectName("insightModelChip")
+        model.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        header.addWidget(model)
+        header.addStretch(1)
+        confidenceText = {
+            "high": "高置信",
+            "medium": "中置信",
+            "low": "低置信",
+        }.get(insight.confidence, "中置信")
+        confidence = QLabel(confidenceText)
+        confidence.setObjectName("insightConfidenceChip")
+        confidence.setProperty("confidence", insight.confidence or "medium")
+        header.addWidget(confidence)
+        layout.addLayout(header)
+        title = StrongBodyLabel(_preview(insight.content, 28) or "暂无解读内容", self)
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        footer = QHBoxLayout()
+        relation = "关联：全部资源" if not insight.resourceId else "关联：指定资源"
+        footer.addWidget(CaptionLabel(relation, self))
+        footer.addWidget(CaptionLabel(_date(insight.createdAt)[:10], self))
+        footer.addStretch(1)
+        link = TransparentPushButton("查看", self)
+        link.setObjectName("insightLinkButton")
+        link.setIcon(_accentIcon(FluentIcon.CHEVRON_RIGHT_MED))
+        normalizeButton(link, height=30, minimumWidth=72, iconSize=14)
+        link.clicked.connect(lambda: self.openRequested.emit(self.insight))
+        footer.addWidget(link)
+        layout.addLayout(footer)
+
+
+class ProjectDashboardWidget(QWidget):
+    """与项目列表视觉系统一致的三栏详情页。"""
 
     jumpToModule = Signal(str)
     backRequested = Signal()
-    # AI 报告生成期间的「忙碌态」变化:
-    # - True  → 不允许返回列表 / 跳转其他模块(防止用户误离开打断生成)
-    # - False → 恢复所有交互
-    # 由父容器(ProjectInterface)透传给 MainWindow,后者用来锁定导航切换
-    # 和拦截主窗口关闭。
     busyChanged = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("projectDashboardWidget")
-        self._currentProjectId: str = ""
-        self._busy: bool = False
+        self._currentProjectId = ""
+        self._resourceScope: Optional[str] = None
+        self._resourceFilter = "all"
+        self._busy = False
         self._buildUi()
         self._connectSignals()
+        self._applyTheme()
         self._syncFromManager()
-        # 监听 AI 报告服务,自动同步 _busy 与按钮可用态。
-        # 注意:_buildUi 之前 researchReportService 已被 AiInsightsPanel
-        # 在自己的 _connectAiService 中绑定,所以这里直接连接不会重复。
-        try:
-            researchReportService.reportStarted.connect(self._onReportStarted)
-            researchReportService.reportFinished.connect(self._onReportFinishedOrFailed)
-            researchReportService.reportFailed.connect(self._onReportFinishedOrFailed)
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] 监听 AI 报告服务失败: {e}")
 
-    # ------------------------------------------------------------------
-    # UI
-    # ------------------------------------------------------------------
     def _buildUi(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        # 顶部 banner:项目名 + 状态 + 返回按钮
-        self.banner = QWidget(self)
-        self.banner.setObjectName("dashboardBanner")
-        self.banner.setStyleSheet(
-            "QWidget#dashboardBanner { background: #f5f7fa; border-bottom: 1px solid #e5e7eb; }"
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        self.scrollArea = ScrollArea(self)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        bannerLayout = QHBoxLayout(self.banner)
-        bannerLayout.setContentsMargins(16, 10, 16, 10)
-        bannerLayout.setSpacing(8)
-        # 返回按钮(在最左侧)— 让用户能从仪表盘回到项目管理列表
-        self.backButton = PushButton("← 返回列表", self.banner)
-        self.backButton.setToolTip("返回项目管理列表(不改变当前激活项目)")
-        self.backButton.clicked.connect(self.backRequested.emit)
-        bannerLayout.addWidget(self.backButton)
-        self.projectNameLabel = BodyLabel("当前项目:—", self.banner)
-        self.projectNameLabel.setStyleSheet("font-size: 14px; font-weight: bold;")
-        bannerLayout.addWidget(self.projectNameLabel)
-        bannerLayout.addStretch(1)
-        self.projectMetaLabel = BodyLabel("", self.banner)
-        self.projectMetaLabel.setStyleSheet("color: gray; font-size: 12px;")
-        bannerLayout.addWidget(self.projectMetaLabel)
-        outer.addWidget(self.banner)
+        self.scrollArea.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.page = QWidget(self.scrollArea)
+        self.page.setObjectName("projectDashboardPage")
+        pageLayout = QVBoxLayout(self.page)
+        pageLayout.setContentsMargins(0, 0, 0, 0)
+        pageLayout.setSpacing(0)
 
-        # 3 栏主体
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-
-        # 左:资源池(固定宽度)
-        self.poolPanel = ResourcePoolPanel(self)
-        self.poolPanel.setMinimumWidth(220)
-        self.poolPanel.setMaximumWidth(320)
-        self.poolPanel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        # 中右之间加竖向分隔
-        self.poolPanel.setStyleSheet(
-            "QWidget#resourcePoolPanel { border-right: 1px solid #e5e7eb; }"
+        self._buildHeader(pageLayout)
+        self.contentHost = QWidget(self.page)
+        self.contentHost.setObjectName("projectDashboardContent")
+        self.contentHost.setMaximumWidth(1280)
+        self.contentHost.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
-        body.addWidget(self.poolPanel)
+        contentLayout = QVBoxLayout(self.contentHost)
+        contentLayout.setContentsMargins(30, 14, 30, 32)
+        contentLayout.setSpacing(14)
+        self.projectDescriptionLabel = CaptionLabel("", self.contentHost)
+        self.projectDescriptionLabel.setWordWrap(True)
+        contentLayout.addWidget(self.projectDescriptionLabel)
+        divider = QFrame(self.contentHost)
+        divider.setObjectName("projectHeaderDivider")
+        divider.setFixedHeight(1)
+        contentLayout.addWidget(divider)
+        self.columns = QGridLayout()
+        self.columns.setHorizontalSpacing(16)
+        self.columns.setVerticalSpacing(16)
+        self.leftPanel = self._buildResourceSummary()
+        self.centerPanel = self._buildRecentResources()
+        self.rightPanel = self._buildInsights()
+        contentLayout.addLayout(self.columns)
+        contentLayout.addStretch(1)
+        pageLayout.addWidget(self.contentHost, 1)
+        self.scrollArea.setWidget(self.page)
+        root.addWidget(self.scrollArea)
+        self._panelColumns = 0
+        self._reflowPanels(force=True)
 
-        # 中:详情(自适应宽度)
-        self.detailPanel = ResourceDetailPanel(self)
-        self.detailPanel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        body.addWidget(self.detailPanel, 1)
+    def _buildHeader(self, root: QVBoxLayout) -> None:
+        self.headerHost = QFrame(self.page)
+        self.headerHost.setObjectName("projectDashboardHeader")
+        self.headerHost.setMinimumHeight(72)
+        self.headerGrid = QGridLayout(self.headerHost)
+        self.headerGrid.setContentsMargins(30, 8, 30, 8)
+        self.headerGrid.setHorizontalSpacing(14)
+        self.headerGrid.setVerticalSpacing(6)
 
-        # 右:笔记 + AI 解读(固定宽度)
-        self.aiInsightsPanel = AiInsightsPanel(self)
-        self.aiInsightsPanel.setFixedWidth(550)
-        self.aiInsightsPanel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.aiInsightsPanel.setStyleSheet(
-            "QWidget#aiInsightsPanel { border-left: 1px solid #e5e7eb; }"
+        self.backButton = TransparentPushButton("返回列表", self.headerHost)
+        self.backButton.setIcon(FluentIcon.LEFT_ARROW)
+        normalizeButton(self.backButton, minimumWidth=88)
+        self.backButton.clicked.connect(self._requestBack)
+        self.headerInfoHost = QWidget(self.headerHost)
+        info = QVBoxLayout(self.headerInfoHost)
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(4)
+        titleRow = QHBoxLayout()
+        self.projectNameLabel = QLabel("项目详情")
+        self.projectNameLabel.setObjectName("dashboardProjectTitle")
+        self.projectNameLabel.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
         )
-        body.addWidget(self.aiInsightsPanel)
+        self.projectNameLabel.setMinimumWidth(240)
+        self.projectNameLabel.setMaximumWidth(480)
+        titleRow.addWidget(self.projectNameLabel)
+        self.projectStatusLabel = QLabel("进行中")
+        self.projectStatusLabel.setObjectName("dashboardStatusChip")
+        titleRow.addWidget(self.projectStatusLabel)
+        titleRow.addStretch(1)
+        info.addLayout(titleRow)
+        self.tagsHost = QWidget(self.headerInfoHost)
+        self.tagsLayout = QHBoxLayout(self.tagsHost)
+        self.tagsLayout.setContentsMargins(0, 0, 0, 0)
+        self.tagsLayout.setSpacing(6)
+        self.tagsLayout.addStretch(1)
+        info.addWidget(self.tagsHost)
 
-        outer.addLayout(body, 1)
+        self.headerActionsHost = QWidget(self.headerHost)
+        actions = QHBoxLayout(self.headerActionsHost)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        self.renameButton = PushButton("重命名", self.page)
+        self.renameButton.setIcon(FluentIcon.EDIT)
+        normalizeButton(self.renameButton, minimumWidth=96)
+        self.renameButton.clicked.connect(self._renameProject)
+        self.archiveButton = PushButton("归档", self.page)
+        self.archiveButton.setIcon(FluentIcon.ZIP_FOLDER)
+        normalizeButton(self.archiveButton, minimumWidth=88)
+        self.archiveButton.clicked.connect(self._toggleArchive)
+        self.deleteButton = TransparentPushButton("删除", self.headerHost)
+        self.deleteButton.setObjectName("projectDangerButton")
+        self.deleteButton.setIcon(
+            FluentIcon.DELETE.icon(color=QColor("#D13438"))
+        )
+        deletePalette = self.deleteButton.palette()
+        deletePalette.setColor(QPalette.ColorRole.ButtonText, QColor("#D13438"))
+        self.deleteButton.setPalette(deletePalette)
+        normalizeButton(self.deleteButton, minimumWidth=82)
+        self.deleteButton.clicked.connect(self._deleteProject)
+        actions.addWidget(self.renameButton)
+        actions.addWidget(self.archiveButton)
+        actions.addWidget(self.deleteButton)
+        self.headerGrid.addWidget(self.backButton, 0, 0)
+        self.headerGrid.addWidget(self.headerInfoHost, 0, 1)
+        self.headerGrid.addWidget(self.headerActionsHost, 0, 2)
+        self.headerGrid.setColumnStretch(1, 1)
+        root.addWidget(self.headerHost)
 
-    # ------------------------------------------------------------------
-    # 信号
-    # ------------------------------------------------------------------
+    def _panel(self) -> tuple[QFrame, QVBoxLayout]:
+        panel = QFrame(self.page)
+        panel.setObjectName("dashboardPanel")
+        panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        return panel, layout
+
+    def _buildResourceSummary(self) -> QFrame:
+        panel, layout = self._panel()
+        head = QHBoxLayout()
+        head.addWidget(SubtitleLabel("资源", panel))
+        self.resourceCountLabel = QLabel("0")
+        self.resourceCountLabel.setObjectName("panelCountChip")
+        head.addWidget(self.resourceCountLabel)
+        head.addStretch(1)
+        layout.addLayout(head)
+        goButton = PushButton("前往分析模块", panel)
+        goButton.setIcon(FluentIcon.ADD)
+        normalizeButton(goButton, minimumWidth=128)
+        goButton.clicked.connect(lambda: self._jump("freq"))
+        layout.addWidget(goButton, 0, Qt.AlignmentFlag.AlignLeft)
+        self.categoryLayout = QVBoxLayout()
+        self.categoryLayout.setSpacing(4)
+        layout.addLayout(self.categoryLayout)
+        return panel
+
+    def _buildRecentResources(self) -> QFrame:
+        panel, layout = self._panel()
+        head = QHBoxLayout()
+        head.addWidget(SubtitleLabel("最近资源", panel))
+        head.addStretch(1)
+        self.resourceScopeLabel = CaptionLabel("报告范围：全部", panel)
+        self.resourceScopeLabel.setObjectName("scopeLabel")
+        head.addWidget(self.resourceScopeLabel)
+        layout.addLayout(head)
+        self.resourceLayout = QVBoxLayout()
+        self.resourceLayout.setSpacing(8)
+        layout.addLayout(self.resourceLayout)
+        return panel
+
+    def _buildInsights(self) -> QFrame:
+        panel, layout = self._panel()
+        head = QHBoxLayout()
+        head.addWidget(SubtitleLabel("AI 解读", panel))
+        self.insightCountLabel = QLabel("0")
+        self.insightCountLabel.setObjectName("panelCountChip")
+        head.addWidget(self.insightCountLabel)
+        head.addStretch(1)
+        layout.addLayout(head)
+        self.generateButton = PrimaryPushButton("生成新解读", panel)
+        self.generateButton.setIcon(FluentIcon.ROBOT)
+        normalizeButton(self.generateButton, height=PRIMARY_HEIGHT)
+        self.generateButton.clicked.connect(self._generateReport)
+        layout.addWidget(self.generateButton)
+        self.insightLayout = QVBoxLayout()
+        self.insightLayout.setSpacing(8)
+        layout.addLayout(self.insightLayout)
+        return panel
+
     def _connectSignals(self) -> None:
-        # 内部联动
-        self.poolPanel.resourceSelected.connect(self._onResourceSelected)
-        self.poolPanel.resourceDoubleClicked.connect(self._onResourceDoubleClicked)
-        self.detailPanel.jumpRequested.connect(self._onJumpRequested)
-        # 全局事件
         projectManager.activeProjectChanged.connect(self._onActiveProjectChanged)
         projectManager.projectListChanged.connect(self._syncFromManager)
+        researchReportService.reportStarted.connect(self._onReportStarted)
+        researchReportService.reportFinished.connect(self._onReportFinished)
+        researchReportService.reportFailed.connect(self._onReportFailed)
+        qconfig.themeChanged.connect(self._applyTheme)
 
-    # ------------------------------------------------------------------
-    # 同步 ProjectManager 状态
-    # ------------------------------------------------------------------
     def _syncFromManager(self) -> None:
-        """从 ProjectManager 拉取当前激活项目 id,同步给所有面板。"""
         try:
             active = projectManager.activeProject()
-            newId = active.id if active is not None else ""
-            self._applyProject(newId)
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _syncFromManager 失败: {e}")
+            projectId = active.id if active else ""
+            if projectId != self._currentProjectId:
+                self._resourceScope = None
+                self._resourceFilter = "all"
+            self._currentProjectId = projectId
+            self._render()
+        except Exception as error:
+            logger.warning(f"[ProjectDashboard] 同步失败: {error}")
 
-    def _applyProject(self, projectId: str) -> None:
-        """应用新项目到三个面板 + 顶部 banner。"""
-        if projectId == self._currentProjectId:
-            # 项目未变,只需确保各面板刷新一次
-            self.poolPanel.refresh()
-            self.aiInsightsPanel.refresh()
-            self._renderBanner()
+    def _render(self) -> None:
+        project = projectManager.getProject(self._currentProjectId)
+        if project is None:
+            self.projectNameLabel.setText("项目详情")
+            self.projectDescriptionLabel.setText("请从项目列表选择一个项目")
+            self._clearLayout(self.categoryLayout)
+            self._clearLayout(self.resourceLayout)
+            self._clearLayout(self.insightLayout)
             return
-        self._currentProjectId = projectId
-        # 切换项目 → 清空详情面板选中态
-        self.detailPanel.setResource(None)
-        self.poolPanel.setProject(projectId)
-        self.aiInsightsPanel.setProject(projectId)
-        self._renderBanner()
+        self._renderHeader(project)
+        resources = list(projectManager.listResources(project.id))
+        insights = list(projectManager.listAiInsights(project.id))
+        self._renderCategories(resources)
+        self._renderResources(resources)
+        self._renderInsights(insights)
 
-    def _renderBanner(self) -> None:
-        """顶部 banner 显示当前项目名 + 元信息。"""
-        if not self._currentProjectId:
-            self.projectNameLabel.setText("当前项目:—")
-            self.projectMetaLabel.setText("请先在项目管理中创建或选择一个项目")
+    def _renderHeader(self, project: Project) -> None:
+        status = {"active": "进行中", "paused": "已暂停", "archived": "已归档"}
+        self.projectNameLabel.setText(_preview(project.name, 24))
+        self.projectNameLabel.setToolTip(project.name)
+        self.projectStatusLabel.setText(status.get(project.status, project.status))
+        self.projectStatusLabel.setProperty("status", project.status)
+        self.projectStatusLabel.style().unpolish(self.projectStatusLabel)
+        self.projectStatusLabel.style().polish(self.projectStatusLabel)
+        self._clearLayout(self.tagsLayout)
+        tags = list(project.tags[:4])
+        if not tags and project.template:
+            tags = [project.template]
+        for tag in tags:
+            chip = QLabel(tag, self.tagsHost)
+            chip.setObjectName("projectHeaderTag")
+            self.tagsLayout.addWidget(chip)
+        self.tagsLayout.addStretch(1)
+        self.projectDescriptionLabel.setText(
+            f"{project.description or '暂无项目描述'}  ·  "
+            f"创建于 {_date(project.createdAt)[:10]}"
+        )
+        archived = project.status == "archived"
+        self.archiveButton.setText("恢复项目" if archived else "归档")
+        self.archiveButton.setIcon(FluentIcon.PLAY if archived else FluentIcon.ZIP_FOLDER)
+
+    def _renderCategories(self, resources: Iterable[Resource]) -> None:
+        self._clearLayout(self.categoryLayout)
+        counts = Counter(r.type or "other" for r in resources)
+        self.resourceCountLabel.setText(str(sum(counts.values())))
+        allButton = self._categoryButton("all", "全部资源", sum(counts.values()))
+        self.categoryLayout.addWidget(allButton)
+        for resourceType, count in sorted(
+            counts.items(), key=lambda item: _RESOURCE_LABELS.get(item[0], item[0])
+        ):
+            button = self._categoryButton(
+                resourceType,
+                _RESOURCE_LABELS.get(resourceType, resourceType or "其他"),
+                count,
+            )
+            self.categoryLayout.addWidget(button)
+
+    def _categoryButton(self, resourceType: str, label: str, count: int) -> PushButton:
+        button = TransparentPushButton("", self.leftPanel)
+        button.setObjectName("resourceCategoryButton")
+        button.setProperty("selected", self._resourceFilter == resourceType)
+        normalizeButton(button, height=32)
+        content = QHBoxLayout(button)
+        content.setContentsMargins(8, 0, 8, 0)
+        content.setSpacing(10)
+        iconHost = QFrame(button)
+        iconHost.setObjectName("resourceCategoryIconHost")
+        iconHost.setFixedSize(24, 24)
+        iconLayout = QVBoxLayout(iconHost)
+        iconLayout.setContentsMargins(5, 5, 5, 5)
+        iconLayout.addWidget(
+            IconWidget(
+                _accentIcon(
+                    _RESOURCE_ICONS.get(resourceType, FluentIcon.DOCUMENT)
+                ),
+                iconHost,
+            )
+        )
+        nameLabel = BodyLabel(label, button)
+        countLabel = CaptionLabel(str(count), button)
+        countLabel.setObjectName("resourceCategoryCount")
+        countLabel.setMinimumWidth(24)
+        countLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for child in (iconHost, nameLabel, countLabel):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        content.addWidget(iconHost)
+        content.addWidget(nameLabel)
+        content.addStretch(1)
+        content.addWidget(countLabel)
+        button.clicked.connect(
+            lambda _checked=False, key=resourceType: self._selectCategory(key)
+        )
+        return button
+
+    def _renderResources(self, resources: list[Resource]) -> None:
+        self._clearLayout(self.resourceLayout)
+        visible = resources
+        if self._resourceFilter != "all":
+            visible = [r for r in visible if r.type == self._resourceFilter]
+        visible.sort(key=lambda r: r.createdAt or "", reverse=True)
+        if not visible:
+            empty = BodyLabel("该分类暂无资源\n可前往分析模块生成研究成果", self.centerPanel)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setObjectName("dashboardEmptyText")
+            self.resourceLayout.addWidget(empty)
+        for resource in visible[:6]:
+            row = _ResourceRow(resource, self.centerPanel)
+            row.openRequested.connect(self._jump)
+            row.selected.connect(self._selectResource)
+            row.setProperty("selected", resource.id == self._resourceScope)
+            self.resourceLayout.addWidget(row)
+        scope = "全部"
+        if self._resourceScope:
+            match = next((r for r in resources if r.id == self._resourceScope), None)
+            scope = match.title if match else "全部"
+        self.resourceScopeLabel.setText(f"报告范围：{scope}")
+
+    def _renderInsights(self, insights: list[AiInsight]) -> None:
+        self._clearLayout(self.insightLayout)
+        insights.sort(key=lambda item: item.createdAt or "", reverse=True)
+        self.insightCountLabel.setText(str(len(insights)))
+        if not insights:
+            empty = BodyLabel("还没有 AI 解读\n生成首份研究报告，沉淀项目结论", self.rightPanel)
+            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setObjectName("dashboardEmptyText")
+            self.insightLayout.addWidget(empty)
             return
-        try:
-            project = projectManager.getProject(self._currentProjectId)
-            if project is None:
-                self.projectNameLabel.setText("当前项目:—")
-                self.projectMetaLabel.setText("项目已被删除")
-                return
-            self.projectNameLabel.setText(f"当前项目:{project.name}")
-            metaParts = []
-            metaParts.append(f"状态:{project.status or 'active'}")
-            metaParts.append(f"资源:{len(project.resources)} 个")
-            metaParts.append(f"AI 解读:{len(project.aiInsights)} 条")
-            if project.template:
-                metaParts.append(f"模板:{project.template}")
-            self.projectMetaLabel.setText("  ·  ".join(metaParts))
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _renderBanner 失败: {e}")
+        for insight in insights[:3]:
+            card = _InsightCard(insight, self.rightPanel)
+            card.openRequested.connect(self._openInsight)
+            self.insightLayout.addWidget(card)
 
-    # ------------------------------------------------------------------
-    # 槽
-    # ------------------------------------------------------------------
-    def _onActiveProjectChanged(self, _projectId: str) -> None:
-        self._syncFromManager()
+    def _selectCategory(self, resourceType: str) -> None:
+        self._resourceFilter = resourceType
+        self._render()
 
-    def _onResourceSelected(self, resourceId: str) -> None:
-        """资源池选中 → 更新详情面板 + 通知 AI 报告范围。
+    def _selectResource(self, resourceId: str) -> None:
+        self._resourceScope = None if self._resourceScope == resourceId else resourceId
+        self._render()
 
-        笔记面板已下放到 Word,这里不再随资源切换 scope;
-        但 AI 解读面板的「生成研究报告」按钮范围会跟随资源切换:
-        - 选中资源 → 报告仅基于该资源(以及项目级笔记)
-        - 取消选中 → 报告基于全项目
-        """
-        try:
-            if not resourceId:
-                self.detailPanel.setResource(None)
-                self.aiInsightsPanel.setResourceScope(None)
-                return
-            # 从当前 poolPanel 的 _resources 中找(避免再次访问 DB)
-            resource: Optional[Resource] = None
-            for r in self.poolPanel._resources:  # noqa: SLF001 — 同模块访问合理
-                if r.id == resourceId:
-                    resource = r
-                    break
-            self.detailPanel.setResource(resource)
-            # AI 报告范围跟随资源(用于「✨ 生成研究报告」按钮)
-            self.aiInsightsPanel.setResourceScope(resourceId)
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _onResourceSelected 失败: {e}")
+    def _jump(self, resourceType: str) -> None:
+        if self._busy:
+            return
+        self.jumpToModule.emit(_RESOURCE_TYPE_TO_MODULE.get(resourceType, "freq_analyzer"))
 
-    def _onJumpRequested(self, resourceType: str) -> None:
-        """详情面板的「🚀 跳转分析模块」按钮 → 路由到对应模块。"""
-        try:
-            if self._busy:
-                # busy 期间禁止离开,丢弃跳转请求(主窗口侧的导航拦截是兜底)
-                logger.debug("[ProjectDashboard] AI 报告生成中,忽略跳转请求")
-                return
-            moduleKey = _RESOURCE_TYPE_TO_MODULE.get(resourceType, "freq_analyzer")
-            self.jumpToModule.emit(moduleKey)
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _onJumpRequested 失败: {e}")
+    def _requestBack(self) -> None:
+        if not self._busy:
+            self.backRequested.emit()
 
-    # ------------------------------------------------------------------
-    # AI 报告生成期间的 busy 状态(锁定页面交互)
-    # ------------------------------------------------------------------
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._reflowPanels)
+
+    def _reflowPanels(self, force: bool = False) -> None:
+        panelColumns = 3 if self.scrollArea.viewport().width() >= 1120 else 1
+        if not force and panelColumns == self._panelColumns:
+            return
+        self._panelColumns = panelColumns
+        if panelColumns == 3:
+            positions = ((self.leftPanel, 0, 0), (self.centerPanel, 0, 1), (self.rightPanel, 0, 2))
+            stretches = (0, 1, 0)
+            self.leftPanel.setMinimumWidth(280)
+            self.leftPanel.setMaximumWidth(280)
+            self.rightPanel.setMinimumWidth(320)
+            self.rightPanel.setMaximumWidth(320)
+            self.headerGrid.addWidget(
+                self.backButton, 0, 0, Qt.AlignmentFlag.AlignLeft
+            )
+            self.headerGrid.addWidget(self.headerInfoHost, 0, 1)
+            self.headerGrid.addWidget(
+                self.headerActionsHost, 0, 2, Qt.AlignmentFlag.AlignRight
+            )
+            self.headerGrid.setColumnStretch(0, 0)
+            self.headerGrid.setColumnStretch(1, 1)
+            self.headerGrid.setColumnStretch(2, 0)
+        else:
+            positions = ((self.leftPanel, 0, 0), (self.centerPanel, 1, 0), (self.rightPanel, 2, 0))
+            stretches = (1,)
+            self.leftPanel.setMinimumWidth(0)
+            self.leftPanel.setMaximumWidth(16777215)
+            self.rightPanel.setMinimumWidth(0)
+            self.rightPanel.setMaximumWidth(16777215)
+            self.headerGrid.addWidget(
+                self.backButton, 0, 0, Qt.AlignmentFlag.AlignLeft
+            )
+            self.headerGrid.addWidget(
+                self.headerActionsHost, 0, 1, Qt.AlignmentFlag.AlignRight
+            )
+            self.headerGrid.addWidget(self.headerInfoHost, 1, 0, 1, 2)
+            self.headerGrid.setColumnStretch(0, 1)
+            self.headerGrid.setColumnStretch(1, 0)
+            self.headerGrid.setColumnStretch(2, 0)
+        for panel, row, column in positions:
+            self.columns.addWidget(
+                panel, row, column, Qt.AlignmentFlag.AlignTop
+            )
+        for column in range(3):
+            self.columns.setColumnStretch(column, 0)
+        for column, stretch in enumerate(stretches):
+            self.columns.setColumnStretch(column, stretch)
+
+    def _renameProject(self) -> None:
+        project = projectManager.getProject(self._currentProjectId)
+        if project is None:
+            return
+        dialog = RenameProjectDialog(self.window(), project.name)
+        if dialog.exec():
+            newName = dialog.getResult()
+            if newName and projectManager.renameProject(project.id, newName):
+                self._render()
+
+    def _toggleArchive(self) -> None:
+        project = projectManager.getProject(self._currentProjectId)
+        if project is None:
+            return
+        nextStatus = "active" if project.status == "archived" else "archived"
+        if projectManager.setProjectStatus(project.id, nextStatus):
+            self._render()
+
+    def _deleteProject(self) -> None:
+        project = projectManager.getProject(self._currentProjectId)
+        if project is None:
+            return
+        box = MessageBox(
+            "删除项目",
+            f"确定删除“{project.name}”吗？项目内资源与 AI 解读将一并删除。",
+            self.window(),
+        )
+        box.yesButton.setText("删除")
+        box.cancelButton.setText("取消")
+        if box.exec() and projectManager.deleteProject(project.id):
+            self.backRequested.emit()
+
+    def _generateReport(self) -> None:
+        if not self._currentProjectId or self._busy:
+            return
+        if not researchReportService.generate(
+            self._currentProjectId, resourceScope=self._resourceScope
+        ):
+            InfoBar.warning(
+                title="暂时无法生成",
+                content="请确认项目有效且当前没有其他报告任务。",
+                parent=self,
+                position=InfoBarPosition.TOP,
+                duration=3000,
+            )
+
+    def _openInsight(self, insight: AiInsight) -> None:
+        _InsightMessageBox(insight, self.window()).exec()
+
     def isBusy(self) -> bool:
-        """是否处于 AI 报告生成中。"""
         return self._busy
 
     def _setBusy(self, busy: bool) -> None:
-        """更新 busy 态 + 同步按钮可用态 + 通知父容器。"""
-        if self._busy == busy:
+        if busy == self._busy:
             return
         self._busy = busy
-        try:
-            # 1) 禁用「← 返回列表」:防止用户切回列表后仪表盘上下文丢失
-            self.backButton.setEnabled(not busy)
-            # 2) 禁用详情面板的「🚀 跳转分析模块」:防止离开
-            try:
-                self.detailPanel.jumpButton.setEnabled(
-                    False
-                    if busy
-                    else bool(
-                        self.detailPanel._currentResource
-                        and self.detailPanel._currentResource.type
-                    )
-                )
-            except Exception:
-                pass
-            # 3) 屏蔽资源池双击(仅拦双击事件,保留滚动/选中可交互):
-            #    在 _onResourceDoubleClicked 中已经判断了 _busy,这里是
-            #    事件层兜底,防止任何路径触发的双击事件逃逸到 listWidget
-            try:
-                if busy and self.poolPanel.listWidget is not None:
-                    if not hasattr(self, "_listDoubleClickFilter") or \
-                            self._listDoubleClickFilter is None:
-                        from PySide6.QtCore import QObject, QEvent
-
-                        class _BlockDoubleClickFilter(QObject):
-                            def eventFilter(filterSelf, obj, event):
-                                if event.type() == QEvent.Type.MouseButtonDblClick:
-                                    return True
-                                return False
-
-                        self._listDoubleClickFilter = _BlockDoubleClickFilter(self.poolPanel.listWidget)
-                    self.poolPanel.listWidget.installEventFilter(self._listDoubleClickFilter)
-                elif not busy and getattr(self, "_listDoubleClickFilter", None) is not None:
-                    self.poolPanel.listWidget.removeEventFilter(self._listDoubleClickFilter)
-            except Exception:
-                pass
-            # 4) 通知父容器(MainWindow 监听用来锁定导航 + 拦截关闭)
-            self.busyChanged.emit(busy)
-            logger.info(f"[ProjectDashboard] busy={busy}")
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _setBusy 异常: {e}")
+        self.generateButton.setEnabled(not busy)
+        self.generateButton.setText("正在生成研究报告…" if busy else "生成新解读")
+        self.renameButton.setEnabled(not busy)
+        self.archiveButton.setEnabled(not busy)
+        self.deleteButton.setEnabled(not busy)
+        self.busyChanged.emit(busy)
 
     def _onReportStarted(self) -> None:
-        """AI 报告开始生成 → 进入 busy 态。"""
         self._setBusy(True)
 
-    def _onReportFinishedOrFailed(self, *_args) -> None:
-        """AI 报告结束(成功/失败/取消)→ 退出 busy 态。"""
+    def _onReportFinished(self, _insightId: str, _content: str) -> None:
         self._setBusy(False)
+        self._render()
+        InfoBar.success(
+            title="研究报告已归档",
+            content="新的 AI 解读已加入项目洞察。",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=2500,
+        )
 
-    def _onResourceDoubleClicked(self, resourceId: str) -> None:
-        """双击资源池条目 → 等同于「跳转」动作(busy 时禁用)。"""
-        try:
-            if self._busy:
-                logger.debug("[ProjectDashboard] busy 中,忽略资源双击")
-                return
-            if not resourceId:
-                return
-            for r in self.poolPanel._resources:  # noqa: SLF001
-                if r.id == resourceId:
-                    if r.type:
-                        moduleKey = _RESOURCE_TYPE_TO_MODULE.get(
-                            r.type, "freq_analyzer"
-                        )
-                        self.jumpToModule.emit(moduleKey)
-                    return
-        except Exception as e:
-            logger.warning(f"[ProjectDashboard] _onResourceDoubleClicked 失败: {e}")
+    def _onReportFailed(self, error: str) -> None:
+        self._setBusy(False)
+        InfoBar.error(
+            title="报告生成失败",
+            content=error or "请稍后重试",
+            parent=self,
+            position=InfoBarPosition.TOP,
+            duration=4000,
+        )
+
+    def _onActiveProjectChanged(self, _projectId: str) -> None:
+        self._syncFromManager()
+
+    @staticmethod
+    def _clearLayout(layout: QVBoxLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _applyTheme(self) -> None:
+        dark = isDarkTheme()
+        background = "#1F1F1F" if dark else "#FAFAFA"
+        surface = "#2B2B2B" if dark else "#FFFFFF"
+        border = "#3A3A3A" if dark else "#E5E5E5"
+        text = "#F5F5F5" if dark else "#1F1F1F"
+        muted = "#B3B3B3" if dark else "#616161"
+        hover = "#383838" if dark else "#F5F5F5"
+        subtle = "#353535" if dark else "#F0F0F0"
+        accent = "#20B8A6" if dark else "#007C70"
+        self.page.setStyleSheet(
+            f"""
+            QWidget#projectDashboardPage {{ background: {background}; }}
+            QFrame#projectDashboardHeader {{ background: {surface};
+                border-bottom: 1px solid {border}; }}
+            QLabel#dashboardProjectTitle {{ color: {text}; font-size: 26px;
+                font-weight: 700; }}
+            QLabel#dashboardStatusChip {{ color: #05655C; background: #DDF6F1;
+                border-radius: 10px; padding: 3px 10px; font-weight: 600; }}
+            QLabel#dashboardStatusChip[status="archived"] {{ color: {muted}; background: {hover}; }}
+            QLabel#projectHeaderTag {{ background: {subtle}; color: {muted};
+                border-radius: 4px; padding: 2px 8px; }}
+            QPushButton#projectDangerButton {{ color: #D13438; border: none;
+                background: transparent; }}
+            QFrame#projectHeaderDivider {{ background: {border}; border: none; }}
+            QFrame#dashboardPanel {{ background: {surface}; border: 1px solid {border};
+                border-radius: 8px; }}
+            QLabel#panelCountChip, QLabel#resourceCategoryCount {{ background: {hover};
+                color: {muted}; border-radius: 4px; padding: 2px 6px; }}
+            QFrame#dashboardResourceRow, QFrame#dashboardInsightCard {{ background: {surface};
+                border: 1px solid {border}; border-radius: 8px; }}
+            QFrame#dashboardResourceRow[selected="true"] {{ border: 2px solid {accent}; }}
+            QFrame#dashboardResourceRow:hover {{ border-color: {accent}; }}
+            QFrame#resourceRowIconHost, QFrame#resourceCategoryIconHost {{
+                background: rgba(0, 176, 156, 0.10); color: {accent};
+                border: none; border-radius: 4px; }}
+            QPushButton#resourceCategoryButton {{ padding: 0; text-align: left;
+                border: none; border-radius: 7px; background: transparent; color: {text}; }}
+            QPushButton#resourceCategoryButton:hover {{ background: {hover}; }}
+            QPushButton#resourceCategoryButton[selected="true"] {{ color: {accent};
+                background: {hover}; font-weight: 600; }}
+            QLabel#resourceStatusChip {{ border-radius: 4px; padding: 2px 7px;
+                background: {hover}; color: {muted}; }}
+            QLabel#resourceStatusChip[status="candidate"] {{ color: #725A00;
+                background: #FFF7D6; }}
+            QLabel#resourceStatusChip[status="selected"] {{ color: #107C10;
+                background: #E7F4E7; }}
+            QLabel#resourceStatusChip[status="rejected"] {{ color: #A4262C;
+                background: #FDE7E9; }}
+            QLabel#insightModelChip {{ background: {hover}; color: {muted};
+                border-radius: 4px; padding: 2px 6px; }}
+            QLabel#insightConfidenceChip {{ color: #107C10; background: #E7F4E7;
+                border-radius: 4px; padding: 2px 6px; }}
+            QLabel#insightConfidenceChip[confidence="medium"] {{ color: #725A00;
+                background: #FFF7D6; }}
+            QPushButton#insightLinkButton {{ border: none; color: {accent};
+                background: transparent; padding: 2px 0; }}
+            QLabel#scopeLabel {{ color: {muted}; }}
+            QLabel#dashboardEmptyText {{ color: {muted}; padding: 34px 8px; }}
+            """
+        )
 
 
 __all__ = ["ProjectDashboardWidget"]

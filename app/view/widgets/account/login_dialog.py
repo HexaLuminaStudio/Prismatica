@@ -223,6 +223,16 @@ class LoginInterface(QWidget):
             from app.core.utils import cfg
 
             self._baseUrl = (cfg.cloudBaseUrl.value or "").strip()
+            cfg.cloudBaseUrl.valueChanged.connect(self._onBaseUrlChanged)
+        except Exception:
+            self._baseUrl = ""
+        self._refreshOfflineState()
+
+    def _onBaseUrlChanged(self, _value: str) -> None:
+        try:
+            from app.core.utils import cfg
+
+            self._baseUrl = (cfg.cloudBaseUrl.value or "").strip()
         except Exception:
             self._baseUrl = ""
         self._refreshOfflineState()
@@ -466,6 +476,11 @@ class LoginInterface(QWidget):
         self._transitionOverlay.setOpacity(0.0)
         self._transitionOverlay.hide()
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._restoreActionButton(self._loginBtn, "登录")
+        self._restoreActionButton(self._registerBtn, "创建账号并登录")
+
     def _currentStatus(self) -> _StatusBanner:
         return self._registerStatus if self._stack.currentIndex() else self._loginStatus
 
@@ -510,7 +525,7 @@ class LoginInterface(QWidget):
         self._loginStatus.setText("")
         self._loginBtn.setText("登录中…")
         try:
-            getCloudAuth().login(email, password)
+            getCloudAuth().login(email, password, rememberMe=self._rememberCheck.isChecked())
         except CloudApiError as exc:
             logger.warning(f"[LoginInterface] 登录失败: {exc}")
             messages = {
@@ -532,6 +547,7 @@ class LoginInterface(QWidget):
             self._restoreActionButton(self._loginBtn, "登录")
             return
         self.loginSucceeded.emit()
+        self._restoreActionButton(self._loginBtn, "登录")
 
     def _onRegister(self) -> None:
         email = self._regEmailEdit.text().strip()
@@ -553,7 +569,7 @@ class LoginInterface(QWidget):
         self._registerStatus.setText("")
         self._registerBtn.setText("创建中…")
         try:
-            getCloudAuth().register(email, password, "")
+            getCloudAuth().register(email, password, "", rememberMe=self._rememberCheck.isChecked())
         except CloudApiError as exc:
             logger.warning(f"[LoginInterface] 注册失败: {exc}")
             messages = {
@@ -570,6 +586,7 @@ class LoginInterface(QWidget):
             self._restoreActionButton(self._registerBtn, "创建账号并登录")
             return
         self.loginSucceeded.emit()
+        self._restoreActionButton(self._registerBtn, "创建账号并登录")
 
     def _restoreActionButton(self, button: QPushButton, text: str) -> None:
         button.setText(text)

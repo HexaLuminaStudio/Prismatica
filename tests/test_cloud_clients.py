@@ -110,6 +110,29 @@ def test_cloud_auth_login_success(mockApi, monkeypatch) -> None:
     assert newSess.email == "alice@example.com"
 
 
+def test_cloud_auth_login_without_remember_clears_session_file(mockApi, monkeypatch) -> None:
+    mockApi.push(
+        body={
+            "code": "OK",
+            "data": {
+                "user": {"userId": 2, "email": "temp@example.com"},
+                "tokens": {"accessToken": "temp-a", "refreshToken": "temp-r", "expiresIn": 3600},
+            },
+        }
+    )
+    from app.core.services import getCloudAuth
+
+    saved = []
+    deleted = []
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._saveSession", lambda self: saved.append(True))
+    monkeypatch.setattr("app.core.services.cloud_auth.CloudAuth._deleteSessionFile", lambda self: deleted.append(True))
+    auth = getCloudAuth()
+    auth.login("temp@example.com", "Prismatica2026!", rememberMe=False)
+
+    assert saved == []
+    assert deleted == [True]
+
+
 def test_cloud_auth_login_invalid_credentials(mockApi, monkeypatch) -> None:
     mockApi.push(
         body={"code": "INVALID_CREDENTIALS", "message": "邮箱或密码错误"}

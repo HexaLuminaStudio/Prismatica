@@ -128,6 +128,15 @@ class CloudAuth:
             logger.exception("[CloudAuth] 加载会话失败")
             return False
 
+    def _deleteSessionFile(self) -> None:
+        try:
+            path = self._getSessionFile()
+            if path.exists():
+                path.unlink()
+                logger.info(f"[CloudAuth] 非持久化登录,已清除会话文件 → {path.name}")
+        except Exception:
+            logger.exception("[CloudAuth] 清除会话文件失败")
+
     def _clearSession(self) -> None:
         self._api.clearSession()
         try:
@@ -147,6 +156,7 @@ class CloudAuth:
         email: str,
         password: str,
         displayName: str = "",
+        rememberMe: bool = True,
     ) -> dict:
         try:
             self._api.post(
@@ -162,9 +172,9 @@ class CloudAuth:
             raise
         logger.info(f"[CloudAuth] 注册成功 email={email}")
         # 注册成功后自动登录
-        return self.login(email, password)
+        return self.login(email, password, rememberMe=rememberMe)
 
-    def login(self, email: str, password: str) -> dict:
+    def login(self, email: str, password: str, rememberMe: bool = True) -> dict:
         try:
             data = self._api.post(
                 "/v1/auth/login",
@@ -179,7 +189,7 @@ class CloudAuth:
             )
         except CloudApiError:
             raise
-        self._applyLoginResponse(data)
+        self._applyLoginResponse(data, rememberMe=rememberMe)
         return data
 
     def logout(self) -> None:
@@ -204,8 +214,8 @@ class CloudAuth:
     # refresh(自动 + 手动)
     # ------------------------------------------------------------------
 
-    def _applyLoginResponse(self, data: dict) -> None:
-        """把 /login 或 /refresh 返回的 tokens 写入本地 session。"""
+    def _applyLoginResponse(self, data: dict, *, rememberMe: bool = True) -> None:
+        """把登录响应写入内存会话，并按选项决定是否持久化。"""
         if not data:
             return
         tokens = data.get("tokens") or {}
@@ -221,7 +231,10 @@ class CloudAuth:
             expiresAt=int(time.time()) + int(tokens.get("expiresIn", 3600) or 3600),
         )
         self._api.setSession(sess)
-        self._saveSession()
+        if rememberMe:
+            self._saveSession()
+        else:
+            self._deleteSessionFile()
         try:
             signalBus.sessionChanged.emit(True)
         except Exception:

@@ -1,148 +1,193 @@
 # coding: utf-8
-"""项目管理对话框（PRD-002 REQ-PROJ-001）
-
-- NewProjectDialog: 新建项目（名称 + 描述 + 标签 + 模板选择）
-- RenameProjectDialog: 重命名项目（仅名称）
-
-MVP 阶段不实现模板细节,只保留 UI 占位（默认下拉 +「自定义」）。
-"""
-
+"""项目管理 MessageBox 表单。"""
 from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
-    ComboBox,
+    CaptionLabel,
+    FluentIcon,
     LineEdit,
     MessageBoxBase,
     PlainTextEdit,
+    SegmentedWidget,
     StrongBodyLabel,
     SubtitleLabel,
+    TitleLabel,
 )
 
-# 内置模板占位（PRD §4.2 F6）
-_BUILTIN_TEMPLATES = [
-    "空白项目",
-    "中介语偏误分析",
-    "构式语法研究",
-    "语体对比研究",
+from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
+
+
+_TEMPLATES = [
+    ("blank", "空白", FluentIcon.DOCUMENT),
+    ("teaching", "教学研究", FluentIcon.EDUCATION),
+    ("academic", "学术研究", FluentIcon.LIBRARY),
+    ("custom", "自定义", FluentIcon.SETTING),
 ]
 
 
 class _BaseProjectDialog(MessageBoxBase):
-    """对话框基类（统一样式）"""
+    """统一使用 Fluent MessageBox 容器，表单只填充其 ``viewLayout``。"""
 
-    def __init__(self, parent: Optional[QWidget] = None, title: str = ""):
+    def __init__(self, parent: Optional[QWidget] = None, title: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        # 避免主窗口尺寸变更/动画卡住 exec() 返回
+        self.widget.setMinimumWidth(560)
+        self.buttonGroup.setFixedHeight(92)
         if parent is not None and parent.isVisible():
             self.setGeometry(0, 0, parent.width(), parent.height())
         self._buildUi()
 
     def done(self, code) -> None:
-        """禁用 qfluentwidgets 的淡出动画,直接关闭。
-
-        背景:MaskDialogBase.done 会启动 opacity 动画并在 finished 后才调
-        QDialog.done(),在 Windows 上偶发 finished 信号丢失,导致 dialog.exec()
-        永不返回,主窗口表现为「整个软件无响应」。这里直接走基类关闭流程。
-        """
-        from PySide6.QtWidgets import QDialog
-
+        # 避免 Windows 下遮罩淡出动画偶发不结束，保留 MessageBox 外观与模态语义。
         QDialog.done(self, code)
 
 
 class NewProjectDialog(_BaseProjectDialog):
-    """新建项目对话框"""
+    """设计稿对应的新建项目 MessageBox。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent, title="新建研究项目")
+        self._templateKey = "teaching"
+        super().__init__(parent, title="新建项目")
 
     def _buildUi(self) -> None:
         view = self.viewLayout
         parent = self.widget
+        view.setSpacing(8)
 
-        view.addWidget(StrongBodyLabel("项目名称", parent))
+        title = TitleLabel("新建项目", parent)
+        view.addWidget(title)
+        subtitle = BodyLabel("几秒钟创建，之后可随时补充资源与研究说明", parent)
+        view.addWidget(subtitle)
+        view.addSpacing(6)
+
+        view.addWidget(StrongBodyLabel("项目名称 *", parent))
         self.nameEdit = LineEdit(parent)
-        self.nameEdit.setPlaceholderText("例如：V都V了构式研究")
+        self.nameEdit.setPlaceholderText("例如：现代汉语口语语料研究")
+        self.nameEdit.setClearButtonEnabled(True)
         view.addWidget(self.nameEdit)
+        nameMeta = QHBoxLayout()
+        self.nameHint = CaptionLabel("3–50 字", parent)
+        self.nameCount = CaptionLabel("0 / 50", parent)
+        nameMeta.addWidget(self.nameHint)
+        nameMeta.addStretch(1)
+        nameMeta.addWidget(self.nameCount)
+        view.addLayout(nameMeta)
 
-        view.addSpacing(8)
-        view.addWidget(StrongBodyLabel("一句话描述", parent))
-        self.descEdit = LineEdit(parent)
-        self.descEdit.setPlaceholderText("可选项 - 简要说明本项目的研究目的")
+        view.addSpacing(6)
+        view.addWidget(StrongBodyLabel("来源模板", parent))
+        self.templatePicker = SegmentedWidget(parent)
+        for key, label, icon in _TEMPLATES:
+            self.templatePicker.addItem(
+                key,
+                label,
+                icon=icon,
+                onClick=lambda _checked=False, route=key: self._setTemplate(route),
+            )
+        self.templatePicker.setCurrentItem(self._templateKey)
+        self.templatePicker.setMinimumHeight(40)
+        for item in self.templatePicker.findChildren(QAbstractButton):
+            normalizeButton(item, height=36)
+        view.addWidget(self.templatePicker)
+
+        view.addSpacing(6)
+        view.addWidget(StrongBodyLabel("描述（可选）", parent))
+        self.descEdit = PlainTextEdit(parent)
+        self.descEdit.setPlaceholderText("简要描述项目目标、语料来源与分析方向")
+        self.descEdit.setFixedHeight(92)
         view.addWidget(self.descEdit)
 
-        view.addSpacing(8)
-        view.addWidget(StrongBodyLabel("模板", parent))
-        self.templateCombo = ComboBox(parent)
-        for tpl in _BUILTIN_TEMPLATES:
-            self.templateCombo.addItem(tpl)
-        self.templateCombo.setCurrentIndex(0)
-        view.addWidget(self.templateCombo)
+        view.addSpacing(6)
+        view.addWidget(StrongBodyLabel("标签", parent))
+        self.tagsEdit = LineEdit(parent)
+        self.tagsEdit.setPlaceholderText("例如：语料库，口语，教学（使用逗号分隔）")
+        self.tagsEdit.setClearButtonEnabled(True)
+        view.addWidget(self.tagsEdit)
+        tagHint = CaptionLabel("标签用于项目搜索与筛选，最多保留 8 个。", parent)
+        view.addWidget(tagHint)
 
-        view.addSpacing(4)
-        hint = BodyLabel(
-            "提示：MVP 阶段模板仅作为占位标识,不会自动初始化分析模块。",
-            parent,
-        )
-        hint.setStyleSheet("color: gray; font-size: 11px;")
-        view.addWidget(hint)
-
-        # 默认按钮文本
-        self.yesButton.setText("创建")
+        self.yesButton.setText("创建项目")
+        self.yesButton.setIcon(FluentIcon.ACCEPT)
+        normalizeButton(self.yesButton, height=PRIMARY_HEIGHT, minimumWidth=130)
         self.cancelButton.setText("取消")
-        # 名称必填校验:yesButton 默认启用,在 nameEdit 变化时切换
+        normalizeButton(self.cancelButton, height=PRIMARY_HEIGHT, minimumWidth=96)
         self.nameEdit.textChanged.connect(self._onNameChanged)
-        self._onNameChanged(self.nameEdit.text())
+        self._onNameChanged("")
+
+    def _setTemplate(self, key: str) -> None:
+        self._templateKey = key
 
     def _onNameChanged(self, text: str) -> None:
-        self.yesButton.setEnabled(bool(text.strip()))
+        length = len(text.strip())
+        self.nameCount.setText(f"{min(length, 99)} / 50")
+        valid = 3 <= length <= 50
+        self.yesButton.setEnabled(valid)
+        if not text:
+            self.nameHint.setText("3–50 字")
+        elif length < 3:
+            self.nameHint.setText("项目名称至少需要 3 个字")
+        elif length > 50:
+            self.nameHint.setText("项目名称不能超过 50 个字")
+        else:
+            self.nameHint.setText("名称可用")
+
+    def _tags(self) -> list[str]:
+        raw = self.tagsEdit.text().replace("，", ",")
+        tags: list[str] = []
+        for item in raw.split(","):
+            tag = item.strip()
+            if tag and tag not in tags:
+                tags.append(tag)
+            if len(tags) >= 8:
+                break
+        return tags
 
     def getResult(self) -> dict:
-        """返回 (name, description, template) 元组;若用户取消返回 None"""
+        templateMap = {key: label for key, label, _icon in _TEMPLATES}
         return {
             "name": self.nameEdit.text().strip(),
-            "description": self.descEdit.text().strip(),
-            "template": self.templateCombo.currentText(),
+            "description": self.descEdit.toPlainText().strip(),
+            "template": templateMap.get(self._templateKey, "教学研究"),
+            "tags": self._tags(),
         }
 
 
 class RenameProjectDialog(_BaseProjectDialog):
-    """重命名项目对话框"""
+    """重命名项目 MessageBox。"""
 
     def __init__(self, parent: Optional[QWidget] = None, currentName: str = "") -> None:
-        # 必须先于 super().__init__() 赋值:_BaseProjectDialog.__init__ 会立刻调
-        # self._buildUi(),而 _buildUi 要用 self._currentName 给 LineEdit 填初值。
         self._currentName = currentName
         super().__init__(parent, title="重命名项目")
-        # 基类 __init__ 已经调过一次 _buildUi(),此处无需重复调用。
 
     def _buildUi(self) -> None:
         view = self.viewLayout
         parent = self.widget
-
+        view.addWidget(SubtitleLabel("重命名项目", parent))
         view.addWidget(StrongBodyLabel("新名称", parent))
         self.nameEdit = LineEdit(parent)
         self.nameEdit.setText(self._currentName)
         self.nameEdit.selectAll()
         view.addWidget(self.nameEdit)
-
         self.yesButton.setText("保存")
+        self.yesButton.setIcon(FluentIcon.SAVE)
+        normalizeButton(self.yesButton, height=PRIMARY_HEIGHT, minimumWidth=110)
         self.cancelButton.setText("取消")
+        normalizeButton(self.cancelButton, height=PRIMARY_HEIGHT, minimumWidth=96)
         self.nameEdit.textChanged.connect(self._onNameChanged)
         self._onNameChanged(self.nameEdit.text())
 
     def _onNameChanged(self, text: str) -> None:
         newName = text.strip()
-        self.yesButton.setEnabled(bool(newName) and newName != self._currentName)
+        self.yesButton.setEnabled(
+            3 <= len(newName) <= 50 and newName != self._currentName
+        )
 
     def getResult(self) -> Optional[str]:
         name = self.nameEdit.text().strip()
-        if not name or name == self._currentName:
+        if not 3 <= len(name) <= 50 or name == self._currentName:
             return None
         return name
 

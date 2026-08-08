@@ -43,6 +43,9 @@ from app.core.models.project import (
     AiInsight,
     CorpusRef,
     Project,
+    PROJECT_STATUS_ACTIVE,
+    PROJECT_STATUS_ARCHIVED,
+    PROJECT_STATUS_PAUSED,
     RESOURCE_STATUS_NEW,
     Resource,
     genId,
@@ -439,6 +442,7 @@ class ProjectManager(QObject):
         name: str,
         template: Optional[str] = None,
         description: str = "",
+        tags: Optional[List[str]] = None,
     ) -> Project:
         """同步版创建项目入口(磁盘 I/O 在当前线程完成,返回创建的 Project)。
 
@@ -463,6 +467,7 @@ class ProjectManager(QObject):
             name=name,
             description=description,
             template=template,
+            tags=list(tags or []),
             createdAt=_nowIso(),
             updatedAt=_nowIso(),
         )
@@ -480,6 +485,7 @@ class ProjectManager(QObject):
         description: str = "",
         onSuccess: Optional[Any] = None,
         onError: Optional[Any] = None,
+        tags: Optional[List[str]] = None,
     ) -> None:
         """异步创建项目(磁盘 I/O 全部跑在 QThread 子线程,不阻塞 UI)。
 
@@ -492,6 +498,7 @@ class ProjectManager(QObject):
             name: 项目名
             template: 来源模板名(可选)
             description: 一句话描述(可选)
+            tags: 项目标签(可选)
             onSuccess: 成功回调,签名 (Project) -> None
             onError:   失败回调,签名 (str) -> None
 
@@ -508,6 +515,7 @@ class ProjectManager(QObject):
             name=name,
             description=description,
             template=template,
+            tags=list(tags or []),
             createdAt=now,
             updatedAt=now,
         )
@@ -593,6 +601,29 @@ class ProjectManager(QObject):
         if self._activeProjectId == projectId:
             self.activeProjectChanged.emit(projectId)
         self.projectListChanged.emit()
+        return True
+
+    def setProjectStatus(self, projectId: str, status: str) -> bool:
+        """更新项目状态并持久化。"""
+        if status not in {
+            PROJECT_STATUS_ACTIVE,
+            PROJECT_STATUS_PAUSED,
+            PROJECT_STATUS_ARCHIVED,
+        }:
+            logger.warning(f"[ProjectManager] setProjectStatus 拒绝未知状态: {status}")
+            return False
+        project = self._memCache.get(projectId)
+        if project is None or project.status == status:
+            return False
+        project.status = status
+        project.updatedAt = _nowIso()
+        with self._dbLock:
+            self._writeProjectMetaRow(project)
+            self._saveProjectJson(project)
+        if self._activeProjectId == projectId:
+            self.activeProjectChanged.emit(projectId)
+        self.projectListChanged.emit()
+        logger.info(f"[ProjectManager] 更新项目状态: {projectId} → {status}")
         return True
 
     def deleteProject(self, projectId: str) -> bool:
