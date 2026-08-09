@@ -588,7 +588,7 @@ class MainWindow(MSFluentWindow):
             logger.warning(f"[MainWindow] 更新任务导航角标失败: {exc}")
 
     def initWindow(self):
-        self.resize(1400, 870)
+        self.resize(1300, 870)
         self.setMinimumWidth(900)
         self.setMinimumHeight(700)
         self.setWindowIcon(QIcon(":app/images/logo.png"))

@@ -257,12 +257,9 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
         self.certificateLevel.setFixedWidth(200)
         self.certificateLevel.addItems(["不限", "A", "B", "C", "未参加"])
 
-        self.nationality = ComboBox(self)
+        self.nationality = LineEdit(self)
+        self.nationality.setPlaceholderText("输入国家中文名,如「日本」")
         self.nationality.setFixedWidth(200)
-
-        # 生成只包含国家名称的列表
-        countryList = list(hskCountryDict.keys())
-        self.nationality.addItems(countryList)
 
         self.addGroup(
             QIcon(":app/icons/EssayTitle.svg"),
@@ -279,7 +276,7 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
         self.addGroup(
             QIcon(":app/icons/Public.svg"),
             "国籍",
-            "选择国籍",
+            "输入国籍(精确匹配国家中文名,留空表示不限)",
             self.nationality,
         )
         for i in range(3):
@@ -300,8 +297,12 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
                 dicts["title"] = self.essayTitle.currentText()
             if self.certificateLevel.currentText() != "不限":
                 dicts["level"] = self.certificateLevel.currentText()
-            if self.nationality.currentText() != "不限":
-                dicts["nation"] = hskCountryDict[self.nationality.currentText()]
+            nationName = self.nationality.text().strip()
+            if nationName and nationName != "不限":
+                # 精确匹配国家中文名,未命中视为不限
+                nationCode = hskCountryDict.get(nationName, "")
+                if nationCode:
+                    dicts["nation"] = nationCode
             return dicts
         else:
             return {}

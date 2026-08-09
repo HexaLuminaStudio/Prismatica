@@ -870,6 +870,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         self.setObjectName("keywordListWidget")
 
         self._observedStore: Optional[CorpusStore] = corpusStore
+        self._boundObservedStore: Optional[CorpusStore] = None
         self._referenceStore: Optional[CorpusStore] = None  # 由下拉选择后注入
         self._corpusManager = corpusManager
         self._worker: Optional[KeywordListWorker] = None
@@ -903,21 +904,33 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
     def setCorpusStore(self, store: CorpusStore) -> None:
         """运行时注入观察语料库(主接口层调用)。"""
         if self._observedStore is store:
+            self._onCorpusChanged()
             return
         self._observedStore = store
         tokenCache = store.tokenCache() if store is not None else None
         self._segmenter = TextSegmenter(tokenCache=tokenCache)
+        self._bindCorpusStore(store)
         self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
 
     def _bindCorpusStore(self, store: CorpusStore) -> None:
         """订阅观察语料库变化信号。"""
-        if hasattr(store, "filesAdded"):
-            store.filesAdded.connect(lambda *_: self._updateCorpusInfo())
-        if hasattr(store, "filesRemoved"):
-            store.filesRemoved.connect(lambda *_: self._updateCorpusInfo())
-        if hasattr(store, "cleanRuleChanged"):
-            store.cleanRuleChanged.connect(lambda: self._updateCorpusInfo())
+        if self._boundObservedStore is store:
+            return
+        oldStore = self._boundObservedStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._onCorpusChanged)
+                except (RuntimeError, TypeError):
+                    pass
+        store.textsChanged.connect(self._onCorpusChanged)
+        store.cleanRuleChanged.connect(self._onCorpusChanged)
+        self._boundObservedStore = store
+        self._updateCorpusInfo()
+
+    def _onCorpusChanged(self) -> None:
+        self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
 
     def _bindCorpusManager(self, manager: Any) -> None:
@@ -930,18 +943,9 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         self._refreshRefCorpusCombo()
 
     def _onActiveCorpusChanged(self, _newId: int) -> None:
-        """活动语料库变化时,自动跟随更新观察语料状态。"""
-        if self._corpusManager is None:
-            return
-        active = self._corpusManager.activeCorpus()
-        if active is None:
-            return
-        # 重建观察语料 CorpusStore
-        try:
-            newStore = CorpusStore(dbPath=active.dbPath, parent=self)
-            self.setCorpusStore(newStore)
-        except Exception as e:
-            logger.warning(f"[KeywordListWidget] 重建观察语料 store 失败: {e}")
+        """活动库由顶层接口统一重绑；这里只刷新参照库列表与状态。"""
+        self._refreshRefCorpusCombo()
+        self._updateCorpusInfo()
 
     def _resetResultsForCorpusSwitch(self) -> None:
         """切换语料库时清空旧分析结果与 UI。"""

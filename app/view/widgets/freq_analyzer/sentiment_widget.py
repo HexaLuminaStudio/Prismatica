@@ -167,6 +167,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.setObjectName("sentimentWidget")
 
         self._corpusStore = corpusStore
+        self._boundCorpusStore = None
         self.fileToText: Dict[str, str] = {}
         self._result: Optional[CorpusSentimentResult] = None
         self._worker: Optional[SentimentWorker] = None
@@ -191,22 +192,54 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # ------------------------------------------------------------------
     def setCorpusStore(self, store) -> None:
         if self._corpusStore is store:
+            self._onCorpusChanged()
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store) -> None:
+        if self._boundCorpusStore is store:
+            return
+        oldStore = self._boundCorpusStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._onCorpusChanged)
+                except (RuntimeError, TypeError):
+                    pass
         store.textsChanged.connect(self._onCorpusChanged)
         store.cleanRuleChanged.connect(self._onCorpusChanged)
+        self._boundCorpusStore = store
 
     def _onCorpusChanged(self) -> None:
-        if self._corpusStore is not None:
-            self.fileToText = self._corpusStore.effectiveTexts()
+        self.fileToText = {}
         self._result = None
         if hasattr(self, "_resultSummary"):
             self._resultSummary.setPlaceholder("语料已变更,请点击「开始分析」")
         self._drawPlaceholder()
+
+    def _reloadEffectiveTexts(self) -> bool:
+        if self._corpusStore is None:
+            return True
+        try:
+            coverage = self._corpusStore.cacheCoverage()
+            if self._corpusStore.cleanEnabled and coverage["coverage"] < 1.0:
+                InfoBar.info(
+                    title="语料准备中",
+                    content="清洗缓存完成后即可开始情感分析",
+                    orient=Qt.Orientation.Horizontal,
+                    isClosable=True,
+                    duration=2500,
+                    position=InfoBarPosition.TOP_RIGHT,
+                    parent=self,
+                )
+                return False
+            self.fileToText = self._corpusStore.effectiveTextsFromCacheOnly()
+            return True
+        except Exception as exc:
+            logger.exception(f"[SentimentWidget] 读取语料失败: {exc}")
+            return False
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -385,6 +418,8 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # 行为:运行分析
     # ------------------------------------------------------------------
     def _onRunClicked(self):
+        if not self._reloadEffectiveTexts():
+            return
         if not self.fileToText:
             InfoBar.error(
                 title="提示",

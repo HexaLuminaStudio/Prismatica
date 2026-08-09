@@ -270,6 +270,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.setObjectName("networkWidget")
 
         self._corpusStore = corpusStore
+        self._boundCorpusStore = None
         self.fileToText: Dict[str, str] = {}
         self._network: Optional[CooccurrenceNetwork] = None
         self._pos: Dict[str, Tuple[float, float]] = {}
@@ -299,24 +300,51 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # ------------------------------------------------------------------
     def setCorpusStore(self, store) -> None:
         if self._corpusStore is store:
+            self._onCorpusChanged()
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store) -> None:
+        if self._boundCorpusStore is store:
+            return
+        oldStore = self._boundCorpusStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._onCorpusChanged)
+                except (RuntimeError, TypeError):
+                    pass
         store.textsChanged.connect(self._onCorpusChanged)
         store.cleanRuleChanged.connect(self._onCorpusChanged)
+        self._boundCorpusStore = store
 
     def _onCorpusChanged(self) -> None:
-        if self._corpusStore is not None:
-            self.fileToText = self._corpusStore.effectiveTexts()
+        self.fileToText = {}
         # 语料变更 → 清空旧图
         self._network = None
         self._pos = {}
         if hasattr(self, "_resultSummary"):
             self._resultSummary.setPlaceholder("语料已变更,请点击「构建网络」")
         self._drawPlaceholder("请配置参数后点击「构建网络」")
+
+    def _reloadEffectiveTexts(self) -> bool:
+        if self._corpusStore is None:
+            return True
+        try:
+            coverage = self._corpusStore.cacheCoverage()
+            if self._corpusStore.cleanEnabled and coverage["coverage"] < 1.0:
+                _showInfoBar(
+                    "info", "语料准备中", "清洗缓存完成后即可构建网络", self
+                )
+                return False
+            self.fileToText = self._corpusStore.effectiveTextsFromCacheOnly()
+            return True
+        except Exception as exc:
+            logger.exception(f"[NetworkWidget] 读取语料失败: {exc}")
+            _showInfoBar("error", "读取失败", str(exc), self)
+            return False
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -544,6 +572,8 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # 行为:构建网络
     # ------------------------------------------------------------------
     def _onBuildClicked(self):
+        if not self._reloadEffectiveTexts():
+            return
         if not self.fileToText:
             _showInfoBar(
                 "warning",

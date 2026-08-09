@@ -597,8 +597,8 @@ class PrismaticaNavigationBar(NavigationBar):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._expanded = True
-        self._expansionProgress = 1.0
+        self._expanded = False
+        self._expansionProgress = 0.0
         self._animationsEnabled = True
         self.sectionHeaders: list[SidebarSectionHeader] = []
         self.setFixedWidth(SIDEBAR_WIDTH)
@@ -632,6 +632,8 @@ class PrismaticaNavigationBar(NavigationBar):
         self.topLayout.insertWidget(0, self.brandHeader, 0, Qt.AlignmentFlag.AlignHCenter)
         self.topLayout.insertSpacing(1, 4)
         qconfig.themeChangedFinished.connect(self.update)
+        # 启动即应用默认的收起状态,避免初次显示时仍是展开宽度
+        self.setExpanded(False)
 
     def insertItem(
         self,
@@ -697,6 +699,8 @@ class PrismaticaNavigationBar(NavigationBar):
     def setExpanded(self, expanded: bool) -> None:
         expanded = bool(expanded)
         if expanded == self._expanded:
+            self._setExpansionProgress(1.0 if expanded else 0.0)
+            self._finishExpansion()
             return
         self._expanded = expanded
         label = "折叠侧边栏" if expanded else "展开侧边栏"

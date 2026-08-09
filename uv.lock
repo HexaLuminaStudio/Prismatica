@@ -750,7 +750,7 @@ requires-dist = [
     { name = "pandas" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pyperclip", specifier = ">=1.11.0" },
-    { name = "pyside6-fluent-widgets-pro", path = "pyside6_fluent_widgets_pro-0.12.0-cp311-cp311-win_amd64.whl" },
+    { name = "pyside6-fluent-widgets-pro", path = "pyside6_fluent_widgets_pro-0.13.0-cp311-cp311-win_amd64.whl" },
     { name = "python-docx", specifier = ">=1.2.0" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "tiktoken", specifier = ">=0.13.0" },
@@ -3272,8 +3272,8 @@ wheels = [
 
 [[package]]
 name = "pyside6-fluent-widgets-pro"
-version = "0.12.0"
-source = { path = "pyside6_fluent_widgets_pro-0.12.0-cp311-cp311-win_amd64.whl" }
+version = "0.13.0"
+source = { path = "pyside6_fluent_widgets_pro-0.13.0-cp311-cp311-win_amd64.whl" }
 dependencies = [
     { name = "jinja2" },
     { name = "prettytable" },
@@ -3284,7 +3284,7 @@ dependencies = [
     { name = "wmi", marker = "sys_platform == 'win32'" },
 ]
 wheels = [
-    { filename = "pyside6_fluent_widgets_pro-0.12.0-cp311-cp311-win_amd64.whl", hash = "sha256:2bc13b123b1767fbc156c4d7f9114f2efe7171b493f02a028e7c0eafb89a33d8" },
+    { filename = "pyside6_fluent_widgets_pro-0.13.0-cp311-cp311-win_amd64.whl", hash = "sha256:e8f551ab15b074b63a67a96845752464339b20cfe70ad0bb1760e7a025c9c20c" },
 ]
 
 [package.metadata]

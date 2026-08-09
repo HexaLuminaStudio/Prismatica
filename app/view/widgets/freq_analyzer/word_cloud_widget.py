@@ -234,6 +234,7 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     def __init__(self, parent: Optional[QWidget] = None, corpusStore=None):
         super().__init__(parent=parent)
         self._corpusStore = corpusStore
+        self._boundCorpusStore = None
         self._worker: Optional[WordCloudWorker] = None
         self._result: Optional[WordCloudResult] = None
         self._lastFigure: Optional[Figure] = None
@@ -254,10 +255,12 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # ------------------------------------------------------------------
     def setCorpusStore(self, store):
         if self._corpusStore is store:
+            self._onCorpusChanged()
             return
         self._corpusStore = store
         tokenCache = store.tokenCache() if store is not None else None
         self._segmenter = TextSegmenter(tokenCache=tokenCache)
+        self._bindCorpusStore(store)
         # 切换语料库时清空旧结果
         self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
@@ -332,12 +335,22 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                     pass
 
     def _bindCorpusStore(self, store):
-        if hasattr(store, "filesAdded"):
-            store.filesAdded.connect(lambda *_: self._updateCorpusInfo())
-        if hasattr(store, "filesRemoved"):
-            store.filesRemoved.connect(lambda *_: self._updateCorpusInfo())
-        if hasattr(store, "cleanRuleChanged"):
-            store.cleanRuleChanged.connect(lambda: self._updateCorpusInfo())
+        if self._boundCorpusStore is store:
+            return
+        oldStore = self._boundCorpusStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._onCorpusChanged)
+                except (RuntimeError, TypeError):
+                    pass
+        store.textsChanged.connect(self._onCorpusChanged)
+        store.cleanRuleChanged.connect(self._onCorpusChanged)
+        self._boundCorpusStore = store
+        self._updateCorpusInfo()
+
+    def _onCorpusChanged(self) -> None:
+        self._resetResultsForCorpusSwitch()
         self._updateCorpusInfo()
 
     def _updateCorpusInfo(self):

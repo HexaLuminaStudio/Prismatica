@@ -43,13 +43,16 @@ TableView 拉伸修复策略:
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
+    QBoxLayout,
+    QFrame,
     QHBoxLayout,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -61,14 +64,18 @@ from qfluentwidgets import (
     ComboBox,
     CompactSpinBox,
     FluentIcon,
+    IconWidget,
     InfoBar,
     InfoBarIcon,
     InfoBarPosition,
+    isDarkTheme,
     LineEdit,
     PrimaryPushButton,
     PushButton,
+    qconfig,
+    ScrollArea,
     StrongBodyLabel,
-    TitleLabel,
+    SubtitleLabel,
     ToolButton,
     TableView,
 )
@@ -153,13 +160,25 @@ class _ConditionRow(QWidget):
     # UI 构造
     # ------------------------------------------------------------------
     def _initUi(self) -> None:
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self.setObjectName("hskConditionRow")
+        self.setAccessibleName("HSK 作文筛选条件")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 8, 0, 12)
         layout.setSpacing(8)
+
+        selectorRow = QHBoxLayout()
+        selectorRow.setContentsMargins(0, 0, 0, 0)
+        selectorRow.setSpacing(8)
 
         # 检索列下拉
         self.columnCombo = ComboBox(self)
-        self.columnCombo.setMinimumWidth(150)
+        self.columnCombo.setMinimumHeight(34)
+        self.columnCombo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.columnCombo.setAccessibleName("筛选字段")
+        self.columnCombo.setAccessibleDescription("选择要检索的语料字段")
         for col in self._availableColumns:
             self.columnCombo.addItem(col, userData=col)
         # 显式设默认列为"国籍"(创建 / 重建行时,保证输入区是 ComboBox)
@@ -169,20 +188,23 @@ class _ConditionRow(QWidget):
                     self.columnCombo.setCurrentIndex(i)
                     break
         self.columnCombo.currentIndexChanged.connect(self._onColumnChanged)
-        layout.addWidget(self.columnCombo)
-
-        # 输入区容器(包装动态输入控件,布局上保持位置稳定)
-        self._inputContainer = QWidget(self)
-        icL = QHBoxLayout(self._inputContainer)
-        icL.setContentsMargins(0, 0, 0, 0)
-        icL.setSpacing(8)
-        layout.addWidget(self._inputContainer, 1)
+        selectorRow.addWidget(self.columnCombo, 1)
 
         # 删除按钮
         self.removeBtn = ToolButton(FluentIcon.CLOSE, self)
         self.removeBtn.setToolTip("删除此筛选条件")
+        self.removeBtn.setAccessibleName("删除筛选条件")
         self.removeBtn.clicked.connect(self.removed)
-        layout.addWidget(self.removeBtn)
+        selectorRow.addWidget(self.removeBtn)
+        layout.addLayout(selectorRow)
+
+        # 输入区容器(包装动态输入控件,布局上保持位置稳定)
+        self._inputContainer = QWidget(self)
+        self._inputContainer.setObjectName("hskConditionInput")
+        icL = QVBoxLayout(self._inputContainer)
+        icL.setContentsMargins(0, 0, 0, 0)
+        icL.setSpacing(8)
+        layout.addWidget(self._inputContainer)
 
         # 显式触发一次,初始化输入区(避免依赖 currentIndexChanged 在初始化时是否触发)
         self._onColumnChanged(self.columnCombo.currentIndex())
@@ -248,6 +270,7 @@ class _ConditionRow(QWidget):
             self.keywordEdit = LineEdit(self._inputContainer)
             self.keywordEdit.setPlaceholderText("输入关键词(支持中英文)")
             self.keywordEdit.setClearButtonEnabled(True)
+            self.keywordEdit.setAccessibleName(f"{self._currentColumn}关键词")
             layout.addWidget(self.keywordEdit)
         elif colType == self.COL_TYPE_COUNTRY:
             # 国籍改为自由文本输入(模糊匹配)
@@ -259,30 +282,52 @@ class _ConditionRow(QWidget):
                 f"输入国家名 例如:{preview} ..."
             )
             self.keywordEdit.setClearButtonEnabled(True)
-            layout.addWidget(self.keywordEdit, 1)
+            self.keywordEdit.setAccessibleName("国籍关键词")
+            self.keywordEdit.setAccessibleDescription(
+                "输入国家中文名或其中一部分，使用模糊匹配"
+            )
+            layout.addWidget(self.keywordEdit)
         elif colType == self.COL_TYPE_CERT:
             self.certCombo = ComboBox(self._inputContainer)
-            self.certCombo.setMinimumWidth(160)
             self.certCombo.addItems(["A", "B", "C", "无"])
+            self.certCombo.setAccessibleName("证书级别")
             layout.addWidget(self.certCombo)
         elif colType == self.COL_TYPE_SCORE:
-            self.scoreNoMinCheck = CheckBox("无下界", self._inputContainer)
-            self.scoreNoMinCheck.setChecked(True)
-            layout.addWidget(self.scoreNoMinCheck)
-            self.scoreMinBox = CompactSpinBox(self._inputContainer)
+            rangeWidget = QWidget(self._inputContainer)
+            rangeLayout = QHBoxLayout(rangeWidget)
+            rangeLayout.setContentsMargins(0, 0, 0, 0)
+            rangeLayout.setSpacing(8)
+
+            self.scoreMinBox = CompactSpinBox(rangeWidget)
             self.scoreMinBox.setRange(0, 150)
             self.scoreMinBox.setValue(0)
-            layout.addWidget(self.scoreMinBox)
-            sep = BodyLabel("—", self._inputContainer)
-            sep.setStyleSheet("color: #666; font-weight: 600;")
-            layout.addWidget(sep)
-            self.scoreMaxBox = CompactSpinBox(self._inputContainer)
+            self.scoreMinBox.setAccessibleName(f"{self._currentColumn}最低分")
+            rangeLayout.addWidget(self.scoreMinBox, 1)
+
+            sep = BodyLabel("至", rangeWidget)
+            sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sep.setObjectName("hskRangeSeparator")
+            rangeLayout.addWidget(sep)
+
+            self.scoreMaxBox = CompactSpinBox(rangeWidget)
             self.scoreMaxBox.setRange(0, 150)
             self.scoreMaxBox.setValue(100)
-            layout.addWidget(self.scoreMaxBox)
-            self.scoreNoMaxCheck = CheckBox("无上界", self._inputContainer)
+            self.scoreMaxBox.setAccessibleName(f"{self._currentColumn}最高分")
+            rangeLayout.addWidget(self.scoreMaxBox, 1)
+            layout.addWidget(rangeWidget)
+
+            boundWidget = QWidget(self._inputContainer)
+            boundLayout = QHBoxLayout(boundWidget)
+            boundLayout.setContentsMargins(0, 0, 0, 0)
+            boundLayout.setSpacing(12)
+            self.scoreNoMinCheck = CheckBox("不限最低分", boundWidget)
+            self.scoreNoMinCheck.setChecked(True)
+            boundLayout.addWidget(self.scoreNoMinCheck)
+            self.scoreNoMaxCheck = CheckBox("不限最高分", boundWidget)
             self.scoreNoMaxCheck.setChecked(True)
-            layout.addWidget(self.scoreNoMaxCheck)
+            boundLayout.addWidget(self.scoreNoMaxCheck)
+            boundLayout.addStretch(1)
+            layout.addWidget(boundWidget)
             self.scoreNoMinCheck.stateChanged.connect(
                 lambda _s: self._updateScoreSpinEnabled()
             )
@@ -290,7 +335,6 @@ class _ConditionRow(QWidget):
                 lambda _s: self._updateScoreSpinEnabled()
             )
             self._updateScoreSpinEnabled()
-        layout.addStretch(1)
 
     def _updateScoreSpinEnabled(self) -> None:
         if self.scoreMinBox and self.scoreNoMinCheck:
@@ -379,6 +423,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         QWidget.__init__(self, parent)
         WorkerMixin.__init__(self)
         self.setObjectName("HskCorpusBrowser")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self._service = HskCorpusService.instance()
         # 强绑定:UI 始终只使用 BOUND_HSK_DB_PATH 这一个具体 db 文件,
@@ -408,7 +453,8 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._rowsContainer: Optional[QVBoxLayout] = None
 
         # 控件引用
-        self.addConditionBtn: Optional[ToolButton] = None
+        self.addConditionBtn: Optional[PushButton] = None
+        self.resetConditionsBtn: Optional[PushButton] = None
         self.searchBtn: Optional[PrimaryPushButton] = None
         self.statusLabel: Optional[StrongBodyLabel] = None
         self.elapsedLabel: Optional[CaptionLabel] = None
@@ -416,6 +462,14 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.model: Optional[HskCorpusModel] = None
         self._dbPathLabel: Optional[CaptionLabel] = None
         self._tableCard: Optional[CardWidget] = None
+        self._filterPanel: Optional[CardWidget] = None
+        self._workspaceLayout: Optional[QBoxLayout] = None
+        self._conditionScroll: Optional[ScrollArea] = None
+        self._resultStack: Optional[QStackedWidget] = None
+        self._emptyState: Optional[QWidget] = None
+        self._emptyStateTitle: Optional[StrongBodyLabel] = None
+        self._emptyStateCaption: Optional[CaptionLabel] = None
+        self._corpusCountLabel: Optional[CaptionLabel] = None
 
         # 主线程节流拉取 timer
         self._pullTimer = QTimer(self)
@@ -435,116 +489,215 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
     # ------------------------------------------------------------------
     def _initUi(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(28, 20, 28, 20)
-        root.setSpacing(12)
+        root.setContentsMargins(28, 22, 28, 24)
+        root.setSpacing(18)
 
         # ---------- 顶部标题区 ----------
-        headerCard = QWidget(self)
-        hLayout = QVBoxLayout(headerCard)
-        hLayout.setContentsMargins(0, 0, 0, 0)
-        hLayout.setSpacing(2)
+        headerLayout = QHBoxLayout()
+        headerLayout.setSpacing(12)
 
-        titleRow = QHBoxLayout()
-        titleRow.setSpacing(8)
-        titleIcon = ToolButton(FluentIcon.DICTIONARY, self)
-        titleIcon.setEnabled(False)
-        titleIcon.setFixedSize(28, 28)
-        titleRow.addWidget(titleIcon)
-        title = TitleLabel("HSK 作文语料检索", self)
-        titleRow.addWidget(title)
-        titleRow.addStretch(1)
-        hLayout.addLayout(titleRow)
+        titleIconHost = QFrame(self)
+        titleIconHost.setObjectName("hskTitleIconHost")
+        titleIconHost.setFixedSize(44, 44)
+        titleIconLayout = QVBoxLayout(titleIconHost)
+        titleIconLayout.setContentsMargins(11, 11, 11, 11)
+        titleIcon = IconWidget(FluentIcon.DICTIONARY, titleIconHost)
+        titleIcon.setFixedSize(22, 22)
+        titleIconLayout.addWidget(titleIcon)
+        headerLayout.addWidget(titleIconHost, 0, Qt.AlignmentFlag.AlignTop)
 
-        subtitle = CaptionLabel(
-            "多条件组合检索(AND) · 独立 SQLite + 全 NOCASE 索引 · 子线程流式",
+        headerText = QVBoxLayout()
+        headerText.setSpacing(3)
+        title = SubtitleLabel("HSK 作文检索", self)
+        title.setObjectName("hskPageTitle")
+        headerText.addWidget(title)
+        subtitle = BodyLabel(
+            "组合真实语料字段进行检索，右侧预览元数据并导出全部命中作文。",
             self,
         )
-        subtitle.setStyleSheet("color: #666;")
-        hLayout.addWidget(subtitle)
-
-        headerCard.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        root.addWidget(headerCard)
-
-        # ---------- 检索栏 ----------
-        searchCard = CardWidget(self)
-        sLayout = QVBoxLayout(searchCard)
-        sLayout.setContentsMargins(16, 14, 16, 14)
-        sLayout.setSpacing(10)
-        # 检索栏高度 Preferred,行数动态变化时不会撑大主窗
-        searchCard.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+        subtitle.setObjectName("hskPageSubtitle")
+        subtitle.setWordWrap(True)
+        subtitle.setMinimumWidth(0)
+        subtitle.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
-        searchCard.setMaximumHeight(380)
+        headerText.addWidget(subtitle)
+        headerLayout.addLayout(headerText, 1)
 
-        # 条件行容器
-        rowsBox = QWidget(searchCard)
+        self._corpusCountLabel = CaptionLabel("正在读取语料库…", self)
+        self._corpusCountLabel.setObjectName("hskCorpusCountChip")
+        headerLayout.addWidget(
+            self._corpusCountLabel, 0, Qt.AlignmentFlag.AlignTop
+        )
+        root.addLayout(headerLayout)
+
+        # ---------- 左侧筛选 / 右侧结果 ----------
+        workspace = QWidget(self)
+        workspace.setObjectName("hskWorkspace")
+        self._workspaceLayout = QBoxLayout(QBoxLayout.Direction.LeftToRight, workspace)
+        self._workspaceLayout.setContentsMargins(0, 0, 0, 0)
+        self._workspaceLayout.setSpacing(16)
+
+        self._filterPanel = CardWidget(workspace)
+        self._filterPanel.setObjectName("hskFilterPanel")
+        self._filterPanel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._filterPanel.setMinimumWidth(300)
+        self._filterPanel.setMaximumWidth(360)
+        self._filterPanel.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
+        )
+        filterLayout = QVBoxLayout(self._filterPanel)
+        filterLayout.setContentsMargins(18, 18, 18, 16)
+        filterLayout.setSpacing(12)
+
+        filterHeader = QHBoxLayout()
+        filterHeader.setSpacing(8)
+        filterTitle = StrongBodyLabel("检索条件", self._filterPanel)
+        filterTitle.setObjectName("hskSectionTitle")
+        filterHeader.addWidget(filterTitle)
+        filterHeader.addStretch(1)
+        self.resetConditionsBtn = PushButton("重置", self._filterPanel)
+        self.resetConditionsBtn.setAccessibleName("重置全部检索条件")
+        self.resetConditionsBtn.clicked.connect(self._resetConditions)
+        filterHeader.addWidget(self.resetConditionsBtn)
+        filterLayout.addLayout(filterHeader)
+
+        filterHint = CaptionLabel(
+            "可添加多个条件，所有条件之间使用 AND 关系。",
+            self._filterPanel,
+        )
+        filterHint.setObjectName("hskSectionCaption")
+        filterHint.setWordWrap(True)
+        filterLayout.addWidget(filterHint)
+
+        self._conditionScroll = ScrollArea(self._filterPanel)
+        self._conditionScroll.setObjectName("hskConditionScroll")
+        self._conditionScroll.setWidgetResizable(True)
+        self._conditionScroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._conditionScroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        rowsBox = QWidget(self._conditionScroll)
+        rowsBox.setObjectName("hskConditionList")
         rowsOuter = QVBoxLayout(rowsBox)
-        rowsOuter.setContentsMargins(0, 0, 0, 0)
-        rowsOuter.setSpacing(6)
+        rowsOuter.setContentsMargins(0, 0, 4, 0)
+        rowsOuter.setSpacing(0)
         self._rowsContainer = QVBoxLayout()
         self._rowsContainer.setContentsMargins(0, 0, 0, 0)
-        self._rowsContainer.setSpacing(6)
-        # 让条件行自适应行内输入区高度
+        self._rowsContainer.setSpacing(0)
         rowsOuter.addLayout(self._rowsContainer)
         rowsOuter.addStretch(1)
-        sLayout.addWidget(rowsBox)
+        self._conditionScroll.setWidget(rowsBox)
+        filterLayout.addWidget(self._conditionScroll, 1)
 
         # 默认添加一行(避免界面空白)
         self._addConditionRow()
 
-        # 操作行:添加条件 + 搜索
+        # 操作区固定在筛选面板底部
         actionRow = QHBoxLayout()
         actionRow.setSpacing(8)
-        self.addConditionBtn = ToolButton(FluentIcon.ADD, self)
+        self.addConditionBtn = PushButton(
+            "添加条件", self._filterPanel, FluentIcon.ADD
+        )
         self.addConditionBtn.setToolTip("添加一条筛选条件")
+        self.addConditionBtn.setAccessibleName("添加筛选条件")
         self.addConditionBtn.clicked.connect(self._onAddConditionClicked)
-        actionRow.addWidget(self.addConditionBtn)
-
-        addCaption = CaptionLabel("添加筛选条件(条件之间为 AND)", self)
-        addCaption.setStyleSheet("color: #888;")
-        actionRow.addWidget(addCaption)
-        actionRow.addStretch(1)
-
-        self.searchBtn = PrimaryPushButton("搜索", self, FluentIcon.SEARCH)
+        actionRow.addWidget(self.addConditionBtn, 1)
+        self.searchBtn = PrimaryPushButton(
+            "开始检索", self._filterPanel, FluentIcon.SEARCH
+        )
+        self.searchBtn.setAccessibleName("开始检索 HSK 作文语料")
         self.searchBtn.clicked.connect(self._onSearchClicked)
-        actionRow.addWidget(self.searchBtn)
+        actionRow.addWidget(self.searchBtn, 1)
+        filterLayout.addLayout(actionRow)
 
-        # PRD-005:导出所有命中作文(在「搜索」按钮右侧,默认禁用)
-        self.exportAllBtn = PrimaryPushButton(
-            "导出命中作文", self, FluentIcon.SAVE
-        )
-        self.exportAllBtn.setToolTip(
-            "按最近一次「搜索」命中的全部作文(不限 20 条),从本地镜像库提取原文"
-        )
-        self.exportAllBtn.setEnabled(False)
-        self.exportAllBtn.clicked.connect(self._onExportAllClicked)
-        actionRow.addSpacing(12)  # 视觉分隔
-        actionRow.addWidget(self.exportAllBtn)
-
-        sLayout.addLayout(actionRow)
-        root.addWidget(searchCard)
-
-        # ---------- 表格卡片(关键:固定高度) ----------
-        self._tableCard = CardWidget(self)
-        tLayout = QVBoxLayout(self._tableCard)
-        tLayout.setContentsMargins(12, 12, 12, 12)
-        tLayout.setSpacing(6)
+        # ---------- 结果面板 ----------
+        self._tableCard = CardWidget(workspace)
+        self._tableCard.setObjectName("hskResultPanel")
+        self._tableCard.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        resultLayout = QVBoxLayout(self._tableCard)
+        resultLayout.setContentsMargins(18, 18, 18, 14)
+        resultLayout.setSpacing(12)
         self._tableCard.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-        stateRow = QHBoxLayout()
-        stateRow.setSpacing(6)
-        self.statusLabel = StrongBodyLabel("就绪", self)
-        self.statusLabel.setStyleSheet("color: #00b09c; font-weight: 600;")
-        stateRow.addWidget(self.statusLabel)
-        stateRow.addStretch(1)
-        self.elapsedLabel = CaptionLabel("", self)
-        self.elapsedLabel.setStyleSheet("color: #888;")
-        stateRow.addWidget(self.elapsedLabel)
-        tLayout.addLayout(stateRow)
+        resultHeader = QHBoxLayout()
+        resultHeader.setSpacing(10)
+        resultText = QVBoxLayout()
+        resultText.setSpacing(2)
+        resultTitle = StrongBodyLabel("检索结果", self._tableCard)
+        resultTitle.setObjectName("hskSectionTitle")
+        resultText.addWidget(resultTitle)
+        self.elapsedLabel = CaptionLabel(
+            "结果表仅显示真实语料字段，最多预览前 20 条。",
+            self._tableCard,
+        )
+        self.elapsedLabel.setObjectName("hskSectionCaption")
+        self.elapsedLabel.setWordWrap(True)
+        self.elapsedLabel.setMinimumWidth(0)
+        self.elapsedLabel.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        resultText.addWidget(self.elapsedLabel)
+        resultHeader.addLayout(resultText, 1)
 
-        self.tableView = TableView(self)
+        self.statusLabel = StrongBodyLabel("就绪", self._tableCard)
+        self.statusLabel.setObjectName("hskStatusChip")
+        self.statusLabel.setProperty("state", "ok")
+        self.statusLabel.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        resultHeader.addWidget(self.statusLabel)
+
+        # PRD-005:导出最近一次搜索的全部命中作文
+        self.exportAllBtn = PushButton(
+            "导出全部命中", self._tableCard, FluentIcon.SAVE
+        )
+        self.exportAllBtn.setToolTip(
+            "按最近一次「搜索」命中的全部作文(不限 20 条),从本地镜像库提取原文"
+        )
+        self.exportAllBtn.setAccessibleName("导出全部命中作文")
+        self.exportAllBtn.setEnabled(False)
+        self.exportAllBtn.clicked.connect(self._onExportAllClicked)
+        resultHeader.addWidget(self.exportAllBtn)
+        resultLayout.addLayout(resultHeader)
+
+        self._resultStack = QStackedWidget(self._tableCard)
+        self._resultStack.setObjectName("hskResultStack")
+
+        self._emptyState = QWidget(self._resultStack)
+        self._emptyState.setObjectName("hskEmptyState")
+        emptyLayout = QVBoxLayout(self._emptyState)
+        emptyLayout.setContentsMargins(24, 24, 24, 24)
+        emptyLayout.setSpacing(8)
+        emptyLayout.addStretch(1)
+        emptyIcon = IconWidget(FluentIcon.SEARCH, self._emptyState)
+        emptyIcon.setFixedSize(38, 38)
+        emptyLayout.addWidget(emptyIcon, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._emptyStateTitle = StrongBodyLabel(
+            "设置条件后开始检索", self._emptyState
+        )
+        self._emptyStateTitle.setObjectName("hskEmptyTitle")
+        self._emptyStateTitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        emptyLayout.addWidget(self._emptyStateTitle)
+        self._emptyStateCaption = CaptionLabel(
+            "支持作文题目、国籍、证书级别和五项考试分数。",
+            self._emptyState,
+        )
+        self._emptyStateCaption.setObjectName("hskEmptyCaption")
+        self._emptyStateCaption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._emptyStateCaption.setWordWrap(True)
+        self._emptyStateCaption.setMinimumWidth(0)
+        self._emptyStateCaption.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        emptyLayout.addWidget(self._emptyStateCaption)
+        emptyLayout.addStretch(1)
+        self._resultStack.addWidget(self._emptyState)
+
+        self.tableView = TableView(self._resultStack)
+        self.tableView.setObjectName("hskResultTable")
         self.tableView.setSizeAdjustPolicy(
             QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
         )
@@ -552,19 +705,180 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.tableView.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
+        self.tableView.setWordWrap(False)
+        self.tableView.verticalHeader().setVisible(False)
+        self.tableView.verticalHeader().setDefaultSectionSize(40)
+        self.tableView.setAccessibleName("HSK 作文检索结果表")
 
         self.model = HskCorpusModel(self.tableView)
         self.model.setHeaderMap(self._service.columnHeaderMap())
         self.tableView.setModel(self.model)
-        tLayout.addWidget(self.tableView, 1)
+        self._resultStack.addWidget(self.tableView)
+        resultLayout.addWidget(self._resultStack, 1)
 
-        self._dbPathLabel = CaptionLabel("", self)
-        self._dbPathLabel.setStyleSheet("color: #999;")
+        self._dbPathLabel = CaptionLabel("", self._tableCard)
+        self._dbPathLabel.setObjectName("hskDatabaseMessage")
         self._dbPathLabel.setWordWrap(True)
         self._dbPathLabel.setMaximumHeight(36)
-        tLayout.addWidget(self._dbPathLabel)
+        resultLayout.addWidget(self._dbPathLabel)
 
-        root.addWidget(self._tableCard, 1)
+        self._workspaceLayout.addWidget(self._filterPanel)
+        self._workspaceLayout.addWidget(self._tableCard, 1)
+        self._workspaceLayout.setStretch(0, 0)
+        self._workspaceLayout.setStretch(1, 1)
+        root.addWidget(workspace, 1)
+
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+        self._applyTheme()
+        self._showEmptyState(
+            "设置条件后开始检索",
+            "支持作文题目、国籍、证书级别和五项考试分数。",
+        )
+        QTimer.singleShot(0, self._applyResponsiveLayout)
+
+    def _applyTheme(self) -> None:
+        """按当前主题应用本页面的层级色与状态色。"""
+        if isDarkTheme():
+            pageBackground = "#202020"
+            surface = "#252525"
+            surfaceMuted = "#2D2D2D"
+            border = "#3B3B3B"
+            text = "#F3F3F3"
+            muted = "#B7B7B7"
+            accentSurface = "rgba(0, 176, 156, 0.18)"
+            accentText = "#5DE0CF"
+            dangerSurface = "rgba(255, 99, 99, 0.16)"
+            dangerText = "#FF9A9A"
+        else:
+            pageBackground = "#F3F3F3"
+            surface = "#FFFFFF"
+            surfaceMuted = "#F5F8F8"
+            border = "#D9E2E2"
+            text = "#1F2A2A"
+            muted = "#5D6B6B"
+            accentSurface = "rgba(0, 176, 156, 0.12)"
+            accentText = "#007C70"
+            dangerSurface = "#FDEBEC"
+            dangerText = "#A4262C"
+
+        self.setStyleSheet(
+            f"""
+            QWidget#HskCorpusBrowser {{
+                background: {pageBackground};
+            }}
+            QWidget#hskWorkspace {{
+                background: transparent;
+            }}
+            QWidget#hskFilterPanel,
+            QWidget#hskResultPanel {{
+                background: {surface};
+                border: 1px solid {border};
+                border-radius: 12px;
+            }}
+            QFrame#hskTitleIconHost {{
+                background: {accentSurface};
+                border: none;
+                border-radius: 10px;
+            }}
+            QLabel#hskPageSubtitle,
+            QLabel#hskSectionCaption,
+            QLabel#hskEmptyCaption,
+            QLabel#hskDatabaseMessage,
+            QLabel#hskRangeSeparator {{
+                color: {muted};
+            }}
+            QLabel#hskCorpusCountChip {{
+                color: {accentText};
+                background: {accentSurface};
+                border-radius: 6px;
+                padding: 6px 10px;
+            }}
+            QWidget#hskConditionList,
+            QScrollArea#hskConditionScroll,
+            QScrollArea#hskConditionScroll > QWidget > QWidget {{
+                background: transparent;
+                border: none;
+            }}
+            QWidget#hskConditionRow {{
+                background: transparent;
+                border: none;
+                border-bottom: 1px solid {border};
+            }}
+            QWidget#hskConditionInput {{
+                background: transparent;
+            }}
+            QStackedWidget#hskResultStack {{
+                background: transparent;
+                border: none;
+            }}
+            QWidget#hskEmptyState {{
+                background: {surfaceMuted};
+                border: 1px solid {border};
+                border-radius: 10px;
+            }}
+            QLabel#hskEmptyTitle {{
+                color: {text};
+            }}
+            QLabel#hskStatusChip {{
+                color: {accentText};
+                background: {accentSurface};
+                border-radius: 6px;
+                padding: 5px 9px;
+            }}
+            QLabel#hskStatusChip[state="running"] {{
+                color: {muted};
+                background: {surfaceMuted};
+            }}
+            QLabel#hskStatusChip[state="bad"] {{
+                color: {dangerText};
+                background: {dangerSurface};
+            }}
+            QTableView#hskResultTable {{
+                background: {surface};
+                alternate-background-color: {surfaceMuted};
+                border: 1px solid {border};
+                border-radius: 10px;
+                gridline-color: {border};
+            }}
+            """
+        )
+
+    def _applyResponsiveLayout(self) -> None:
+        """在较窄窗口中把筛选区移到结果区上方。"""
+        if self._workspaceLayout is None or self._filterPanel is None:
+            return
+        isCompact = self.width() < 980
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if isCompact
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self._workspaceLayout.direction() != direction:
+            self._workspaceLayout.setDirection(direction)
+        if isCompact:
+            self._filterPanel.setMinimumWidth(0)
+            self._filterPanel.setMaximumWidth(16777215)
+            self._filterPanel.setMaximumHeight(360)
+        else:
+            self._filterPanel.setMinimumWidth(300)
+            self._filterPanel.setMaximumWidth(360)
+            self._filterPanel.setMaximumHeight(16777215)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._applyResponsiveLayout()
+
+    def _showEmptyState(self, title: str, caption: str) -> None:
+        if self._emptyStateTitle is not None:
+            self._emptyStateTitle.setText(title)
+        if self._emptyStateCaption is not None:
+            self._emptyStateCaption.setText(caption)
+        if self._resultStack is not None and self._emptyState is not None:
+            self._resultStack.setCurrentWidget(self._emptyState)
+
+    def _showTableState(self) -> None:
+        if self._resultStack is not None and self.tableView is not None:
+            self._resultStack.setCurrentWidget(self.tableView)
 
     # ------------------------------------------------------------------
     # 条件行管理
@@ -592,6 +906,47 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
 
     def _onAddConditionClicked(self) -> None:
         self._addConditionRow()
+        if self._conditionScroll is not None:
+            QTimer.singleShot(
+                0,
+                lambda: self._conditionScroll.verticalScrollBar().setValue(
+                    self._conditionScroll.verticalScrollBar().maximum()
+                ),
+            )
+
+    def _clearConditionRows(self) -> None:
+        """清空条件行，不触发“至少保留一行”的自动补行逻辑。"""
+        for row in list(self._conditionRows):
+            if self._rowsContainer is not None:
+                self._rowsContainer.removeWidget(row)
+            row.setParent(None)
+            row.deleteLater()
+        self._conditionRows.clear()
+
+    def _resetConditions(self) -> None:
+        """恢复初始检索状态并取消当前后台检索。"""
+        self.disposeWorker(waitMs=0)
+        self._pullTimer.stop()
+        self._currentWorker = None
+        self._lastSnapshotTotal = 0
+        self._matchTotal = 0
+        self._lastConditions = []
+        self._lastSearchFinished = False
+        self._clearConditionRows()
+        self._addConditionRow()
+        if self.model is not None:
+            self.model.reset()
+        if hasattr(self, "exportAllBtn"):
+            self.exportAllBtn.setEnabled(False)
+        if self.elapsedLabel is not None:
+            self.elapsedLabel.setText(
+                "结果表仅显示真实语料字段，最多预览前 20 条。"
+            )
+        self._showEmptyState(
+            "设置条件后开始检索",
+            "支持作文题目、国籍、证书级别和五项考试分数。",
+        )
+        self._updateDbStatus()
 
     def _collectConditions(self) -> List[Dict]:
         """收集所有非空条件,组合成 conditions 列表(供 service/worker 使用)。"""
@@ -611,10 +966,16 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         # ---- 路径不存在 → 通用提示,不向用户暴露文件位置 ----
         if not self._dbPath.exists():
             self._setStatusBad("语料库未就绪")
+            if self._corpusCountLabel:
+                self._corpusCountLabel.setText("语料库未就绪")
             if self.searchBtn:
                 self.searchBtn.setEnabled(False)
             if self._dbPathLabel:
-                self._dbPathLabel.setText("⚠ 语料库文件缺失,请联系管理员补全数据。")
+                self._dbPathLabel.setText("语料库文件缺失，请联系管理员补全数据。")
+            self._showEmptyState(
+                "语料库尚未就绪",
+                "补全本地 HSK 语料库数据后即可开始检索。",
+            )
             InfoBar.error(
                 title="语料库未找到",
                 content="语料库文件缺失,请联系管理员补全数据后重试。",
@@ -627,47 +988,58 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         n = self._service.rowCount()
         if n == 0:
             self._setStatusBad("语料库暂无数据")
+            if self._corpusCountLabel:
+                self._corpusCountLabel.setText("暂无语料")
             if self.searchBtn:
                 self.searchBtn.setEnabled(False)
             if self._dbPathLabel:
-                self._dbPathLabel.setText("⚠ 语料库为空,请等待数据导入完成后重试。")
+                self._dbPathLabel.setText("语料库为空，请等待数据导入完成后重试。")
+            self._showEmptyState(
+                "语料库暂无数据",
+                "数据导入完成后，本页面会自动恢复检索能力。",
+            )
             return
         # ---- schema 校验(列是否齐全)----
         cols = self._service.availableColumns()
         if not cols:
             self._setStatusBad("语料库结构异常")
+            if self._corpusCountLabel:
+                self._corpusCountLabel.setText("结构异常")
             if self.searchBtn:
                 self.searchBtn.setEnabled(False)
             return
         # ---- 一切正常 ----
         self._setStatusOk(f"已加载 {n:,} 条语料")
+        if self._corpusCountLabel:
+            self._corpusCountLabel.setText(f"共 {n:,} 条作文")
         if self.searchBtn:
             self.searchBtn.setEnabled(True)
         if self._dbPathLabel:
             self._dbPathLabel.setText("")
 
+    def _setStatus(self, text: str, state: str) -> None:
+        if not self.statusLabel:
+            return
+        self.statusLabel.setText(text)
+        self.statusLabel.setProperty("state", state)
+        self.statusLabel.style().unpolish(self.statusLabel)
+        self.statusLabel.style().polish(self.statusLabel)
+
     def _setStatusOk(self, text: str) -> None:
-        if self.statusLabel:
-            self.statusLabel.setText(text)
-            self.statusLabel.setStyleSheet("color: #00b09c; font-weight: 600;")
+        self._setStatus(text, "ok")
 
     def _setStatusBad(self, text: str) -> None:
-        if self.statusLabel:
-            self.statusLabel.setText(text)
-            self.statusLabel.setStyleSheet("color: #c75050; font-weight: 600;")
+        self._setStatus(text, "bad")
 
     def _setStatusRunning(self, text: str) -> None:
-        if self.statusLabel:
-            self.statusLabel.setText(text)
-            self.statusLabel.setStyleSheet("color: #888; font-weight: 500;")
+        self._setStatus(text, "running")
 
     # ------------------------------------------------------------------
     # Worker 事件回调
     # ------------------------------------------------------------------
     def _onSchemaReady(self) -> None:
         # 重建所有行(列定义可能变化)
-        for r in list(self._conditionRows):
-            self._removeConditionRow(r)
+        self._clearConditionRows()
         self._addConditionRow()
         self._updateDbStatus()
 
@@ -725,17 +1097,19 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         )
         self.model.setLastQuery("(多条件)", queryDesc)
         self._searchStartTs = time.perf_counter()
-        self._setStatusRunning(f"正在检索:{queryDesc}")
+        self._setStatusRunning("检索中")
         if self.elapsedLabel:
-            self.elapsedLabel.setText("")
+            self.elapsedLabel.setText(f"已应用 {len(conditions)} 个筛选条件")
+        self._showEmptyState(
+            "正在检索语料",
+            "正在组合筛选条件并读取本地 HSK 语料库，请稍候。",
+        )
 
         # 先拿真实总命中数(< 50ms,可主线程同步)
         try:
             self._matchTotal = int(self._service.countByConditions(conditions) or 0)
             if self._matchTotal > 0 and self.statusLabel:
-                self.statusLabel.setText(
-                    f"命中 {self._matchTotal:,} 条 · 仅显示前 {_DISPLAY_LIMIT} 条"
-                )
+                self._setStatusRunning(f"命中 {self._matchTotal:,} 条")
         except Exception as e:
             logger.warning(f"[HskCorpusBrowser] countByConditions 失败: {e}")
 
@@ -778,20 +1152,15 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             if self.model:
                 self.model.setAllRows(rows[:_DISPLAY_LIMIT], total)
             self._lastSnapshotTotal = total
+            if total > 0:
+                self._showTableState()
             if total > self._matchTotal:
                 self._matchTotal = total
             if self.statusLabel:
-                displayHint = (
-                    f" · 仅显示前 {_DISPLAY_LIMIT} 条"
-                    if self._matchTotal > _DISPLAY_LIMIT
-                    else ""
-                )
                 if finished:
-                    self._setStatusOk(f"命中 {self._matchTotal:,} 条{displayHint}")
+                    self._setStatusOk(f"命中 {self._matchTotal:,} 条")
                 else:
-                    self.statusLabel.setText(
-                        f"已加载 {self._matchTotal:,} 条(检索中){displayHint}"
-                    )
+                    self._setStatusRunning(f"已加载 {total:,} 条")
 
         if finished:
             self._pullTimer.stop()
@@ -812,15 +1181,19 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             totalInt = 0
         if totalInt > self._matchTotal:
             self._matchTotal = totalInt
-        displayHint = (
-            f" · 仅显示前 {_DISPLAY_LIMIT} 条"
-            if self._matchTotal > _DISPLAY_LIMIT
-            else ""
-        )
-        self._setStatusOk(f"命中 {self._matchTotal:,} 条{displayHint}")
+        self._setStatusOk(f"命中 {self._matchTotal:,} 条")
         if self.elapsedLabel:
+            previewCount = min(self._matchTotal, _DISPLAY_LIMIT)
             self.elapsedLabel.setText(
                 f"耗时 {elapsedMs:.0f} ms · 共 {self._matchTotal:,} 条"
+                f" · 当前预览 {previewCount:,} 条"
+            )
+        if self._matchTotal > 0:
+            self._showTableState()
+        else:
+            self._showEmptyState(
+                "未找到匹配语料",
+                "请减少筛选条件，或放宽关键词与分数范围后重试。",
             )
         if self.tableView and self.model and self.model.columnCount() > 0:
             self.tableView.resizeColumnsToContents()
@@ -845,7 +1218,11 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         logger.error(
             f"[HskCorpusBrowser] 检索失败, elapsedMs={elapsedMs:.1f}: {errMsg}"
         )
-        self._setStatusBad(f"检索失败:{errMsg}")
+        self._setStatusBad("检索失败")
+        self._showEmptyState(
+            "检索未完成",
+            "请检查语料库状态后重试；若问题持续出现，请联系管理员。",
+        )
         InfoBar.error(
             title="检索失败",
             content=errMsg,

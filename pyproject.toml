@@ -39,9 +39,9 @@ url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
 
 [tool.uv.sources]
-pyside6-fluent-widgets-pro = { path = "pyside6_fluent_widgets_pro-0.12.0-cp311-cp311-win_amd64.whl" }
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
+pyside6-fluent-widgets-pro = { path = "pyside6_fluent_widgets_pro-0.13.0-cp311-cp311-win_amd64.whl" }
 
 [tool.pytest.ini_options]
 minversion = "8.0"

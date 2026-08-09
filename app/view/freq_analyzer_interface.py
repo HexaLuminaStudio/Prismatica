@@ -28,49 +28,12 @@ import json
 import os
 import sys
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
 
 import pandas as pd
-
-# 内置模块: presets 目录位于 app/view/widgets/freq_analyzer/presets
-# —————————————————————————————————————————————————————————————————————
-# 预设目录采用"双目录"策略:
-#   1. BUILTIN_PRESETS_DIR  (只读,内置): 项目源码随包发布的预设模板
-#   2. USER_PRESETS_DIR     (可写,用户): config/clean_presets/
-#        - 用户通过"导入预设"按钮添加的预设文件存放在这里
-#        - 与语料库、清洗缓存同级,均为用户私有数据
-#        - 即使更新软件版本,用户预设也不会被覆盖
-# UI 下拉框会同时扫描两个目录,并以"(内置)" / "(自定义)" 前缀区分
-# —————————————————————————————————————————————————————————————————————
-from app.core.utils.setting import CONFIG_FOLDER  # noqa: E402
-
-_moduleDir = os.path.dirname(os.path.abspath(__file__))
-_widgetsDir = os.path.join(_moduleDir, "widgets", "freq_analyzer")
-
-# 内置预设目录(随包发布,只读)
-BUILTIN_PRESETS_DIR = os.path.join(_widgetsDir, "presets")
-
-# 用户预设目录(config/clean_presets,可写)
-USER_PRESETS_DIR = str(CONFIG_FOLDER / "clean_presets")
-
-# 向后兼容(保留 PRESETS_DIR 旧名,指向内置目录)
-PRESETS_DIR = BUILTIN_PRESETS_DIR
-
-
-def getAllPresetDirs() -> List[Tuple[str, bool]]:
-    """返回所有预设目录
-
-    Returns:
-        List[Tuple[str, bool]]: (目录路径, 是否内置) 元组列表
-    """
-    return [
-        (BUILTIN_PRESETS_DIR, True),  # 内置(只读)
-        (USER_PRESETS_DIR, False),  # 用户(可写)
-    ]
-
 
 from app.view.widgets.freq_analyzer.freq_analyzer_widget import (
     JIEBA_AVAILABLE,  # noqa: F401  兼容性 re-export
@@ -88,6 +51,7 @@ from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QSizePolicy,
@@ -109,7 +73,6 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     ScrollArea,
-    SegmentedWidget,
     SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
@@ -403,6 +366,9 @@ from app.view.widgets.freq_analyzer.construction_widget import ConstructionWidge
 from app.view.widgets.freq_analyzer.word_cloud_widget import WordCloudWidget
 from app.view.widgets.freq_analyzer.dependency_widget import DependencyWidget
 from app.view.widgets.freq_analyzer.keyword_list_widget import KeywordListWidget
+from app.view.widgets.freq_analyzer.analysis_desktop_widget import (
+    AnalysisDesktopWidget,
+)
 
 
 class FreqAnalyzerInterface(QWidget):
@@ -415,7 +381,7 @@ class FreqAnalyzerInterface(QWidget):
         - 语境分析 KWIC（ConcordanceWidget）
         - 共现网络图（NetworkWidget）
 
-    通过 SegmentedWidget 在面板之间切换。
+    通过功能桌面卡片进入各分析面板，面板内部功能保持独立。
 
     多语料库支持:
         - self.corpusManager: 全局 CorpusManager(单例,QObject)
@@ -476,33 +442,50 @@ class FreqAnalyzerInterface(QWidget):
 
     def _buildUi(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(8)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # 顶部导航行:中间 SegmentedWidget + 右侧「?」帮助按钮
-        self._currentRouteKey = "corpusImport"  # 默认面板 key
-        navRow = QHBoxLayout()
-        navRow.setContentsMargins(0, 0, 0, 0)
-        navRow.setSpacing(12)
+        self._currentRouteKey = "desktop"
+        self.desktop = AnalysisDesktopWidget(
+            self,
+            corpusStore=self.corpusStore,
+            corpusManager=self.corpusManager,
+        )
+        self.desktop.moduleRequested.connect(self.openPanel)
+        outer.addWidget(self.desktop, 1)
 
-        # 分段控件(居中、可伸展)
-        self.segmented = SegmentedWidget(self)
-        navRow.addWidget(self.segmented, 1, Qt.AlignmentFlag.AlignCenter)
+        # 子面板外壳只提供返回入口与当前页面标题；原有子面板 UI 不改动。
+        self._panelShell = QWidget(self)
+        shellLayout = QVBoxLayout(self._panelShell)
+        shellLayout.setContentsMargins(16, 12, 16, 12)
+        shellLayout.setSpacing(10)
 
-        # 帮助按钮(右侧):显示当前面板的术语解释
-        self.helpButton = ToolButton(FluentIcon.QUESTION, self)
-        self.helpButton.setToolTip("查看当前子页面的术语解释")
-        self.helpButton.setFixedSize(28, 28)
+        header = QFrame(self._panelShell)
+        header.setObjectName("analysisPanelHeader")
+        headerLayout = QHBoxLayout(header)
+        headerLayout.setContentsMargins(8, 6, 8, 6)
+        headerLayout.setSpacing(10)
+        self.backToDesktopButton = PushButton("功能桌面", header)
+        self.backToDesktopButton.setIcon(FluentIcon.LEFT_ARROW)
+        self.backToDesktopButton.setToolTip("返回语料分析功能桌面")
+        self.backToDesktopButton.setMinimumHeight(34)
+        self.backToDesktopButton.clicked.connect(self.showDesktop)
+        headerLayout.addWidget(self.backToDesktopButton)
+        self.panelTitleLabel = SubtitleLabel("", header)
+        headerLayout.addWidget(self.panelTitleLabel)
+        headerLayout.addStretch(1)
+        self.helpButton = ToolButton(FluentIcon.QUESTION, header)
+        self.helpButton.setToolTip("查看当前页面的术语解释")
+        self.helpButton.setFixedSize(32, 32)
         self.helpButton.clicked.connect(self._onHelpClicked)
-        navRow.addWidget(self.helpButton, 0, Qt.AlignmentFlag.AlignVCenter)
+        headerLayout.addWidget(self.helpButton, 0, Qt.AlignmentFlag.AlignVCenter)
+        shellLayout.addWidget(header)
 
-        outer.addLayout(navRow)
-
-        # 面板容器
-        panelContainer = QWidget(self)
+        panelContainer = QWidget(self._panelShell)
         self._panelLayout = QVBoxLayout(panelContainer)
         self._panelLayout.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(panelContainer, 1)
+        shellLayout.addWidget(panelContainer, 1)
+        outer.addWidget(self._panelShell, 1)
 
         # 实例化六个子面板，全部注入共享 CorpusStore
         self._panels = {
@@ -544,37 +527,54 @@ class FreqAnalyzerInterface(QWidget):
             self._panelLayout.addWidget(widget)
             widget.hide()
 
-        self.segmented.addItem("corpusImport", "语料导入与清洗")
-        self.segmented.addItem("freqAnalyzer", "词频分析")
-        self.segmented.addItem("wordAnalysis", "词语分析")
-        self.segmented.addItem("keywordList", "主题词分析")
-        self.segmented.addItem("concordance", "语境分析")
-        self.segmented.addItem("sentiment", "情感分析")
-        self.segmented.addItem("collocation", "搭配分析")
-        self.segmented.addItem("construction", "构式搭配强度")
-        self.segmented.addItem("wordCloud", "词语云图")
-        self.segmented.addItem("network", "共现网络图")
-        self.segmented.addItem("dependency", "句法依存图")
-        self.segmented.setCurrentItem("corpusImport")
-        self._panels["corpusImport"].show()
+        self._panelTitles = {
+            "corpusImport": "语料导入与清洗",
+            "freqAnalyzer": "词频分析",
+            "wordAnalysis": "词语分析",
+            "keywordList": "主题词分析",
+            "concordance": "语境分析",
+            "sentiment": "情感分析",
+            "collocation": "搭配分析",
+            "construction": "构式搭配强度",
+            "wordCloud": "词语云图",
+            "network": "共现网络图",
+            "dependency": "句法依存图",
+        }
+        self._panels["corpusImport"].finishedRequested.connect(self.showDesktop)
+        self._panelShell.hide()
 
-        self.segmented.currentItemChanged.connect(self._onItemChanged)
+    def showDesktop(self) -> None:
+        """返回功能桌面，并刷新真实语料状态。"""
+        self._currentRouteKey = "desktop"
+        for panel in self._panels.values():
+            panel.hide()
+        self._panelShell.hide()
+        self.desktop.refresh()
+        self.desktop.show()
 
-    def _onItemChanged(self, routeKey: str) -> None:
-        # 记录当前面板 key(供 _onHelpClicked 使用)
+    def openPanel(self, routeKey: str) -> None:
+        """从功能桌面打开一个现有分析面板。"""
+        if routeKey not in self._panels:
+            logger.warning(f"[FreqAnalyzerInterface] 未知分析面板: {routeKey}")
+            return
         self._currentRouteKey = routeKey
+        self.desktop.hide()
+        self.panelTitleLabel.setText(self._panelTitles.get(routeKey, "语料分析"))
+        self._panelShell.show()
 
         for key, panel in self._panels.items():
             if key == routeKey:
                 panel.show()
-                # 当切换到情感分析面板时,刷新模型状态显示
                 if hasattr(panel, "_refreshModelStatus"):
                     panel._refreshModelStatus()
-                # 当切换到词频分析面板时,刷新后端下拉框(可能新后端已加载完成)
                 if hasattr(panel, "_refreshBackendCombo"):
                     panel._refreshBackendCombo()
             else:
                 panel.hide()
+
+    def _onItemChanged(self, routeKey: str) -> None:
+        """兼容旧调用：统一转发到新的卡片路由。"""
+        self.openPanel(routeKey)
 
     def _onHelpClicked(self):
         """点击帮助按钮:弹出当前子面板的术语解释弹窗"""
@@ -615,10 +615,7 @@ class FreqAnalyzerInterface(QWidget):
                     self.cleanCoordinator.cancelPending()
             except Exception:
                 pass
-            try:
-                self.corpusStore.close()
-            except Exception:
-                pass
+            oldStore = self.corpusStore
             from app.core.utils.data_paths import DEFAULT_CORPUS_FILE
 
             self.corpusStore = CorpusStore(dbPath=str(DEFAULT_CORPUS_FILE), parent=self)
@@ -628,6 +625,7 @@ class FreqAnalyzerInterface(QWidget):
                     if hasattr(self.cleanCoordinator, "setCorpusStore"):
                         self.cleanCoordinator.setCorpusStore(self.corpusStore)
                     else:
+                        oldStore.close()
                         self.cleanCoordinator._store = self.corpusStore
                         self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
                             self.corpusStore._cleanRule
@@ -643,6 +641,7 @@ class FreqAnalyzerInterface(QWidget):
                             f"[FreqAnalyzerInterface] "
                             f"重绑 {type(panel).__name__} 失败: {e}"
                         )
+            self.desktop.setCorpusStore(self.corpusStore)
             return
 
         # 0) 取消在途的清洗任务(防止脏数据跨语料库)
@@ -653,16 +652,11 @@ class FreqAnalyzerInterface(QWidget):
         except Exception:
             pass
 
-        # 1) 关闭旧 store
-        try:
-            self.corpusStore.close()
-        except Exception as e:
-            logger.warning(f"[FreqAnalyzerInterface] 关闭旧 store 失败: {e}")
-
-        # 2) 创建新 store
+        # 1) 创建新 store；旧 store 由 coordinator 在后台任务安全退出后关闭。
+        oldStore = self.corpusStore
         self.corpusStore = CorpusStore(dbPath=newActive.dbPath, parent=self)
 
-        # 2.5) 重建清洗协调器,指向新 store
+        # 2) 重绑清洗协调器,指向新 store
         # P0-fix:不要直接访问 _store / _currentHash 私有成员,改用公开 setter
         try:
             if hasattr(self.cleanCoordinator, "setCorpusStore"):
@@ -670,6 +664,7 @@ class FreqAnalyzerInterface(QWidget):
             else:
                 # 兼容旧版本
                 self.cleanCoordinator.cancelPending()
+                oldStore.close()
                 self.cleanCoordinator._store = self.corpusStore
                 self.cleanCoordinator._currentHash = self.corpusStore._ruleHash(
                     self.corpusStore._cleanRule
@@ -686,6 +681,7 @@ class FreqAnalyzerInterface(QWidget):
                     logger.error(
                         f"[FreqAnalyzerInterface] 重绑 {type(panel).__name__} 失败: {e}"
                     )
+        self.desktop.setCorpusStore(self.corpusStore)
 
         # 4) 通知 manager 统计已变更(用于 UI 列表展示)
         self.corpusManager.updateStats(
@@ -701,11 +697,14 @@ class FreqAnalyzerInterface(QWidget):
 
     def _onRegistryChanged(self):
         """注册表变化(新建/删除/重命名) - 各面板无需重建,switcher UI 自动刷新"""
-        pass  # CorpusSwitcherWidget 已订阅 registryChanged
+        self.desktop.refresh()
 
     def closeEvent(self, event):  # noqa: D401
         try:
-            self.corpusStore.close()
+            self.cleanCoordinator.shutdown()
         except Exception:
-            pass
+            try:
+                self.corpusStore.close()
+            except Exception:
+                pass
         super().closeEvent(event)

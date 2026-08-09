@@ -280,6 +280,7 @@ class CorpusStatusCard(CardWidget):
     def __init__(self, parent=None, corpusStore: Optional["QObject"] = None):
         super().__init__(parent)
         self._corpusStore: Optional[QObject] = corpusStore
+        self._boundCorpusStore: Optional[QObject] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -324,9 +325,19 @@ class CorpusStatusCard(CardWidget):
         self._refresh()
 
     def _bindStore(self, store: "QObject") -> None:
+        if self._boundCorpusStore is store:
+            return
+        oldStore = self._boundCorpusStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._refresh)
+                except (RuntimeError, TypeError):
+                    pass
         try:
             store.textsChanged.connect(self._refresh)
             store.cleanRuleChanged.connect(self._refresh)
+            self._boundCorpusStore = store
         except AttributeError:
             pass
 
@@ -459,6 +470,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         from app.view.freq_analyzer_interface import CorpusStore  # 局部避免循环
 
         self._corpusStore: Optional[CorpusStore] = corpusStore
+        self._boundCorpusStore: Optional[CorpusStore] = None
         self.fileToText: Dict[str, str] = {}  # 本地缓存（来自 store.effectiveTexts）
         self._worker: Optional[ConcordanceWorker] = None
         self._currentResult: Optional[ConcordanceResult] = None
@@ -481,19 +493,28 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # ------------------------------------------------------------------
     def setCorpusStore(self, store) -> None:
         if self._corpusStore is store:
+            self._onCorpusChanged()
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store) -> None:
+        if self._boundCorpusStore is store:
+            return
+        oldStore = self._boundCorpusStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._onCorpusChanged)
+                except (RuntimeError, TypeError):
+                    pass
         store.textsChanged.connect(self._onCorpusChanged)
         store.cleanRuleChanged.connect(self._onCorpusChanged)
+        self._boundCorpusStore = store
 
     def _onCorpusChanged(self) -> None:
-        # 重新从 store 拉取最新清洗后文本
-        if self._corpusStore is not None:
-            self.fileToText = self._corpusStore.effectiveTexts()
+        self.fileToText = {}
         # 语料/规则变更 → 清空当前 KWIC 结果与二次检索历史
         self._currentResult = None
         if hasattr(self, "resultTable"):
@@ -508,6 +529,23 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             self._viewPivot.setCurrentItem("table")
         # _updateFileCount 已废弃：原用于更新页面底部 fileCountLabel，
         # 该 UI 元素已被顶部 CorpusStatusCard 替代。
+
+    def _reloadEffectiveTexts(self) -> bool:
+        if self._corpusStore is None:
+            return True
+        try:
+            coverage = self._corpusStore.cacheCoverage()
+            if self._corpusStore.cleanEnabled and coverage["coverage"] < 1.0:
+                _showInfoBar(
+                    "info", "语料准备中", "清洗缓存完成后即可检索", self
+                )
+                return False
+            self.fileToText = self._corpusStore.effectiveTextsFromCacheOnly()
+            return True
+        except Exception as exc:
+            logger.exception(f"[ConcordanceWidget] 读取语料失败: {exc}")
+            _showInfoBar("error", "读取失败", str(exc), self)
+            return False
 
     # ------------------------------------------------------------------
     # UI 构建
@@ -926,6 +964,8 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         word = self.searchEdit.text().strip()
         if not word:
             _showInfoBar("warning", "提示", "请输入节点词", self, duration=2000)
+            return
+        if not self._reloadEffectiveTexts():
             return
         if not self.fileToText:
             _showInfoBar(

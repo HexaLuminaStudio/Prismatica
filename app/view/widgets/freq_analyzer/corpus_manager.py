@@ -22,7 +22,7 @@ import json
 import os
 import sqlite3
 import threading
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -336,12 +336,7 @@ class CorpusManager(QObject):
         self._activeId: int = 0
         self._lastId: int = 0  # 「上次」语料库(关闭前正在使用)
         self._loadState()
-        if self._activeId == 0:
-            # 默认指向第一条
-            items = self._registry.list()
-            if items:
-                self._activeId = items[0].id
-                self._lastId = items[0].id
+        self._normalizeState()
 
     # ---------------- 状态持久化 ----------------
     def _loadState(self) -> None:
@@ -364,6 +359,26 @@ class CorpusManager(QObject):
             )
         except Exception as e:
             logger.error(f"[CorpusManager] 保存状态失败: {e}")
+
+    def _normalizeState(self) -> None:
+        """清理已删除语料库留下的活动/上次 id，并持久化有效回退项。"""
+        items = self._registry.list()
+        validIds = {item.id for item in items}
+        fallbackId = items[0].id if items else 0
+        normalizedActiveId = (
+            self._activeId if self._activeId in validIds else fallbackId
+        )
+        normalizedLastId = (
+            self._lastId if self._lastId in validIds else normalizedActiveId
+        )
+        if (
+            normalizedActiveId == self._activeId
+            and normalizedLastId == self._lastId
+        ):
+            return
+        self._activeId = normalizedActiveId
+        self._lastId = normalizedLastId
+        self._saveState()
 
     # ---------------- 访问器 ----------------
     @property
@@ -410,6 +425,10 @@ class CorpusManager(QObject):
         """切换回「上次」语料库(用户主动要求)"""
         if self._lastId <= 0 or self._lastId == self._activeId:
             return self.activeCorpus()
+        if self._registry.getById(self._lastId) is None:
+            self._lastId = self._activeId
+            self._saveState()
+            return self.activeCorpus()
         return self.setActive(self._lastId)
 
     # ---------------- CRUD 封装 ----------------
@@ -435,14 +454,18 @@ class CorpusManager(QObject):
         wasActive = self._activeId == corpusId
         self._registry.delete(corpusId, deleteDbFile=deleteDbFile)
         if wasActive:
-            # 自动切换到列表中的第一个
             remaining = self._registry.list()
             if remaining:
-                self.setActive(remaining[0].id)
+                self._activeId = remaining[0].id
+                self._lastId = self._activeId
             else:
                 self._activeId = 0
-                self._saveState()
-                self.activeCorpusChanged.emit(0)
+                self._lastId = 0
+            self._saveState()
+            self.activeCorpusChanged.emit(self._activeId)
+        elif self._lastId == corpusId:
+            self._lastId = self._activeId
+            self._saveState()
         self.registryChanged.emit()
         return True
 

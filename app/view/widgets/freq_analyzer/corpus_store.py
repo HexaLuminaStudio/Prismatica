@@ -323,10 +323,19 @@ class CorpusStore(QObject):
     # ---------------- 文本变更 ----------------
     def addRawText(self, fileName: str, text: str) -> None:
         """添加或替换单个文件语料。"""
-        if not fileName:
+        self.addRawTexts({fileName: text})
+
+    def addRawTexts(self, texts: Dict[str, str]) -> None:
+        """在单个事务中批量添加或替换语料，并只广播一次变更。"""
+        rows = [
+            (fileName, text or "", len(text or ""))
+            for fileName, text in texts.items()
+            if fileName
+        ]
+        if not rows:
             return
         with self._lock:
-            self._conn.execute(
+            self._conn.executemany(
                 """
                 INSERT INTO documents(file_name, raw_text, char_count)
                 VALUES(?, ?, ?)
@@ -335,12 +344,16 @@ class CorpusStore(QObject):
                     char_count = excluded.char_count,
                     imported_at = CURRENT_TIMESTAMP
                 """,
-                (fileName, text or "", len(text or "")),
+                rows,
             )
-            # 失效该文件的清洗缓存(rule hash 不匹配)
-            self._conn.execute(
+            fileNames = [(row[0],) for row in rows]
+            self._conn.executemany(
                 "DELETE FROM clean_cache WHERE file_name = ?",
-                (fileName,),
+                fileNames,
+            )
+            self._conn.executemany(
+                "DELETE FROM pos_cache WHERE file_name = ?",
+                fileNames,
             )
             self._conn.commit()
         self.textsChanged.emit()
@@ -356,6 +369,9 @@ class CorpusStore(QObject):
             self._conn.execute(
                 "DELETE FROM clean_cache WHERE file_name = ?", (fileName,)
             )
+            self._conn.execute(
+                "DELETE FROM pos_cache WHERE file_name = ?", (fileName,)
+            )
             self._conn.commit()
         self.textsChanged.emit()
 
@@ -366,6 +382,7 @@ class CorpusStore(QObject):
                 return
             self._conn.execute("DELETE FROM documents")
             self._conn.execute("DELETE FROM clean_cache")
+            self._conn.execute("DELETE FROM pos_cache")
             self._conn.commit()
         self.textsChanged.emit()
 
@@ -448,6 +465,26 @@ class CorpusStore(QObject):
                 ("1" if enabled else "0",),
             )
             self._conn.commit()
+
+    def commitCleanState(self, rule: CleanRule, enabled: bool) -> None:
+        """在同一事务中持久化规则与开关，再统一发布内存状态。"""
+        rulePayload = json.dumps(self._serializeRule(rule), ensure_ascii=False)
+        enabledPayload = "1" if enabled else "0"
+        with self._lock:
+            self._conn.executemany(
+                """
+                INSERT INTO corpus_meta(key, value) VALUES(?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (
+                    ("clean_rule", rulePayload),
+                    ("clean_enabled", enabledPayload),
+                ),
+            )
+            self._conn.commit()
+        self._cleanRule = self._deserializeRule(self._serializeRule(rule))
+        self._cleanEnabled = bool(enabled)
+        self.cleanRuleChanged.emit()
 
     def setCleanEnabled(self, enabled: bool) -> None:
         if enabled == self._cleanEnabled:

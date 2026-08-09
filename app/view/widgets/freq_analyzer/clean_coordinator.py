@@ -20,9 +20,9 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QRunnable, QThreadPool, QTimer, Signal
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -35,6 +35,7 @@ class CleanSignals(QObject):
     progress = Signal(int, str)  # 0-100, 描述
     finished = Signal(float, int)  # (耗时秒, 清洗字符数)
     failed = Signal(str)  # 错误信息
+    cancelled = Signal()
 
 
 class CleanWorker(QRunnable):
@@ -59,14 +60,12 @@ class CleanWorker(QRunnable):
         rule,  # CleanRule
         enabled: bool,  # 是否启用清洗
         ruleHash: str,
-        oldRuleHash: str,  # 用于旧 cache 清理
     ):
         super().__init__()
         self._store = corpusStore
         self._rule = rule
         self._enabled = enabled
         self._ruleHash = ruleHash
-        self._oldRuleHash = oldRuleHash
         self.signals = CleanSignals()
         self._cancel = False
 
@@ -122,6 +121,7 @@ class CleanWorker(QRunnable):
             for i, row in enumerate(rows):
                 if self._cancel:
                     logger.warning("[CleanWorker] 任务被取消")
+                    self.signals.cancelled.emit()
                     return
                 fileName = row["file_name"]
                 raw = row["raw_text"]
@@ -132,25 +132,11 @@ class CleanWorker(QRunnable):
                     pct = int(5 + (i + 1) / total * 80)
                     self.signals.progress.emit(pct, f"清洗中 ({i + 1}/{total})...")
 
-            # 清理旧 hash 的 cache(避免脏数据堆积)
-            if self._oldRuleHash and self._oldRuleHash != self._ruleHash:
-                try:
-                    with self._store._lock:
-                        self._store._conn.execute(
-                            "DELETE FROM clean_cache WHERE rule_hash = ?",
-                            (self._oldRuleHash,),
-                        )
-                        # 同时清理旧 hash 的 pos_cache
-                        self._store._conn.execute(
-                            "DELETE FROM pos_cache WHERE rule_hash = ?",
-                            (self._oldRuleHash,),
-                        )
-                        self._store._conn.commit()
-                except Exception as e:
-                    logger.warning(f"[CleanWorker] 清理旧 cache 失败: {e}")
-
             # 批量写回新 cache
             self.signals.progress.emit(90, "写入缓存...")
+            if self._cancel:
+                self.signals.cancelled.emit()
+                return
             with self._store._lock:
                 self._store._conn.executemany(
                     """
@@ -264,7 +250,9 @@ class CleanCoordinator(QObject):
         self._pool.setMaxThreadCount(max(1, self._pool.maxThreadCount()))
         self._busy = False
         self._currentWorker: Optional[CleanWorker] = None
-        self._currentHash: Optional[str] = None
+        self._currentHash: Optional[str] = corpusStore._ruleHash(corpusStore.cleanRule)
+        self._runningRequest: Optional[Tuple[Any, Any, bool, str]] = None
+        self._retiredStores: list[Any] = []
         # pending 队列:每次 scheduleClean 都入队,worker 完成后
         # 取队尾(最后一次)作为最终目标,避免早期中间状态丢失。
         self._pendingRule: Optional[Tuple[Any, bool, str]] = None
@@ -280,7 +268,7 @@ class CleanCoordinator(QObject):
         self._debounceTimer.timeout.connect(self._flushPending)
 
     # ---------------- 公开 API ----------------
-    def scheduleClean(self, rule, enabled: bool):
+    def scheduleClean(self, rule, enabled: bool) -> bool:
         """UI 端调用:请求应用新规则(去抖)
 
         Args:
@@ -288,13 +276,28 @@ class CleanCoordinator(QObject):
             enabled:  是否启用清洗
         """
         ruleHash = self._store._ruleHash(rule)
-        # 如果 hash 与当前一致,跳过(防御性)
-        if self._currentHash == ruleHash and enabled == self._store.cleanEnabled:
+        cacheReady = self._isCacheReady(enabled)
+        if (
+            not self._busy
+            and self._pendingRule is None
+            and self._currentHash == ruleHash
+            and enabled == self._store.cleanEnabled
+            and cacheReady
+        ):
             logger.debug(f"[CleanCoordinator] 规则未变化,跳过 (hash={ruleHash[:8]})")
-            return
+            return False
         self._pendingRule = (rule, enabled, ruleHash)
         # 启动 / 重置去抖 timer
         self._debounceTimer.start(self.DEBOUNCE_MS)
+        return True
+
+    def _isCacheReady(self, enabled: bool) -> bool:
+        if not enabled:
+            return True
+        try:
+            return self._store.cacheCoverage()["coverage"] >= 1.0
+        except Exception:
+            return False
 
     def cancelPending(self):
         """取消正在等待去抖的请求(用于程序关闭等场景)"""
@@ -304,6 +307,34 @@ class CleanCoordinator(QObject):
 
     def isBusy(self) -> bool:
         return self._busy
+
+    def hasPending(self) -> bool:
+        return self._pendingRule is not None or self._busy
+
+    def shutdown(self, maxWaitMs: int = 2000) -> None:
+        """取消待处理清洗，等待后台退出后安全关闭持有的语料库。"""
+        self.cancelPending()
+        if self._currentWorker is not None:
+            self._currentWorker.cancel()
+        if self._busy:
+            deadline = time.monotonic() + maxWaitMs / 1000
+            while self._busy and time.monotonic() < deadline:
+                QCoreApplication.processEvents()
+                time.sleep(0.01)
+        if self._busy:
+            logger.warning("[CleanCoordinator] 清洗任务未在退出时限内结束，交由进程回收")
+            return
+        stores = [self._store, *self._retiredStores]
+        self._retiredStores = []
+        seenIds: set[int] = set()
+        for store in stores:
+            if store is None or id(store) in seenIds:
+                continue
+            seenIds.add(id(store))
+            try:
+                store.close()
+            except Exception as exc:
+                logger.warning(f"[CleanCoordinator] 退出时关闭语料库失败: {exc}")
 
     def setCorpusStore(self, corpusStore) -> None:
         """P0-fix:运行时切换语料库(原来在 freq_analyzer_interface.py
@@ -316,16 +347,19 @@ class CleanCoordinator(QObject):
         """
         if corpusStore is self._store:
             return
+        oldStore = self._store
         self.cancelPending()
-        if self._busy:
-            # 让现有 worker 自然跑完,这里只切换引用;
-            # worker 完成后 _onWorkerFinished 会用新 store 写 cache。
-            self._store = corpusStore
+        if self._busy and self._currentWorker is not None:
+            self._currentWorker.cancel()
+            self._retiredStores.append(oldStore)
         else:
-            self._store = corpusStore
-        # 重置 hash 记录,使下一次 flush 不会因 hash 命中而跳过
+            try:
+                oldStore.close()
+            except Exception as exc:
+                logger.warning(f"[CleanCoordinator] 关闭旧语料库失败: {exc}")
+        self._store = corpusStore
         try:
-            self._currentHash = corpusStore._ruleHash(corpusStore._cleanRule)
+            self._currentHash = corpusStore._ruleHash(corpusStore.cleanRule)
         except Exception:
             self._currentHash = None
 
@@ -349,11 +383,13 @@ class CleanCoordinator(QObject):
         rule, enabled, ruleHash = self._pendingRule
         self._pendingRule = None
         # 二次防御:hash 已与当前一致(可能 flushPending 被多次触发)
-        if self._currentHash == ruleHash and enabled == self._store.cleanEnabled:
+        if (
+            self._currentHash == ruleHash
+            and enabled == self._store.cleanEnabled
+            and self._isCacheReady(enabled)
+        ):
             return
 
-        oldHash = self._currentHash
-        self._currentHash = ruleHash
         self._setBusy(True)
         self.cleanStarted.emit()
 
@@ -362,73 +398,76 @@ class CleanCoordinator(QObject):
             rule=rule,
             enabled=enabled,
             ruleHash=ruleHash,
-            oldRuleHash=oldHash or "",
         )
         self._currentWorker = worker
+        self._runningRequest = (self._store, rule, enabled, ruleHash)
         worker.signals.progress.connect(self._onWorkerProgress)
         worker.signals.finished.connect(self._onWorkerFinished)
         worker.signals.failed.connect(self._onWorkerFailed)
+        worker.signals.cancelled.connect(self._onWorkerCancelled)
         self._pool.start(worker)
 
     def _onWorkerProgress(self, pct: int, msg: str):
-        self.cleanProgress.emit(pct, msg)
+        if self._runningRequest is not None and self._runningRequest[0] is self._store:
+            self.cleanProgress.emit(pct, msg)
 
     def _onWorkerFinished(self, elapsed: float, totalChars: int):
         """Worker 完成后:原子地切换规则 + 持久化 + emit
 
         这一步必须在 UI 线程执行(因为 _cleanRule 是被多线程共享状态)。
         """
-        self._setBusy(False)
-        self._currentWorker = None
-
-        # worker 期间用户可能再次 scheduleClean:
-        # - 有 pending:用最新的 pending 作为最终目标(用户停止输入 300ms 后的最后意图)
-        # - 无 pending:维持原规则
-        target = self._pendingRule
-        self._pendingRule = None
-
+        request = self._runningRequest
+        applied = False
         try:
-            if target is not None:
-                finalRule, finalEnabled, finalHash = target
-            else:
-                # 没新 pending:回退到上次记录
-                finalRule = self._store._cleanRule
-                finalEnabled = self._store._cleanEnabled
-                finalHash = self._currentHash or self._store._ruleHash(finalRule)
+            if request is not None:
+                requestStore, finalRule, finalEnabled, finalHash = request
+                if requestStore is self._store:
+                    requestStore.commitCleanState(finalRule, finalEnabled)
+                    self._currentHash = finalHash
+                    applied = True
+                else:
+                    logger.info("[CleanCoordinator] 已忽略切库前完成的清洗结果")
 
-            self._store.applyCleanRuleAsync(finalRule, finalEnabled, ruleHash=finalHash)
-
-            # 持久化新规则 hash 与 enabled 标志
-            self._store._saveCleanRule(finalRule)
-            self._store._saveCleanEnabled(finalEnabled)
-
-            # 更新内部状态
-            self._currentHash = self._store._ruleHash(finalRule)
-
-            # 通知所有订阅者
-            self._store.cleanRuleChanged.emit()
-
-            logger.info(
-                f"[CleanCoordinator] 规则已生效: hash={self._currentHash[:8]} "
-                f"enabled={finalEnabled} 字符={totalChars:,} 耗时={elapsed:.2f}s"
-            )
+                if applied:
+                    logger.info(
+                        f"[CleanCoordinator] 规则已生效: hash={finalHash[:8]} "
+                        f"enabled={finalEnabled} 字符={totalChars:,} "
+                        f"耗时={elapsed:.2f}s"
+                    )
         except Exception as e:
             logger.exception(f"[CleanCoordinator] 应用新规则失败: {e}")
             self.cleanFailed.emit(str(e))
+        finally:
+            self._finishRunningRequest()
 
-        self.cleanFinished.emit(elapsed, totalChars)
-
-        # 期间又有新 schedule:用一次性 timer 短延迟后再次 flush(避免阻塞信号回调链)
-        if self._pendingRule is not None:
-            self._retryTimer.start(0)
+        if applied:
+            self.cleanFinished.emit(elapsed, totalChars)
+        self._schedulePendingAfterRun()
 
     def _onWorkerFailed(self, err: str):
-        self._setBusy(False)
-        self._currentWorker = None
+        self._finishRunningRequest()
         self.cleanFailed.emit(err)
         logger.error(f"[CleanCoordinator] 清洗失败: {err}")
+        self._schedulePendingAfterRun()
 
-        # 即使失败,也尝试处理 pending(用户已经停了)
+    def _onWorkerCancelled(self) -> None:
+        logger.info("[CleanCoordinator] 清洗任务已取消")
+        self._finishRunningRequest()
+        self._schedulePendingAfterRun()
+
+    def _finishRunningRequest(self) -> None:
+        self._currentWorker = None
+        self._runningRequest = None
+        self._setBusy(False)
+        retiredStores = self._retiredStores
+        self._retiredStores = []
+        for store in retiredStores:
+            try:
+                store.close()
+            except Exception as exc:
+                logger.warning(f"[CleanCoordinator] 关闭已切换语料库失败: {exc}")
+
+    def _schedulePendingAfterRun(self) -> None:
         if self._pendingRule is not None:
             self._retryTimer.start(0)
 

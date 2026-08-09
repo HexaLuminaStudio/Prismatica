@@ -92,6 +92,7 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.setObjectName("FreqAnalyzerInterface")
 
         self._corpusStore: Optional[CorpusStore] = corpusStore
+        self._boundCorpusStore: Optional[CorpusStore] = None
         # rawTexts 仅作为本地只读缓存；权威数据由 CorpusStore 持有
         self.rawTexts: Dict[str, str] = {}
         self.unigramDf = None
@@ -125,14 +126,25 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     def setCorpusStore(self, store: "CorpusStore") -> None:
         """运行时注入 CorpusStore（用于面板已构造后再绑定的场景）"""
         if self._corpusStore is store:
+            self._onCorpusChanged()
             return
         self._corpusStore = store
         self._bindCorpusStore(store)
         self._onCorpusChanged()
 
     def _bindCorpusStore(self, store: "CorpusStore") -> None:
+        if self._boundCorpusStore is store:
+            return
+        oldStore = self._boundCorpusStore
+        if oldStore is not None:
+            for signal in (oldStore.textsChanged, oldStore.cleanRuleChanged):
+                try:
+                    signal.disconnect(self._onCorpusChanged)
+                except (RuntimeError, TypeError):
+                    pass
         store.textsChanged.connect(self._onCorpusChanged)
         store.cleanRuleChanged.connect(self._onCorpusChanged)
+        self._boundCorpusStore = store
 
     def _onCorpusChanged(self) -> None:
         # 同步本地 rawTexts 缓存
