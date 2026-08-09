@@ -10,14 +10,14 @@ import numpy as np
 import pandas as pd
 from app.core.utils import logger
 from PySide6.QtCore import Qt, QThread, Signal, QSize
-from PySide6.QtGui import QColor, QPalette
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
-    QDoubleSpinBox,
+    QBoxLayout,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QSizePolicy,
+    QStackedWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -38,15 +38,11 @@ from qfluentwidgets import (
     PushButton,
     SegmentedWidget,
     SubtitleLabel,
-    SwitchButton,
-    ToolTipFilter,
-    ToolTipPosition,
-    TransparentPushButton,
+    TitleLabel,
     TransparentToggleToolButton,
     CardWidget,
     CheckBox,
     ScrollArea,
-    VerticalSeparator,
 )
 from qfluentwidgetspro import RoundTableWidget
 
@@ -134,11 +130,7 @@ class MultiSelectFilter(QWidget):
         headerLayout = QHBoxLayout()
         headerLayout.setSpacing(8)
 
-        titleLabel = BodyLabel("类型:", self)
-        titleLabel.setStyleSheet("color: #666; font-size: 12px;")
-        headerLayout.addWidget(titleLabel)
-
-        self.checkAllBtn = QPushButton("全选/取消", self)
+        self.checkAllBtn = QPushButton("全选", self)
         self.checkAllBtn.setStyleSheet(
             """
             QPushButton {
@@ -159,7 +151,7 @@ class MultiSelectFilter(QWidget):
 
         headerLayout.addStretch()
 
-        self.countLabel = CaptionLabel("已选: 0", self)
+        self.countLabel = CaptionLabel("已选 0", self)
         self.countLabel.setStyleSheet("color: #999; font-size: 11px;")
         headerLayout.addWidget(self.countLabel)
 
@@ -186,14 +178,15 @@ class MultiSelectFilter(QWidget):
         self.selectionChanged.emit(self.selectedTexts())
 
     def _toggleAll(self):
-        """切换全选/取消"""
+        """切换全选与清空。"""
         allChecked = all(cb.isChecked() for cb in self.checkboxes.values())
         for cb in self.checkboxes.values():
             cb.setChecked(not allChecked)
 
     def _updateCount(self):
         count = sum(1 for cb in self.checkboxes.values() if cb.isChecked())
-        self.countLabel.setText(f"已选: {count}")
+        self.countLabel.setText(f"已选 {count}")
+        self.checkAllBtn.setText("清空" if count == len(self.checkboxes) else "全选")
 
     def selectedTexts(self) -> list:
         """获取选中的文本列表"""
@@ -203,6 +196,49 @@ class MultiSelectFilter(QWidget):
         """清空选择"""
         for cb in self.checkboxes.values():
             cb.setChecked(False)
+
+
+class BiasEmptyState(QWidget):
+    """偏误分析结果页的统一空状态。"""
+
+    def __init__(
+        self,
+        title: str,
+        description: str,
+        iconPath: str = ":app/icons/Chart.svg",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setObjectName("biasEmptyState")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 48, 24, 48)
+        layout.setSpacing(8)
+        layout.addStretch(1)
+
+        self.iconWidget = QSvgWidget(iconPath, self)
+        self.iconWidget.setFixedSize(40, 40)
+        layout.addWidget(
+            self.iconWidget,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
+
+        self.titleLabel = SubtitleLabel(title, self)
+        self.titleLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.titleLabel)
+
+        self.descriptionLabel = CaptionLabel(description, self)
+        self.descriptionLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.descriptionLabel.setWordWrap(True)
+        self.descriptionLabel.setStyleSheet("color: #7A7A7A;")
+        layout.addWidget(self.descriptionLabel)
+        layout.addStretch(1)
+
+    def setContent(self, title: str, description: str) -> None:
+        """更新空状态文案。"""
+        self.titleLabel.setText(title)
+        self.descriptionLabel.setText(description)
 
 
 class FileLoaderThread(QThread):
@@ -695,7 +731,8 @@ class ChartDialog(MessageBoxBase):
             InfoBarPosition.TOP_RIGHT,
             self,
         )
-        self.accept()
+        if not getattr(self, "_isEmbedded", False):
+            self.accept()
 
 
 class ColumnConfigDialog(MessageBoxBase):
@@ -1116,7 +1153,8 @@ class HeatmapDialog(MessageBoxBase):
 
         logger.info(f"[Bias] 热力图下钻: 偏误={errorName}, 分组={groupVal}")
         self._drillDownCallback(errorName, groupVal)
-        self.accept()
+        if not getattr(self, "_isEmbedded", False):
+            self.accept()
 
     def _export(self, fmt: str):
         if not self._currentFigure:
@@ -1172,7 +1210,8 @@ class HeatmapDialog(MessageBoxBase):
             InfoBarPosition.TOP_RIGHT,
             self,
         )
-        self.accept()
+        if not getattr(self, "_isEmbedded", False):
+            self.accept()
 
 
 class AssociationRulesDialog(MessageBoxBase):
@@ -1911,6 +1950,8 @@ class BiasInterface(QWidget):
         self.filesList = []
         self.dfs = {}
         self.loadThread = None
+        self._pendingFileCount = 0
+        self._isAnalysisRunning = False
         self.selectedColumn = None
         self.levelColumn = None
         self.countryColumn = None
@@ -1935,160 +1976,261 @@ class BiasInterface(QWidget):
         self._initUi()
 
     def _initUi(self):
-        # 外层滚动区域
+        # 外层仅负责纵向滚动，窄窗口不再产生整页横向滚动。
         self.scrollArea = ScrollArea(self)
         self.scrollArea.setWidgetResizable(True)
         self.scrollArea.setStyleSheet("border: none; background: transparent;")
         self.scrollArea.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         self.scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        # 滚动区域内的主容器
-        scrollContent = QWidget()
-        scrollLayout = QVBoxLayout(scrollContent)
-        scrollLayout.setContentsMargins(16, 16, 16, 16)
-        scrollLayout.setSpacing(12)
+        self.scrollContent = QWidget()
+        self.scrollContent.setObjectName("biasScrollContent")
+        scrollLayout = QVBoxLayout(self.scrollContent)
+        scrollLayout.setContentsMargins(24, 20, 24, 24)
+        scrollLayout.setSpacing(16)
 
-        # 顶部：文件选择和模式切换
-        topLayout = QHBoxLayout()
+        # 页面标题只保留全局信息，不再堆叠全部操作。
+        titleLayout = QHBoxLayout()
+        titleLayout.setSpacing(12)
+        titleTextLayout = QVBoxLayout()
+        titleTextLayout.setSpacing(2)
+        pageTitle = TitleLabel("偏误分析", self.scrollContent)
+        pageDescription = CaptionLabel(
+            "定位偏误句，并查看统计关系",
+            self.scrollContent,
+        )
+        pageDescription.setWordWrap(True)
+        pageDescription.setStyleSheet("color: #707070;")
+        titleTextLayout.addWidget(pageTitle)
+        titleTextLayout.addWidget(pageDescription)
+        titleLayout.addLayout(titleTextLayout, 1)
+        scrollLayout.addLayout(titleLayout)
 
-        self.chooseFileBtn = PrimaryPushButton("选择文件", self)
+        # 主工作区：宽屏左右排列，窄屏上下排列。
+        self.workspaceLayout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.workspaceLayout.setContentsMargins(0, 0, 0, 0)
+        self.workspaceLayout.setSpacing(16)
+
+        self.conditionCard = CardWidget(self.scrollContent)
+        self.conditionCard.setObjectName("biasConditionCard")
+        self.conditionCard.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
+        conditionLayout = QVBoxLayout(self.conditionCard)
+        conditionLayout.setContentsMargins(16, 16, 16, 16)
+        conditionLayout.setSpacing(10)
+
+        conditionTitle = SubtitleLabel("分析条件", self.conditionCard)
+        conditionLayout.addWidget(conditionTitle)
+
+        self.chooseFileBtn = PushButton("选择 Excel", self.conditionCard)
         self.chooseFileBtn.setIcon(FluentIcon.FOLDER)
         self.chooseFileBtn.clicked.connect(self._onChooseFile)
+        conditionLayout.addWidget(self.chooseFileBtn)
 
-        self.switchBtn = SwitchButton("单文件模式", self)
-        self.switchBtn.installEventFilter(
-            ToolTipFilter(self.switchBtn, 200, ToolTipPosition.TOP)
+        self.sourceStatusLabel = CaptionLabel(
+            "尚未加载 Excel 文件",
+            self.conditionCard,
         )
-        self.switchBtn.checkedChanged.connect(self._onModeChanged)
+        self.sourceStatusLabel.setWordWrap(True)
+        self.sourceStatusLabel.setStyleSheet("color: #7A7A7A;")
+        conditionLayout.addWidget(self.sourceStatusLabel)
 
-        topLayout.addWidget(self.chooseFileBtn)
-        topLayout.addWidget(self.switchBtn)
-        topLayout.addStretch()
+        columnLabel = CaptionLabel("分析字段", self.conditionCard)
+        columnLabel.setStyleSheet("color: #7A7A7A;")
+        conditionLayout.addWidget(columnLabel)
 
-        # 统计列选择和操作栏
         columnLayout = QHBoxLayout()
-        columnLayout.setSpacing(12)
-
-        columnLabel = BodyLabel("统计列:", self)
-        columnLabel.setStyleSheet("font-size: 13px;")
-
-        self.columnCombobox = ComboBox(self)
+        columnLayout.setSpacing(8)
+        self.columnCombobox = ComboBox(self.conditionCard)
         self.columnCombobox.setEnabled(False)
         self.columnCombobox.currentIndexChanged.connect(self._onColumnChanged)
+        self.columnCombobox.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        columnLayout.addWidget(self.columnCombobox, 1)
 
-        self.analyzeBtn = TransparentPushButton("分析", self)
-        self.analyzeBtn.setIcon(":app/icons/Check.svg")
-        self.analyzeBtn.clicked.connect(self._runMatching)
-
-        self.chartBtn = TransparentPushButton("图表", self)
-        self.chartBtn.setIcon(":app/icons/Chart.svg")
-        self.chartBtn.clicked.connect(self._runChart)
-
-        self.countBtn = TransparentPushButton("计数", self)
-        self.countBtn.setIcon(":app/icons/Number.svg")
-        self.countBtn.clicked.connect(self._runCount)
-
-        self.exportBtn = TransparentPushButton("导出", self)
-        self.exportBtn.setIcon(":app/icons/Save.svg")
-        self.exportBtn.clicked.connect(self._exportResults)
-
-        self.heatmapBtn = TransparentPushButton("热力图", self)
-        self.heatmapBtn.setIcon(":app/icons/Chart.svg")
-        self.heatmapBtn.clicked.connect(self._runHeatmap)
-
-        self.rulesBtn = TransparentPushButton("关联规则", self)
-        self.rulesBtn.setIcon(":app/icons/Chart.svg")
-        self.rulesBtn.clicked.connect(self._runAssociationRules)
-
-        self.columnConfigBtn = TransparentPushButton("列配置", self)
+        self.columnConfigBtn = PushButton("配置", self.conditionCard)
         self.columnConfigBtn.setIcon(":app/icons/Setting.svg")
+        self.columnConfigBtn.setEnabled(False)
         self.columnConfigBtn.clicked.connect(self._openColumnConfig)
-
-        columnLayout.addWidget(columnLabel)
-        columnLayout.addWidget(self.columnCombobox)
         columnLayout.addWidget(self.columnConfigBtn)
-        columnLayout.addWidget(VerticalSeparator(self))
-        columnLayout.addWidget(self.analyzeBtn)
-        columnLayout.addWidget(self.chartBtn)
-        columnLayout.addWidget(self.countBtn)
-        columnLayout.addWidget(self.heatmapBtn)
-        columnLayout.addWidget(self.rulesBtn)
-        columnLayout.addWidget(VerticalSeparator(self))
-        columnLayout.addWidget(self.exportBtn)
-        columnLayout.addStretch()
+        conditionLayout.addLayout(columnLayout)
 
-        scrollLayout.addLayout(topLayout)
-        scrollLayout.addLayout(columnLayout)
+        self.columnCompatibilityLabel = CaptionLabel("", self.conditionCard)
+        self.columnCompatibilityLabel.setWordWrap(True)
+        self.columnCompatibilityLabel.setStyleSheet("color: #A15C00;")
+        self.columnCompatibilityLabel.hide()
+        conditionLayout.addWidget(self.columnCompatibilityLabel)
 
-        # 偏误类型筛选卡片
-        filterCard = CardWidget(self)
-        filterLayout = QVBoxLayout(filterCard)
-        filterLayout.setContentsMargins(16, 12, 16, 12)
-        filterLayout.setSpacing(8)
+        filterTitleLayout = QHBoxLayout()
+        filterTitle = BodyLabel("偏误类型", self.conditionCard)
+        filterTitle.setStyleSheet("font-weight: 600;")
+        filterTitleLayout.addWidget(filterTitle)
+        filterTitleLayout.addStretch(1)
+        self.selectionSummaryLabel = CaptionLabel("未选择", self.conditionCard)
+        self.selectionSummaryLabel.setStyleSheet("color: #707070;")
+        filterTitleLayout.addWidget(self.selectionSummaryLabel)
+        conditionLayout.addLayout(filterTitleLayout)
 
-        filterTitle = BodyLabel("偏误类型筛选", self)
-        filterTitle.setStyleSheet("font-size: 13px; font-weight: 600;")
-        filterLayout.addWidget(filterTitle)
+        self.filterSegment = SegmentedWidget(self.conditionCard)
+        self.filterSegment.addItem("character", "字符")
+        self.filterSegment.addItem("word", "词语")
+        self.filterSegment.addItem("sentence", "句子")
+        self.filterSegment.setCurrentItem("character")
+        conditionLayout.addWidget(self.filterSegment)
 
-        # 字符偏误行
-        charRow = QHBoxLayout()
-        charRow.setSpacing(12)
+        self.filterStack = QStackedWidget(self.conditionCard)
+        self.filterStack.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.filterStack.setFixedHeight(280)
 
-        charLabel = BodyLabel("字符:", self)
-        charLabel.setStyleSheet("color: #666; font-size: 12px; min-width: 40px;")
-        charRow.addWidget(charLabel)
-
-        self.charLineEdit = LineEdit(self)
-        self.charLineEdit.setFixedWidth(70)
-        self.charLineEdit.setPlaceholderText("筛选字")
-
-        self.charFilter = MultiSelectFilter(list(CHARACTERS_TYPES.keys()), self)
+        charPage = QWidget(self.filterStack)
+        charLayout = QVBoxLayout(charPage)
+        charLayout.setContentsMargins(0, 4, 0, 0)
+        charLayout.setSpacing(8)
+        self.charLineEdit = LineEdit(charPage)
+        self.charLineEdit.setPlaceholderText("可选：仅匹配指定字符")
+        self.charFilter = MultiSelectFilter(list(CHARACTERS_TYPES.keys()), charPage)
         self.charFilter.selectionChanged.connect(self._onFilterChanged)
+        charScroll = ScrollArea(charPage)
+        charScroll.setWidgetResizable(True)
+        charScroll.setStyleSheet("border: none; background: transparent;")
+        charScroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        charScroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        charScroll.setWidget(self.charFilter)
+        charLayout.addWidget(self.charLineEdit)
+        charLayout.addWidget(charScroll, 1)
+        self.filterStack.addWidget(charPage)
 
-        charRow.addWidget(self.charLineEdit)
-        charRow.addWidget(self.charFilter)
-        filterLayout.addLayout(charRow)
-
-        # 词语偏误行
-        wordRow = QHBoxLayout()
-        wordRow.setSpacing(12)
-
-        wordLabel = BodyLabel("词语:", self)
-        wordLabel.setStyleSheet("color: #666; font-size: 12px; min-width: 40px;")
-        wordRow.addWidget(wordLabel)
-
-        self.wordLineEdit = LineEdit(self)
-        self.wordLineEdit.setFixedWidth(70)
-        self.wordLineEdit.setPlaceholderText("筛选词")
-
-        self.wordFilter = MultiSelectFilter(list(WORDS_TYPES.keys()), self)
+        wordPage = QWidget(self.filterStack)
+        wordLayout = QVBoxLayout(wordPage)
+        wordLayout.setContentsMargins(0, 4, 0, 0)
+        wordLayout.setSpacing(8)
+        self.wordLineEdit = LineEdit(wordPage)
+        self.wordLineEdit.setPlaceholderText("可选：仅匹配指定词语")
+        self.wordFilter = MultiSelectFilter(list(WORDS_TYPES.keys()), wordPage)
         self.wordFilter.selectionChanged.connect(self._onFilterChanged)
+        wordScroll = ScrollArea(wordPage)
+        wordScroll.setWidgetResizable(True)
+        wordScroll.setStyleSheet("border: none; background: transparent;")
+        wordScroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        wordScroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        wordScroll.setWidget(self.wordFilter)
+        wordLayout.addWidget(self.wordLineEdit)
+        wordLayout.addWidget(wordScroll, 1)
+        self.filterStack.addWidget(wordPage)
 
-        wordRow.addWidget(self.wordLineEdit)
-        wordRow.addWidget(self.wordFilter)
-        filterLayout.addLayout(wordRow)
-
-        # 句子偏误行
-        sentRow = QHBoxLayout()
-        sentRow.setSpacing(12)
-
-        sentLabel = BodyLabel("句子:", self)
-        sentLabel.setStyleSheet("color: #666; font-size: 12px; min-width: 40px;")
-        sentRow.addWidget(sentLabel)
-
-        self.sentFilter = MultiSelectFilter(list(SENTENCES_TYPES.keys()), self)
+        sentencePage = QWidget(self.filterStack)
+        sentenceLayout = QVBoxLayout(sentencePage)
+        sentenceLayout.setContentsMargins(0, 4, 0, 0)
+        self.sentFilter = MultiSelectFilter(
+            list(SENTENCES_TYPES.keys()),
+            sentencePage,
+        )
         self.sentFilter.selectionChanged.connect(self._onFilterChanged)
+        sentenceScroll = ScrollArea(sentencePage)
+        sentenceScroll.setWidgetResizable(True)
+        sentenceScroll.setStyleSheet("border: none; background: transparent;")
+        sentenceScroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        sentenceScroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        sentenceScroll.setWidget(self.sentFilter)
+        sentenceLayout.addWidget(sentenceScroll, 1)
+        self.filterStack.addWidget(sentencePage)
 
-        sentRow.addWidget(self.sentFilter)
-        filterLayout.addLayout(sentRow)
+        self.filterSegment.currentItemChanged.connect(self._onFilterPageChanged)
+        conditionLayout.addWidget(self.filterStack)
 
-        scrollLayout.addWidget(filterCard)
+        conditionLayout.addStretch(1)
 
-        # 结果表格
-        self.tableWidget = RoundTableWidget(self)
-        self.tableWidget.setMinimumHeight(400)
+        self.analyzeBtn = PrimaryPushButton("开始分析", self.conditionCard)
+        self.analyzeBtn.setIcon(":app/icons/Check.svg")
+        self.analyzeBtn.setEnabled(False)
+        self.analyzeBtn.clicked.connect(self._runMatching)
+        conditionLayout.addWidget(self.analyzeBtn)
+
+        self.workspaceLayout.addWidget(self.conditionCard)
+        self.workspaceLayout.setAlignment(
+            self.conditionCard,
+            Qt.AlignmentFlag.AlignTop,
+        )
+
+        self.resultCard = CardWidget(self.scrollContent)
+        self.resultCard.setObjectName("biasResultCard")
+        self.resultCard.setMinimumHeight(540)
+        self.resultCard.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        resultLayout = QVBoxLayout(self.resultCard)
+        resultLayout.setContentsMargins(18, 18, 18, 18)
+        resultLayout.setSpacing(12)
+
+        resultHeader = QHBoxLayout()
+        resultTitleLayout = QVBoxLayout()
+        resultTitleLayout.setSpacing(2)
+        resultTitle = SubtitleLabel("分析结果", self.resultCard)
+        self.statusLabel = CaptionLabel("等待加载数据", self.resultCard)
+        self.statusLabel.setWordWrap(True)
+        self.statusLabel.setStyleSheet("color: #707070;")
+        resultTitleLayout.addWidget(resultTitle)
+        resultTitleLayout.addWidget(self.statusLabel)
+        resultHeader.addLayout(resultTitleLayout, 1)
+
+        self.exportBtn = PushButton("导出明细", self.resultCard)
+        self.exportBtn.setIcon(":app/icons/Save.svg")
+        self.exportBtn.setEnabled(False)
+        self.exportBtn.clicked.connect(self._exportResults)
+        resultHeader.addWidget(
+            self.exportBtn,
+            0,
+            Qt.AlignmentFlag.AlignTop,
+        )
+        resultLayout.addLayout(resultHeader)
+
+        self.resultSegment = SegmentedWidget(self.resultCard)
+        self.resultSegment.addItem("records", "偏误明细")
+        self.resultSegment.addItem("count", "计数")
+        self.resultSegment.addItem("chart", "图表")
+        self.resultSegment.addItem("heatmap", "热力图")
+        self.resultSegment.addItem("rules", "关联规则")
+        self.resultSegment.setCurrentItem("records")
+        self.resultSegment.currentItemChanged.connect(self._onResultTabChanged)
+        resultLayout.addWidget(self.resultSegment)
+
+        self.resultStack = QStackedWidget(self.resultCard)
+        self.resultPages = {}
+        self.resultEmptyStates = {}
+        self._embeddedDialogs = {}
+
+        detailPage = QWidget(self.resultStack)
+        detailLayout = QVBoxLayout(detailPage)
+        detailLayout.setContentsMargins(0, 0, 0, 0)
+        self.detailStack = QStackedWidget(detailPage)
+        self.detailEmptyState = BiasEmptyState(
+            "等待分析",
+            "选择 Excel 文件、统计列和至少一种偏误类型后开始分析。",
+            ":app/icons/Check.svg",
+            self.detailStack,
+        )
+        self.detailStack.addWidget(self.detailEmptyState)
+
+        self.tableWidget = RoundTableWidget(self.detailStack)
+        self.tableWidget.setMinimumHeight(420)
         self.tableWidget.setColumnCount(7)
         self.tableWidget.setHorizontalHeaderLabels(
             ["文件", "行号", "句子", "偏误类型", "标记内容", "等级", "国籍"]
@@ -2110,13 +2252,38 @@ class BiasInterface(QWidget):
         self.tableWidget.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.Stretch
         )
+        self.detailStack.addWidget(self.tableWidget)
+        self.detailStack.setCurrentWidget(self.detailEmptyState)
+        detailLayout.addWidget(self.detailStack)
+        self.resultPages["records"] = detailPage
+        self.resultStack.addWidget(detailPage)
 
-        scrollLayout.addWidget(self.tableWidget, 1)  # stretch=1 让表格占据剩余空间
+        emptyDescriptions = {
+            "count": "完成分析后，这里会按偏误类型汇总计数和占比。",
+            "chart": "完成分析后，可在饼图和条形图之间切换。",
+            "heatmap": "完成分析并配置等级或国籍列后，可查看交叉分布。",
+            "rules": "至少需要两个含偏误的文件，才能挖掘文件级关联规则。",
+        }
+        for key in ("count", "chart", "heatmap", "rules"):
+            page = QWidget(self.resultStack)
+            pageLayout = QVBoxLayout(page)
+            pageLayout.setContentsMargins(0, 0, 0, 0)
+            emptyState = BiasEmptyState(
+                "暂无结果",
+                emptyDescriptions[key],
+                parent=page,
+            )
+            pageLayout.addWidget(emptyState)
+            self.resultPages[key] = page
+            self.resultEmptyStates[key] = emptyState
+            self.resultStack.addWidget(page)
 
-        # 设置滚动区域
-        self.scrollArea.setWidget(scrollContent)
+        resultLayout.addWidget(self.resultStack, 1)
+        self.workspaceLayout.addWidget(self.resultCard, 1)
+        scrollLayout.addLayout(self.workspaceLayout, 1)
 
-        # 主布局
+        self.scrollArea.setWidget(self.scrollContent)
+
         mainLayout = QVBoxLayout(self)
         mainLayout.setContentsMargins(0, 0, 0, 0)
         mainLayout.addWidget(self.scrollArea)
@@ -2124,40 +2291,315 @@ class BiasInterface(QWidget):
         # 输入框互斥逻辑
         self.charLineEdit.textChanged.connect(lambda t: self._onInputMutual(t, "char"))
         self.wordLineEdit.textChanged.connect(lambda t: self._onInputMutual(t, "word"))
+        self._applyResponsiveLayout(self.width())
+
+    def _onFilterPageChanged(self, key: str) -> None:
+        pageIndex = {
+            "character": 0,
+            "word": 1,
+            "sentence": 2,
+        }.get(key, 0)
+        self.filterStack.setCurrentIndex(pageIndex)
+
+    def _applyResponsiveLayout(self, width: int) -> None:
+        """根据可用宽度切换左右/上下工作区，避免整页横向溢出。"""
+        isCompact = width < 1040
+        targetDirection = (
+            QBoxLayout.Direction.TopToBottom
+            if isCompact
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self.workspaceLayout.direction() != targetDirection:
+            self.workspaceLayout.setDirection(targetDirection)
+
+        if isCompact:
+            self.conditionCard.setMinimumWidth(0)
+            self.conditionCard.setMaximumWidth(16777215)
+            self.resultCard.setMinimumHeight(560)
+        else:
+            self.conditionCard.setFixedWidth(340)
+            self.resultCard.setMinimumHeight(620)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._applyResponsiveLayout(event.size().width())
+
+    def _isMultiFileMode(self) -> bool:
+        """根据当前数据源数量自动判断是否为多文件模式。"""
+        return max(
+            len(self.filesList),
+            len(self.dfs),
+            self._pendingFileCount,
+        ) > 1
+
+    def _refreshAnalyzeState(self) -> None:
+        """同步分析按钮与多文件字段兼容性提示。"""
+        selectedTypes = (
+            self.charFilter.selectedTexts()
+            + self.wordFilter.selectedTexts()
+            + self.sentFilter.selectedTexts()
+        )
+        missingTextFiles = []
+        missingGroupFiles = []
+
+        if self.selectedColumn:
+            missingTextFiles = [
+                os.path.basename(filePath)
+                for filePath, dataFrame in self.dfs.items()
+                if self.selectedColumn not in dataFrame.columns
+            ]
+
+        groupColumns = [
+            columnName
+            for columnName in (self.levelColumn, self.countryColumn)
+            if columnName
+        ]
+        if groupColumns:
+            missingGroupFiles = [
+                os.path.basename(filePath)
+                for filePath, dataFrame in self.dfs.items()
+                if any(
+                    columnName not in dataFrame.columns
+                    for columnName in groupColumns
+                )
+            ]
+
+        hasNoCommonColumns = bool(
+            self.dfs
+            and self._isMultiFileMode()
+            and self.columnCombobox.count() == 0
+        )
+        if hasNoCommonColumns:
+            self.columnCompatibilityLabel.setText(
+                "所选文件没有共同字段，请更换文件或使用单文件模式"
+            )
+            self.columnCompatibilityLabel.show()
+        elif missingTextFiles:
+            self.columnCompatibilityLabel.setText(
+                f"{len(missingTextFiles)} 个文件缺少“{self.selectedColumn}”，"
+                "请重新选择分析字段"
+            )
+            self.columnCompatibilityLabel.show()
+        elif missingGroupFiles:
+            self.columnCompatibilityLabel.setText(
+                f"{len(missingGroupFiles)} 个文件缺少分组字段，结果将记为“未知”"
+            )
+            self.columnCompatibilityLabel.show()
+        else:
+            self.columnCompatibilityLabel.clear()
+            self.columnCompatibilityLabel.hide()
+
+        isLoading = self.loadThread is not None
+        isReady = bool(
+            self.dfs
+            and self.selectedColumn
+            and selectedTypes
+            and not missingTextFiles
+            and not isLoading
+            and not self._isAnalysisRunning
+        )
+        self.analyzeBtn.setEnabled(isReady)
+
+    def _onResultTabChanged(self, key: str) -> None:
+        pageOrder = ["records", "count", "chart", "heatmap", "rules"]
+        if key not in pageOrder:
+            return
+        self.resultStack.setCurrentWidget(self.resultPages[key])
+        if key != "records":
+            self._prepareEmbeddedResult(key)
+
+    def _selectResultTab(self, key: str) -> None:
+        self.resultSegment.setCurrentItem(key)
+        self._onResultTabChanged(key)
+
+    def _clearPageLayout(self, page: QWidget) -> None:
+        layout = page.layout()
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _disposeEmbeddedResult(self, key: str) -> None:
+        dialog = self._embeddedDialogs.pop(key, None)
+        if dialog is None:
+            return
+
+        worker = getattr(dialog, "_workerThread", None)
+        if worker is not None and worker.isRunning():
+            try:
+                worker.cancel()
+                worker.wait(1500)
+            except Exception:
+                pass
+
+        contentWidget = getattr(dialog, "widget", None)
+        if contentWidget is not None:
+            contentWidget.hide()
+            contentWidget.setParent(None)
+            contentWidget.deleteLater()
+        dialog.deleteLater()
+
+    def _resetEmbeddedResults(self) -> None:
+        for key in list(self._embeddedDialogs):
+            self._disposeEmbeddedResult(key)
+
+        descriptions = {
+            "count": "完成分析后，这里会按偏误类型汇总计数和占比。",
+            "chart": "完成分析后，可在饼图和条形图之间切换。",
+            "heatmap": "完成分析并配置等级或国籍列后，可查看交叉分布。",
+            "rules": "至少需要两个含偏误的文件，才能挖掘文件级关联规则。",
+        }
+        for key, description in descriptions.items():
+            self._showResultMessage(key, "暂无结果", description)
+
+    def _showResultMessage(self, key: str, title: str, description: str) -> None:
+        page = self.resultPages[key]
+        self._clearPageLayout(page)
+        emptyState = BiasEmptyState(title, description, parent=page)
+        page.layout().addWidget(emptyState)
+        self.resultEmptyStates[key] = emptyState
+
+    def _mountDialogContent(self, key: str, dialog: MessageBoxBase) -> None:
+        """将原结果视图装入分页容器，不再执行模态弹窗。"""
+        self._disposeEmbeddedResult(key)
+        page = self.resultPages[key]
+        self._clearPageLayout(page)
+
+        dialog._isEmbedded = True
+        contentWidget = dialog.widget
+        contentWidget.setParent(page)
+        contentWidget.setMinimumSize(0, 0)
+        contentWidget.setMaximumSize(16777215, 16777215)
+        contentWidget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        for closeButton in contentWidget.findChildren(TransparentToggleToolButton):
+            closeButton.hide()
+
+        page.layout().addWidget(contentWidget)
+        contentWidget.show()
+        self._embeddedDialogs[key] = dialog
+
+    def _prepareEmbeddedResult(self, key: str) -> None:
+        if key in self._embeddedDialogs:
+            return
+        if not self.totalCounts:
+            self._showResultMessage(
+                key,
+                "等待分析",
+                "先在左侧完成条件设置并运行分析，再查看此结果。",
+            )
+            return
+
+        if key == "count":
+            self._mountDialogContent(
+                key,
+                CountResultDialog(self.totalCounts, self.window()),
+            )
+            return
+
+        if key == "chart":
+            self._mountDialogContent(
+                key,
+                ChartDialog(self.totalCounts, self.window()),
+            )
+            return
+
+        if key == "heatmap":
+            self._prepareHeatmapResult()
+            return
+
+        if key == "rules":
+            self._prepareAssociationResult()
+
+    def _prepareHeatmapResult(self) -> None:
+        if not self.heatmapData:
+            self._showResultMessage(
+                "heatmap",
+                "暂无热力图数据",
+                "请确认 Excel 中存在等级或国籍列，也可以通过“配置”手动指定。",
+            )
+            return
+
+        selectedTypes = list(self.totalCounts.keys())
+        levelGroups = []
+        countryGroups = []
+        for groupValue in self.heatmapGroups:
+            if self._looksLikeLevel(groupValue):
+                levelGroups.append(groupValue)
+            else:
+                countryGroups.append(groupValue)
+        if not levelGroups and not countryGroups:
+            levelGroups = list(self.heatmapGroups)
+
+        dialog = HeatmapDialog(
+            self.heatmapData,
+            selectedTypes,
+            list(self.heatmapGroups),
+            levelGroups,
+            countryGroups,
+            self.window(),
+        )
+        dialog.setDrillDownCallback(self._drillDownFromHeatmap)
+        self._mountDialogContent("heatmap", dialog)
+
+    def _prepareAssociationResult(self) -> None:
+        fileToTypes = {}
+        for record in self.currentRecords:
+            if len(record) < 7:
+                continue
+            fileName = record[0]
+            errorName = record[3]
+            fileToTypes.setdefault(fileName, set()).add(errorName)
+
+        transactions = [sorted(types) for types in fileToTypes.values() if types]
+        if len(transactions) < 2:
+            self._showResultMessage(
+                "rules",
+                "样本数量不足",
+                "关联规则按文件构建事务，至少需要两个包含偏误的 Excel 文件。",
+            )
+            return
+
+        if len(transactions) <= 5:
+            minSupport = 0.2
+        elif len(transactions) <= 20:
+            minSupport = 0.1
+        else:
+            minSupport = 0.05
+
+        logger.info(
+            f"[Bias] 启动关联规则挖掘: 事务数={len(transactions)}, "
+            f"支持度阈值={minSupport}"
+        )
+        dialog = AssociationRulesDialog(
+            transactions,
+            minSupport,
+            0.5,
+            self.window(),
+        )
+        self._mountDialogContent("rules", dialog)
 
     def _onChooseFile(self):
-        """选择文件"""
-        if not self.switchBtn.isChecked():
-            # 单文件模式
-            self._clearAllData()
-            file, _ = QFileDialog.getOpenFileName(
-                self, "选择 Excel 文件", "", "Excel Files (*.xlsx *.xls)"
-            )
-            files = [file] if file else []
-        else:
-            # 多文件模式
-            files, _ = QFileDialog.getOpenFileNames(
-                self, "选择多个 Excel 文件", "", "Excel Files (*.xlsx *.xls)"
-            )
-            newFiles = [f for f in files if f not in self.filesList]
-            if not newFiles:
-                if files:
-                    InfoBar.warning(
-                        "提示",
-                        "所有文件都已加载",
-                        Qt.Orientation.Horizontal,
-                        True,
-                        2000,
-                        InfoBarPosition.TOP_RIGHT,
-                        self,
-                    )
-                return
-            files = newFiles
-
+        """选择一个或多个文件，并根据数量自动确定处理模式。"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择一个或多个 Excel 文件",
+            "",
+            "Excel Files (*.xlsx)",
+        )
         if not files:
             return
 
-        self._startLoading(files)
+        uniqueFiles = list(dict.fromkeys(files))
+        self._clearAllData()
+        self._startLoading(uniqueFiles)
 
     def _startLoading(self, filePaths):
         """开始加载文件"""
@@ -2165,8 +2607,12 @@ class BiasInterface(QWidget):
             return
 
         self.chooseFileBtn.setEnabled(False)
+        self._pendingFileCount = len(filePaths)
+        self.sourceStatusLabel.setText(f"正在加载 {len(filePaths)} 个 Excel 文件…")
+        self.statusLabel.setText("正在读取数据，请稍候")
 
         self.loadThread = FileLoaderThread(filePaths)
+        self._refreshAnalyzeState()
         self.loadThread.progress.connect(self._onProgress)
         self.loadThread.fileLoaded.connect(self._onFileLoaded)
         self.loadThread.error.connect(self._onError)
@@ -2181,6 +2627,11 @@ class BiasInterface(QWidget):
         self.filesList.append(filePath)
         self.dfs[filePath] = df
         self._updateColumns()
+        totalRowsLoaded = sum(len(dataFrame) for dataFrame in self.dfs.values())
+        modeLabel = "多文件" if self._isMultiFileMode() else "单文件"
+        self.sourceStatusLabel.setText(
+            f"{modeLabel} · {len(self.filesList)} 个文件 · {totalRowsLoaded:,} 行"
+        )
 
     def _onError(self, errMsg: str):
         InfoBar.error(
@@ -2195,10 +2646,15 @@ class BiasInterface(QWidget):
 
     def _onFinished(self):
         self.loadThread = None
+        self._pendingFileCount = 0
         self.chooseFileBtn.setEnabled(True)
+        self.statusLabel.setText("数据已就绪，请选择偏误类型后开始分析")
+        self.chooseFileBtn.setText("重新选择")
+        self._refreshAnalyzeState()
+        modeLabel = "多文件" if self._isMultiFileMode() else "单文件"
         InfoBar.success(
             "加载成功",
-            f"已加载 {len(self.filesList)} 个文件",
+            f"已自动识别为{modeLabel}模式 · {len(self.filesList)} 个文件",
             Qt.Orientation.Horizontal,
             True,
             2000,
@@ -2211,9 +2667,11 @@ class BiasInterface(QWidget):
         if not self.dfs:
             self.columnCombobox.clear()
             self.columnCombobox.setEnabled(False)
+            self.columnConfigBtn.setEnabled(False)
+            self._refreshAnalyzeState()
             return
 
-        if self.switchBtn.isChecked():
+        if self._isMultiFileMode():
             columnSets = [set(df.columns) for df in self.dfs.values()]
             commonColumns = set.intersection(*columnSets) if columnSets else set()
             commonColumns = sorted(commonColumns)
@@ -2221,11 +2679,18 @@ class BiasInterface(QWidget):
             if not commonColumns:
                 self.columnCombobox.clear()
                 self.columnCombobox.setEnabled(False)
+                self.columnConfigBtn.setEnabled(False)
+                self.columnCompatibilityLabel.setText(
+                    "所选文件没有共同字段，请更换文件或使用单文件模式"
+                )
+                self.columnCompatibilityLabel.show()
+                self._refreshAnalyzeState()
                 return
 
             self.columnCombobox.clear()
             self.columnCombobox.addItems(commonColumns)
             self.columnCombobox.setEnabled(True)
+            self.columnConfigBtn.setEnabled(True)
         else:
             if self.filesList:
                 lastFile = self.filesList[-1]
@@ -2234,9 +2699,11 @@ class BiasInterface(QWidget):
                     self.columnCombobox.clear()
                     self.columnCombobox.addItems(columns)
                     self.columnCombobox.setEnabled(True)
+                    self.columnConfigBtn.setEnabled(True)
 
         # 自动识别等级/国籍列（用于热力图）
         self._detectGroupColumns()
+        self._refreshAnalyzeState()
 
     def _detectGroupColumns(self):
         """自动识别等级列与国籍列"""
@@ -2246,14 +2713,24 @@ class BiasInterface(QWidget):
         if not self.dfs:
             return
 
-        # 取首个 DataFrame 的列做匹配
+        # 多文件模式只能使用所有文件共有的分组列，避免从首个文件识别出的
+        # 列名被直接用于其他结构不同的 DataFrame。
         firstDf = next(iter(self.dfs.values()))
-        cols = list(firstDf.columns)
+        firstColumns = list(firstDf.columns)
+        if self._isMultiFileMode():
+            commonColumns = set(firstColumns)
+            for dataFrame in self.dfs.values():
+                commonColumns.intersection_update(dataFrame.columns)
+            columns = [column for column in firstColumns if column in commonColumns]
+        elif self.filesList and self.filesList[-1] in self.dfs:
+            columns = list(self.dfs[self.filesList[-1]].columns)
+        else:
+            columns = firstColumns
 
         levelKeywords = ["level", "hsk", "等级", "级别", "水准"]
         countryKeywords = ["country", "nationality", "国籍", "国家", "nation"]
 
-        for col in cols:
+        for col in columns:
             colLower = str(col).lower()
             if self.levelColumn is None and any(kw in colLower for kw in levelKeywords):
                 self.levelColumn = col
@@ -2263,9 +2740,9 @@ class BiasInterface(QWidget):
                 self.countryColumn = col
 
         # 手动配置优先：若用户已指定，则覆盖自动识别结果
-        if self.manualLevelColumn and self.manualLevelColumn in cols:
+        if self.manualLevelColumn and self.manualLevelColumn in columns:
             self.levelColumn = self.manualLevelColumn
-        if self.manualCountryColumn and self.manualCountryColumn in cols:
+        if self.manualCountryColumn and self.manualCountryColumn in columns:
             self.countryColumn = self.manualCountryColumn
 
         logger.info(
@@ -2287,7 +2764,7 @@ class BiasInterface(QWidget):
             return
 
         # 收集所有列（多文件模式取交集，单文件取当前文件列）
-        if self.switchBtn.isChecked() and len(self.dfs) > 1:
+        if self._isMultiFileMode():
             columnSets = [set(df.columns) for df in self.dfs.values()]
             allColumns = sorted(set.intersection(*columnSets))
         else:
@@ -2322,6 +2799,7 @@ class BiasInterface(QWidget):
             self.manualCountryColumn = newCountry
             # 重新解析列
             self._detectGroupColumns()
+            self._refreshAnalyzeState()
             InfoBar.success(
                 "配置已保存",
                 f"等级列：{newLevel or '未设置'}  |  国籍列：{newCountry or '未设置'}",
@@ -2333,19 +2811,15 @@ class BiasInterface(QWidget):
             )
             logger.info(f"[Bias] 列配置更新: 等级={newLevel}, 国籍={newCountry}")
 
-    def _onModeChanged(self, isChecked: bool):
-        """切换模式"""
-        text = "多文件模式" if isChecked else "单文件模式"
-        self.switchBtn.setText(text)
-        self._clearAllData()
-
     def _onColumnChanged(self):
         self.selectedColumn = self.columnCombobox.currentText()
+        self._refreshAnalyzeState()
 
     def _onFilterChanged(self):
         """筛选条件改变"""
         charSelected = self.charFilter.selectedTexts()
         wordSelected = self.wordFilter.selectedTexts()
+        sentenceSelected = self.sentFilter.selectedTexts()
 
         # 控制输入框可用性
         self.charLineEdit.setEnabled(True)
@@ -2355,6 +2829,15 @@ class BiasInterface(QWidget):
             self.charLineEdit.setEnabled(False)
         if "离合词错误 [CLH]" in wordSelected or "存疑词 [CY]" in wordSelected:
             self.wordLineEdit.setEnabled(False)
+
+        selectedCount = len(charSelected) + len(wordSelected) + len(sentenceSelected)
+        if selectedCount:
+            self.selectionSummaryLabel.setText(
+                f"已选 {selectedCount} 种"
+            )
+        else:
+            self.selectionSummaryLabel.setText("未选择")
+        self._refreshAnalyzeState()
 
     def _onInputMutual(self, text: str, inputType: str):
         """输入框互斥逻辑"""
@@ -2366,8 +2849,21 @@ class BiasInterface(QWidget):
 
     def _clearAllData(self):
         """清空所有数据"""
+        matchingWorker = getattr(self, "_matchingWorker", None)
+        if matchingWorker is not None:
+            try:
+                matchingWorker.cancel()
+                if matchingWorker.isRunning():
+                    matchingWorker.wait(1500)
+                matchingWorker.deleteLater()
+            except RuntimeError:
+                pass
+            self._matchingWorker = None
+        self._isAnalysisRunning = False
+
         self.filesList = []
         self.dfs = {}
+        self._pendingFileCount = 0
         self.selectedColumn = None
         self.levelColumn = None
         self.countryColumn = None
@@ -2381,8 +2877,21 @@ class BiasInterface(QWidget):
         }
         self.totalCounts = None
         self.tableWidget.setRowCount(0)
+        self.detailStack.setCurrentWidget(self.detailEmptyState)
+        self.detailEmptyState.setContent(
+            "等待分析",
+            "选择 Excel 文件、统计列和至少一种偏误类型后开始分析。",
+        )
         self.columnCombobox.clear()
         self.columnCombobox.setEnabled(False)
+        self.columnConfigBtn.setEnabled(False)
+        self.chooseFileBtn.setText("选择 Excel")
+        self.sourceStatusLabel.setText("尚未加载 Excel 文件")
+        self.statusLabel.setText("等待加载数据")
+        self.exportBtn.setEnabled(False)
+        self.analyzeBtn.setText("开始分析")
+        self._resetEmbeddedResults()
+        self._refreshAnalyzeState()
 
     def _runMatching(self):
         """执行匹配分析（P1-fix）
@@ -2412,6 +2921,25 @@ class BiasInterface(QWidget):
                 Qt.Orientation.Horizontal,
                 True,
                 3000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        missingTextFiles = [
+            os.path.basename(filePath)
+            for filePath, dataFrame in self.dfs.items()
+            if self.selectedColumn not in dataFrame.columns
+        ]
+        if missingTextFiles:
+            self._refreshAnalyzeState()
+            InfoBar.error(
+                "字段不一致",
+                f"有 {len(missingTextFiles)} 个文件缺少“{self.selectedColumn}”，"
+                "请重新选择分析字段",
+                Qt.Orientation.Horizontal,
+                True,
+                3500,
                 InfoBarPosition.TOP_RIGHT,
                 self,
             )
@@ -2459,6 +2987,16 @@ class BiasInterface(QWidget):
         self.heatmapGroups = []
         self.tableWidget.setRowCount(0)
         self.totalCounts = None
+        self.exportBtn.setEnabled(False)
+        self._resetEmbeddedResults()
+        self.detailEmptyState.setContent(
+            "正在分析",
+            "正在匹配偏误标记并整理结果，请稍候。",
+        )
+        self.detailStack.setCurrentWidget(self.detailEmptyState)
+        self.statusLabel.setText("正在准备分析任务…")
+        self._isAnalysisRunning = True
+        self._refreshAnalyzeState()
 
         # P1-fix:预编译正则在主线程一次性完成,避免内层循环重复 re.compile
         compiledPatterns: List[Tuple[str, "re.Pattern[str]", bool]] = []
@@ -2468,23 +3006,39 @@ class BiasInterface(QWidget):
 
         # 把 DataFrame 行转成不可变 tuple list,工作线程不触碰 pandas
         rows: List[Tuple[str, int, str, str, str]] = []
+        skippedFiles = []
         for filePath, df in self.dfs.items():
             if self.selectedColumn not in df.columns:
                 continue
 
-            textSeries = df[self.selectedColumn].astype(str).fillna("")
             fileName = os.path.basename(filePath)
+            try:
+                textSeries = df[self.selectedColumn].astype(str).fillna("")
+                levelSeries = (
+                    df[self.levelColumn].astype(str).fillna("")
+                    if self.levelColumn and self.levelColumn in df.columns
+                    else None
+                )
+                countrySeries = (
+                    df[self.countryColumn].astype(str).fillna("")
+                    if self.countryColumn and self.countryColumn in df.columns
+                    else None
+                )
+            except Exception as error:
+                skippedFiles.append(fileName)
+                logger.exception(f"[Bias] 文件 {fileName} 读取分析列失败: {error}")
+                continue
 
-            levelSeries = (
-                df[self.levelColumn].astype(str).fillna("")
-                if self.levelColumn
-                else None
-            )
-            countrySeries = (
-                df[self.countryColumn].astype(str).fillna("")
-                if self.countryColumn
-                else None
-            )
+            missingGroupColumns = [
+                columnName
+                for columnName in (self.levelColumn, self.countryColumn)
+                if columnName and columnName not in df.columns
+            ]
+            if missingGroupColumns:
+                logger.warning(
+                    f"[Bias] 文件 {fileName} 缺少分组列 "
+                    f"{missingGroupColumns}，对应值按未知处理"
+                )
 
             for idx, text in enumerate(textSeries):
                 if not text or text == "nan":
@@ -2501,7 +3055,25 @@ class BiasInterface(QWidget):
 
                 rows.append((fileName, idx + 2, text, rowLevel, rowCountry))
 
+        if skippedFiles:
+            InfoBar.warning(
+                "部分文件已跳过",
+                f"{len(skippedFiles)} 个文件无法读取所选字段，其余文件继续分析",
+                Qt.Orientation.Horizontal,
+                True,
+                3500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+
         if not rows:
+            self._isAnalysisRunning = False
+            self._refreshAnalyzeState()
+            self.statusLabel.setText("所选统计列中没有可分析的文本")
+            self.detailEmptyState.setContent(
+                "没有可分析文本",
+                "请检查统计列是否选择正确，或更换 Excel 文件。",
+            )
             InfoBar.warning(
                 "提示",
                 "未匹配到任何偏误",
@@ -2514,7 +3086,6 @@ class BiasInterface(QWidget):
             return
 
         # 启动后台 worker
-        self.analyzeBtn.setEnabled(False)
         worker = MatchingWorker(
             rows=rows,
             compiledPatterns=compiledPatterns,
@@ -2536,7 +3107,7 @@ class BiasInterface(QWidget):
 
     def _onMatchingFinished(self, payload: dict) -> None:
         """后台匹配完成,主线程消费结果并刷新 UI"""
-        self.analyzeBtn.setEnabled(True)
+        self._isAnalysisRunning = False
         records = payload["records"]
         typeCounts = payload["typeCounts"]
         self.currentRecords = records
@@ -2549,6 +3120,7 @@ class BiasInterface(QWidget):
 
         selectTypes = getattr(self, "_matchingSelectTypes", [])
         self.totalCounts = {name: self.typeCounts[name] for name in selectTypes}
+        self._resetEmbeddedResults()
 
         # 填充表格
         self.tableWidget.setRowCount(len(records))
@@ -2563,7 +3135,22 @@ class BiasInterface(QWidget):
             self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
             self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
 
-        if not records:
+        self.exportBtn.setEnabled(bool(records))
+        self.analyzeBtn.setText("重新分析")
+        self._refreshAnalyzeState()
+        self._selectResultTab("records")
+        if records:
+            self.detailStack.setCurrentWidget(self.tableWidget)
+            self.statusLabel.setText(
+                f"共定位 {len(records):,} 条偏误记录 · {len(selectTypes)} 种类型"
+            )
+        else:
+            self.detailEmptyState.setContent(
+                "没有匹配结果",
+                "当前条件下未发现偏误标记，可调整类型或指定字符/词语后重试。",
+            )
+            self.detailStack.setCurrentWidget(self.detailEmptyState)
+            self.statusLabel.setText("分析完成，当前条件下没有匹配结果")
             InfoBar.warning(
                 "提示",
                 "未匹配到任何偏误",
@@ -2575,7 +3162,14 @@ class BiasInterface(QWidget):
             )
 
     def _onMatchingFailed(self, err: str) -> None:
-        self.analyzeBtn.setEnabled(True)
+        self._isAnalysisRunning = False
+        self._refreshAnalyzeState()
+        self.statusLabel.setText(f"分析失败：{err}")
+        self.detailEmptyState.setContent(
+            "分析失败",
+            "请检查数据格式和统计列后重试。",
+        )
+        self.detailStack.setCurrentWidget(self.detailEmptyState)
         logger.error(f"[Bias] 匹配失败: {err}")
         InfoBar.error(
             "错误",
@@ -2588,140 +3182,20 @@ class BiasInterface(QWidget):
         )
 
     def _runCount(self):
-        """显示计数结果"""
-        if not self.totalCounts:
-            InfoBar.warning(
-                "提示",
-                "请先进行分析",
-                Qt.Orientation.Horizontal,
-                True,
-                2000,
-                InfoBarPosition.TOP_RIGHT,
-                self,
-            )
-            return
-
-        dialog = CountResultDialog(self.totalCounts, self.window())
-        dialog.exec()
+        """切换到计数结果页。"""
+        self._selectResultTab("count")
 
     def _runChart(self):
-        """显示图表"""
-        if not self.totalCounts:
-            InfoBar.warning(
-                "提示",
-                "请先进行分析",
-                Qt.Orientation.Horizontal,
-                True,
-                2000,
-                InfoBarPosition.TOP_RIGHT,
-                self,
-            )
-            return
-
-        dialog = ChartDialog(self.totalCounts, self.window())
-        dialog.exec()
+        """切换到图表结果页。"""
+        self._selectResultTab("chart")
 
     def _runHeatmap(self):
-        """显示偏误热力图（FR-ERR-002）"""
-        if not self.heatmapData:
-            InfoBar.warning(
-                "提示",
-                "请先进行分析\n（热力图需要等级或国籍列数据）",
-                Qt.Orientation.Horizontal,
-                True,
-                2500,
-                InfoBarPosition.TOP_RIGHT,
-                self,
-            )
-            return
-
-        selectedTypes = list(self.totalCounts.keys()) if self.totalCounts else []
-
-        # 拆分等级与国籍两组
-        levelGroups = []
-        countryGroups = []
-        for g in self.heatmapGroups:
-            # 根据值特征（HSK/数字级别 vs 其他）粗略区分
-            if self._looksLikeLevel(g):
-                levelGroups.append(g)
-            else:
-                countryGroups.append(g)
-
-        # 若两列均未识别且都没数据，按等级优先
-        if not levelGroups and not countryGroups:
-            levelGroups = list(self.heatmapGroups)
-
-        dialog = HeatmapDialog(
-            self.heatmapData,
-            selectedTypes,
-            list(self.heatmapGroups),
-            levelGroups,
-            countryGroups,
-            self.window(),
-        )
-        dialog.setDrillDownCallback(self._drillDownFromHeatmap)
-        dialog.exec()
+        """切换到偏误热力图结果页（FR-ERR-002）。"""
+        self._selectResultTab("heatmap")
 
     def _runAssociationRules(self):
-        """偏误关联规则挖掘（FR-ERR-003）
-
-        按文件级别构建事务：每个文件中的偏误类型集合 = 一个事务。
-        """
-        if not self.currentRecords:
-            InfoBar.warning(
-                "提示",
-                "请先进行分析",
-                Qt.Orientation.Horizontal,
-                True,
-                2500,
-                InfoBarPosition.TOP_RIGHT,
-                self,
-            )
-            return
-
-        # 按文件聚合偏误类型
-        fileToTypes: dict = {}
-        for record in self.currentRecords:
-            if len(record) < 7:
-                continue
-            fileName = record[0]
-            errName = record[3]
-            fileToTypes.setdefault(fileName, set()).add(errName)
-
-        transactions = [sorted(list(types)) for types in fileToTypes.values() if types]
-
-        if len(transactions) < 2:
-            InfoBar.warning(
-                "提示",
-                "事务数量不足（至少需要 2 个文件包含偏误）",
-                Qt.Orientation.Horizontal,
-                True,
-                3000,
-                InfoBarPosition.TOP_RIGHT,
-                self,
-            )
-            return
-
-        # 根据事务数自适应阈值：事务少时降低支持度门槛
-        if len(transactions) <= 5:
-            minSupport = 0.2
-        elif len(transactions) <= 20:
-            minSupport = 0.1
-        else:
-            minSupport = 0.05
-
-        logger.info(
-            f"[Bias] 启动关联规则挖掘: 事务数={len(transactions)}, "
-            f"支持度阈值={minSupport}"
-        )
-
-        dialog = AssociationRulesDialog(
-            transactions,
-            minSupport,
-            0.5,
-            self.window(),
-        )
-        dialog.exec()
+        """切换到偏误关联规则结果页（FR-ERR-003）。"""
+        self._selectResultTab("rules")
 
     def _looksLikeLevel(self, value: str) -> bool:
         """简易判断：HSK 等级 / 数字级别"""
@@ -2791,6 +3265,12 @@ class BiasInterface(QWidget):
             self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
             self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
             self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
+
+        self.detailStack.setCurrentWidget(self.tableWidget)
+        self._selectResultTab("records")
+        self.statusLabel.setText(
+            f"已下钻到 {errorName} × {groupVal} · {len(filtered)} 条记录"
+        )
 
         modeZh = "等级" if mode == "level" else "国籍"
         InfoBar.success(
