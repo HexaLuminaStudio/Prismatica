@@ -45,6 +45,8 @@ class HskInterface(QWidget):
             sourceName="HSK 动态作文语料库",
             sourceCaption="创建任务前会查询预计命中数量，并由任务中心持续跟踪下载。",
             pageIcon=FluentIcon.CLOUD_DOWNLOAD,
+            downloadType="Hsk",
+            taskType=HSK_DOWNLOAD_TASK_TYPE,
             modes=[
                 DownloadMode(
                     "stringGeneral",
@@ -104,11 +106,9 @@ class HskInterface(QWidget):
         self.runTaskButton.clicked.connect(self._runTask)
         self.batchAddButton.clicked.connect(self._onBatchAddClicked)
         self.batchDownloadButton.clicked.connect(self._onBatchDownloadClicked)
-        batchApplyService.itemsChanged.connect(self._onBatchItemsChanged)
 
         self._initLayout()
         self.workbench.setCurrentMode("stringGeneral")
-        self._onBatchItemsChanged(batchApplyService.getCount())
         self._refreshTaskSummary()
 
     def _initLayout(self) -> None:
@@ -237,15 +237,12 @@ class HskInterface(QWidget):
         return {"url": url, "payload": {**baseDict, **advanceDict}}
 
     def _onBatchAddClicked(self) -> None:
-        """把当前条件加入 HSK 批量清单。"""
+        """核对预计数量后直接加入 HSK 批量清单。"""
         infoDict = self._buildInfoDict()
         if not infoDict:
             return
         logger.debug(f"[HSK] 批量添加: {infoDict}")
-        from app.view.widgets.batch_download_dialog import BatchDownloadDialog
-
-        dialog = BatchDownloadDialog("Hsk", infoDict, self.window())
-        dialog.exec()
+        self.workbench.enqueueBatchItem(infoDict)
 
     def _onBatchDownloadClicked(self) -> None:
         """仅提交 HSK 类型的批量下载任务。"""
@@ -255,18 +252,29 @@ class HskInterface(QWidget):
         from app.core.services import taskManager
 
         created = 0
-        for item in items:
+        successfulIndexes = []
+        for index, item in enumerate(items):
             try:
                 taskId = taskManager.createTask(item.taskType, item.toInfoDict())
                 created += 1
+                successfulIndexes.append(index)
                 logger.info(f"[HSK] 批量创建任务 {taskId}: {item.summary()[:40]}")
             except Exception as exc:
                 logger.error(f"[HSK] createTask 失败: {exc}")
-        batchApplyService.clearAll(HSK_DOWNLOAD_TASK_TYPE)
+        for index in reversed(successfulIndexes):
+            batchApplyService.removeItem(index, HSK_DOWNLOAD_TASK_TYPE)
+        failed = len(items) - created
         if created > 0:
-            InfoBar.success(
-                title="批量任务已创建",
-                content=f"已创建 {created} 个下载任务，请到任务中心查看进度",
+            infoBarMethod = InfoBar.success if failed == 0 else InfoBar.warning
+            title = "批量任务已创建" if failed == 0 else "部分任务已创建"
+            content = (
+                f"已创建 {created} 个下载任务，请到任务中心查看进度"
+                if failed == 0
+                else f"成功 {created} 项，失败 {failed} 项；失败项已保留在清单中"
+            )
+            infoBarMethod(
+                title=title,
+                content=content,
                 orient=Qt.Orientation.Horizontal,
                 isClosable=True,
                 duration=3500,
@@ -277,11 +285,22 @@ class HskInterface(QWidget):
                 signalBus.navigateToSubInterface.emit("TaskInterface")
             except Exception as exc:
                 logger.warning(f"[HSK] 跳转 Task 页面失败: {exc}")
+        elif failed > 0:
+            InfoBar.error(
+                title="批量任务创建失败",
+                content=f"{failed} 项任务均未创建，清单已保留，请稍后重试",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                duration=4000,
+                position=InfoBarPosition.TOP_RIGHT,
+                parent=self.window(),
+            )
 
     def _onBatchItemsChanged(self, _count: int) -> None:
         """刷新当前来源的批量清单状态。"""
-        count = batchApplyService.getCount(HSK_DOWNLOAD_TASK_TYPE)
-        self.workbench.setBatchCount(count)
+        self.workbench.setBatchCount(
+            batchApplyService.getCount(HSK_DOWNLOAD_TASK_TYPE)
+        )
 
     def _getCurrentSearchWidget(self):
         """获取当前检索方式对应的真实表单。"""

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QBoxLayout,
     QButtonGroup,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QSizePolicy,
     QStackedWidget,
+    QPushButton as QtPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -32,10 +33,18 @@ from qfluentwidgets import (
     ScrollArea,
     StrongBodyLabel,
     SubtitleLabel,
+    TransparentToolButton,
+    InfoBar,
+    InfoBarPosition,
     isDarkTheme,
     qconfig,
 )
 
+from app.core.services import (
+    GetTotalWorker,
+    GlobalGetTotalWorker,
+    batchApplyService,
+)
 from app.view.widgets.prismatica_theme import shellPalette
 
 
@@ -49,6 +58,64 @@ class DownloadMode:
     icon: FluentIcon
 
 
+class DownloadModeButton(QtPushButton):
+    """图标位置由布局约束的检索方式卡片按钮。"""
+
+    def __init__(
+        self,
+        title: str,
+        description: str,
+        icon: FluentIcon,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("downloadModeButton")
+        self.setCheckable(True)
+        self.setMinimumHeight(64)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.setAccessibleName(title)
+        self.setAccessibleDescription(description)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(10)
+
+        self.iconWidget = IconWidget(icon, self)
+        self.iconWidget.setObjectName("downloadModeIcon")
+        self.iconWidget.setFixedSize(20, 20)
+        self.iconWidget.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        layout.addWidget(
+            self.iconWidget,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+
+        textLayout = QVBoxLayout()
+        textLayout.setContentsMargins(0, 0, 0, 0)
+        textLayout.setSpacing(1)
+        self.titleLabel = StrongBodyLabel(title, self)
+        self.titleLabel.setObjectName("downloadModeTitle")
+        self.descriptionLabel = CaptionLabel(description, self)
+        self.descriptionLabel.setObjectName("downloadModeDescription")
+        self.descriptionLabel.setWordWrap(True)
+        for label in (self.titleLabel, self.descriptionLabel):
+            label.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+            )
+        textLayout.addWidget(self.titleLabel)
+        textLayout.addWidget(self.descriptionLabel)
+        layout.addLayout(textLayout, 1)
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(max(180, hint.width()), max(64, hint.height()))
+
+
 class DownloadModeRail(QWidget):
     """可访问的纵向检索方式选择器。"""
 
@@ -58,7 +125,7 @@ class DownloadModeRail(QWidget):
         super().__init__(parent)
         self.setObjectName("downloadModeRail")
         self._currentRouteKey = ""
-        self._buttons: Dict[str, PushButton] = {}
+        self._buttons: Dict[str, DownloadModeButton] = {}
         self._routeKeys: List[str] = []
         self._isCompact = False
         self._buttonGroup = QButtonGroup(self)
@@ -78,14 +145,7 @@ class DownloadModeRail(QWidget):
         """添加一个检索方式。"""
         if routeKey in self._buttons:
             return
-        text = title if not description else f"{title}\n{description}"
-        button = PushButton(text, self, icon)
-        button.setObjectName("downloadModeButton")
-        button.setCheckable(True)
-        button.setMinimumHeight(64)
-        button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        button.setAccessibleName(title)
-        button.setAccessibleDescription(description)
+        button = DownloadModeButton(title, description, icon, self)
         button.clicked.connect(
             lambda _checked=False, key=routeKey: self.setCurrentItem(key)
         )
@@ -109,7 +169,7 @@ class DownloadModeRail(QWidget):
         """返回当前检索方式路由键。"""
         return self._currentRouteKey
 
-    def button(self, routeKey: str) -> Optional[PushButton]:
+    def button(self, routeKey: str) -> Optional[DownloadModeButton]:
         """返回指定检索方式按钮。"""
         return self._buttons.get(routeKey)
 
@@ -146,12 +206,16 @@ class DownloadTaskWorkbench(QWidget):
         sourceCaption: str,
         pageIcon: FluentIcon,
         modes: List[DownloadMode],
+        downloadType: Literal["Hsk", "Global"],
+        taskType: str,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("DownloadTaskWorkbench")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._modes = {mode.routeKey: mode for mode in modes}
+        self._downloadType = downloadType
+        self._taskType = taskType
         self._searchWidgets: Dict[str, QWidget] = {}
         self._watchedObjects = set()
         self._workspaceLayout: Optional[QBoxLayout] = None
@@ -159,6 +223,13 @@ class DownloadTaskWorkbench(QWidget):
         self._editorPanel: Optional[CardWidget] = None
         self._summaryPanel: Optional[CardWidget] = None
         self._summaryRows: Optional[QVBoxLayout] = None
+        self._batchRows: Optional[QVBoxLayout] = None
+        self._batchListScroll: Optional[ScrollArea] = None
+        self._batchEmptyLabel: Optional[CaptionLabel] = None
+        self._batchCountLabel: Optional[CaptionLabel] = None
+        self._batchClearButton: Optional[TransparentToolButton] = None
+        self._batchPreviewWorker = None
+        self._pendingBatchInfoDict: Optional[Dict[str, Any]] = None
 
         self.modeRail = DownloadModeRail(self)
         self.typeSegmentedWidget = self.modeRail
@@ -178,11 +249,11 @@ class DownloadTaskWorkbench(QWidget):
             FluentIcon.CLOUD_DOWNLOAD,
         )
         self.batchAddButton = PushButton(
-            "加入批量清单",
+            "加入清单",
             self,
             FluentIcon.ADD,
         )
-        self.batchDownloadButton = PushButton("批量下载 (0)", self)
+        self.batchDownloadButton = PushButton("提交批量任务 (0)", self)
         self.batchDownloadButton.setEnabled(False)
         for button in (
             self.runTaskButton,
@@ -210,6 +281,8 @@ class DownloadTaskWorkbench(QWidget):
 
         self._initUi(title, subtitle, pageIcon, modes)
         self._connectSignals()
+        batchApplyService.itemsChanged.connect(self._onBatchItemsChanged)
+        self._onBatchItemsChanged(batchApplyService.getCount())
         self._applyTheme()
         qconfig.themeChangedFinished.connect(self._applyTheme)
 
@@ -391,9 +464,52 @@ class DownloadTaskWorkbench(QWidget):
         batchSeparator.setObjectName("downloadSeparator")
         batchSeparator.setFrameShape(QFrame.Shape.HLine)
         layout.addWidget(batchSeparator)
-        layout.addWidget(StrongBodyLabel("批量清单", panel))
+
+        batchHeader = QHBoxLayout()
+        batchHeader.setSpacing(8)
+        batchHeader.addWidget(StrongBodyLabel("批量清单", panel))
+        self._batchCountLabel = CaptionLabel("0", panel)
+        self._batchCountLabel.setObjectName("downloadBatchCount")
+        batchHeader.addWidget(self._batchCountLabel)
+        batchHeader.addStretch(1)
+        self._batchClearButton = TransparentToolButton(
+            FluentIcon.DELETE, panel
+        )
+        self._batchClearButton.setToolTip("清空当前来源的批量清单")
+        self._batchClearButton.setAccessibleName("清空批量清单")
+        self._batchClearButton.clicked.connect(self.clearBatchItems)
+        self._batchClearButton.setEnabled(False)
+        batchHeader.addWidget(self._batchClearButton)
+        layout.addLayout(batchHeader)
+
         self._batchCaptionLabel.setObjectName("downloadMutedText")
         layout.addWidget(self._batchCaptionLabel)
+
+        self._batchEmptyLabel = CaptionLabel(
+            "调整条件后点击“加入清单”。", panel
+        )
+        self._batchEmptyLabel.setObjectName("downloadMutedText")
+        self._batchEmptyLabel.setWordWrap(True)
+        layout.addWidget(self._batchEmptyLabel)
+
+        self._batchListScroll = ScrollArea(panel)
+        self._batchListScroll.setObjectName("downloadBatchScroll")
+        self._batchListScroll.setWidgetResizable(True)
+        self._batchListScroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._batchListScroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._batchListScroll.setMinimumHeight(92)
+        self._batchListScroll.setMaximumHeight(210)
+        batchHost = QWidget(self._batchListScroll)
+        batchHost.setObjectName("downloadBatchHost")
+        self._batchRows = QVBoxLayout(batchHost)
+        self._batchRows.setContentsMargins(0, 0, 3, 0)
+        self._batchRows.setSpacing(6)
+        self._batchRows.addStretch(1)
+        self._batchListScroll.setWidget(batchHost)
+        self._batchListScroll.hide()
+        layout.addWidget(self._batchListScroll)
         layout.addWidget(self.batchDownloadButton)
         return panel
 
@@ -502,15 +618,187 @@ class DownloadTaskWorkbench(QWidget):
             self._summaryRows.addWidget(row)
 
     def setBatchCount(self, count: int) -> None:
-        """刷新当前来源的批量任务数量。"""
-        self.batchDownloadButton.setText(f"批量下载 ({count})")
+        """兼容旧调用；实际内容始终从隔离后的清单服务刷新。"""
+        del count
+        self._renderBatchItems()
+
+    def enqueueBatchItem(self, infoDict: Dict[str, Any]) -> bool:
+        """核对预计数量后直接加入清单，不再打开二次确认弹窗。"""
+        if self._batchPreviewWorker is not None:
+            return False
+        url = str(infoDict.get("url") or "")
+        payload = dict(infoDict.get("payload") or {})
+        if not url:
+            return False
+        if batchApplyService.containsItem(self._taskType, url, payload):
+            InfoBar.warning(
+                title="任务已在清单中",
+                content="请调整检索条件后再添加。",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                duration=2400,
+                position=InfoBarPosition.TOP_RIGHT,
+                parent=self.window(),
+            )
+            return False
+
+        self._pendingBatchInfoDict = {"url": url, "payload": payload}
+        self._setBatchAddBusy(True)
+        workerClass = (
+            GetTotalWorker
+            if self._downloadType == "Hsk"
+            else GlobalGetTotalWorker
+        )
+        self._batchPreviewWorker = workerClass(self._pendingBatchInfoDict)
+        self._batchPreviewWorker.finished.connect(
+            self._onBatchPreviewFinished
+        )
+        self._batchPreviewWorker.failed.connect(self._onBatchPreviewFailed)
+        self._batchPreviewWorker.start()
+        return True
+
+    def _onBatchPreviewFinished(self, total: int) -> None:
+        infoDict = self._pendingBatchInfoDict
+        self._cleanupBatchPreviewWorker()
+        self._setBatchAddBusy(False)
+        if infoDict is None:
+            return
+        if total <= 0:
+            InfoBar.warning(
+                title="未加入清单",
+                content="当前条件未匹配到可下载语料，请调整条件后重试。",
+                orient=Qt.Orientation.Horizontal,
+                isClosable=True,
+                duration=2800,
+                position=InfoBarPosition.TOP_RIGHT,
+                parent=self.window(),
+            )
+            return
+        isAdded = batchApplyService.addItem(
+            self._taskType,
+            str(infoDict.get("url") or ""),
+            dict(infoDict.get("payload") or {}),
+            int(total),
+        )
+        if isAdded:
+            self._batchCaptionLabel.setText(
+                f"已加入清单，预计 {int(total):,} 条。"
+            )
+
+    def _onBatchPreviewFailed(self, errorMessage: str) -> None:
+        self._cleanupBatchPreviewWorker()
+        self._setBatchAddBusy(False)
+        InfoBar.error(
+            title="未加入清单",
+            content=f"无法核对预计数量：{errorMessage[:60]}。请稍后重试。",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            duration=3200,
+            position=InfoBarPosition.TOP_RIGHT,
+            parent=self.window(),
+        )
+
+    def _setBatchAddBusy(self, isBusy: bool) -> None:
+        self.batchAddButton.setEnabled(not isBusy)
+        self.batchAddButton.setText("正在核对…" if isBusy else "加入清单")
+
+    def _cleanupBatchPreviewWorker(self) -> None:
+        worker = self._batchPreviewWorker
+        self._batchPreviewWorker = None
+        self._pendingBatchInfoDict = None
+        if worker is None:
+            return
+        try:
+            worker.finished.disconnect(self._onBatchPreviewFinished)
+        except Exception:
+            pass
+        try:
+            worker.failed.disconnect(self._onBatchPreviewFailed)
+        except Exception:
+            pass
+        try:
+            if worker.isRunning():
+                stopFunction = getattr(worker, "stop", None)
+                if callable(stopFunction):
+                    stopFunction()
+                worker.wait(500)
+        except Exception:
+            pass
+        worker.deleteLater()
+
+    def _onBatchItemsChanged(self, _count: int) -> None:
+        self._renderBatchItems()
+
+    def _renderBatchItems(self) -> None:
+        if self._batchRows is None:
+            return
+        while self._batchRows.count() > 1:
+            item = self._batchRows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        items = batchApplyService.getItems(self._taskType)
+        for index, item in enumerate(items):
+            self._batchRows.insertWidget(
+                self._batchRows.count() - 1,
+                self._makeBatchRow(index, item),
+            )
+
+        count = len(items)
+        self.batchDownloadButton.setText(f"提交批量任务 ({count})")
         self.batchDownloadButton.setEnabled(count > 0)
+        if self._batchCountLabel is not None:
+            self._batchCountLabel.setText(str(count))
+        if self._batchClearButton is not None:
+            self._batchClearButton.setEnabled(count > 0)
+        if self._batchEmptyLabel is not None:
+            self._batchEmptyLabel.setVisible(count == 0)
+        if self._batchListScroll is not None:
+            self._batchListScroll.setVisible(count > 0)
         if count > 0:
             self._batchCaptionLabel.setText(
-                f"已有 {count} 个待提交任务，仅包含当前数据来源。"
+                f"{count} 个任务待提交，可继续调整条件并添加。"
             )
         else:
             self._batchCaptionLabel.setText("当前来源还没有待提交任务。")
+
+    def _makeBatchRow(self, index: int, item) -> QFrame:
+        row = QFrame(self)
+        row.setObjectName("downloadBatchRow")
+        rowLayout = QHBoxLayout(row)
+        rowLayout.setContentsMargins(10, 8, 6, 8)
+        rowLayout.setSpacing(8)
+
+        textLayout = QVBoxLayout()
+        textLayout.setSpacing(2)
+        summaryLabel = BodyLabel(item.summary(), row)
+        summaryLabel.setWordWrap(True)
+        textLayout.addWidget(summaryLabel)
+        totalText = (
+            f"预计 {item.total:,} 条" if item.total > 0 else "数量未确认"
+        )
+        totalLabel = CaptionLabel(totalText, row)
+        totalLabel.setObjectName("downloadMutedText")
+        textLayout.addWidget(totalLabel)
+        rowLayout.addLayout(textLayout, 1)
+
+        removeButton = TransparentToolButton(FluentIcon.CLOSE, row)
+        removeButton.setToolTip("移除这项任务")
+        removeButton.setAccessibleName(f"移除批量任务 {index + 1}")
+        removeButton.clicked.connect(
+            lambda _checked=False, itemIndex=index: self.removeBatchItem(
+                itemIndex
+            )
+        )
+        rowLayout.addWidget(removeButton)
+        return row
+
+    def removeBatchItem(self, index: int) -> None:
+        batchApplyService.removeItem(index, self._taskType)
+
+    def clearBatchItems(self) -> None:
+        batchApplyService.clearAll(self._taskType)
 
     def setBusy(self, isBusy: bool) -> None:
         """切换创建任务按钮的忙碌状态。"""
@@ -536,6 +824,9 @@ class DownloadTaskWorkbench(QWidget):
             QScrollArea#downloadWorkbenchScroll > QWidget > QWidget,
             QScrollArea#downloadFormScroll,
             QScrollArea#downloadFormScroll > QWidget > QWidget,
+            QScrollArea#downloadBatchScroll,
+            QScrollArea#downloadBatchScroll > QWidget > QWidget,
+            QWidget#downloadBatchHost,
             QWidget#downloadFormHost,
             QWidget#downloadWorkspace,
             QWidget#downloadModeRail,
@@ -557,7 +848,8 @@ class DownloadTaskWorkbench(QWidget):
             }}
             QLabel#downloadPageSubtitle,
             QLabel#downloadMutedText,
-            QLabel#downloadSummaryKey {{
+            QLabel#downloadSummaryKey,
+            QLabel#downloadModeDescription {{
                 color: {palette.mutedText.name()};
             }}
             QLabel#downloadSourceChip {{
@@ -569,6 +861,12 @@ class DownloadTaskWorkbench(QWidget):
             QLabel#downloadSourceName {{
                 color: {accentText};
             }}
+            QLabel#downloadBatchCount {{
+                color: {accentText};
+                background: {accentSurface};
+                border-radius: 5px;
+                padding: 2px 7px;
+            }}
             QFrame#downloadSeparator {{
                 color: {palette.border.name()};
                 background: {palette.border.name()};
@@ -576,8 +874,6 @@ class DownloadTaskWorkbench(QWidget):
                 max-height: 1px;
             }}
             QPushButton#downloadModeButton {{
-                text-align: left;
-                padding: 8px 10px;
                 border: 1px solid transparent;
                 border-radius: 8px;
                 background: transparent;
@@ -586,11 +882,18 @@ class DownloadTaskWorkbench(QWidget):
                 background: {surfaceMuted};
             }}
             QPushButton#downloadModeButton:checked {{
-                color: {accentText};
                 background: {accentSurface};
                 border: 1px solid {palette.border.name()};
             }}
+            QPushButton#downloadModeButton:checked QLabel#downloadModeTitle {{
+                color: {accentText};
+            }}
             QFrame#downloadSummaryRow {{
+                background: {surfaceMuted};
+                border: none;
+                border-radius: 8px;
+            }}
+            QFrame#downloadBatchRow {{
                 background: {surfaceMuted};
                 border: none;
                 border-radius: 8px;
@@ -645,6 +948,16 @@ class DownloadTaskWorkbench(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._applyResponsiveLayout()
+
+    def closeEvent(self, event) -> None:
+        try:
+            batchApplyService.itemsChanged.disconnect(
+                self._onBatchItemsChanged
+            )
+        except Exception:
+            pass
+        self._cleanupBatchPreviewWorker()
+        super().closeEvent(event)
 
 
 __all__ = ["DownloadMode", "DownloadModeRail", "DownloadTaskWorkbench"]
