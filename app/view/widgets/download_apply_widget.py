@@ -1,8 +1,7 @@
 # coding: utf-8
 
-import json
 from typing import Literal, Dict, Any
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame, QScrollArea
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame
 from PySide6.QtCore import Qt
 from app.core.utils import logger
 
@@ -35,6 +34,13 @@ PARAM_LABELS = {
     "title": "作文题目",
     "level": "作文等级",
     "nation": "国籍",
+    "start_word": "首字符串",
+    "pre_word": "前词",
+    "word_distance": "词距",
+    "post_word": "后词",
+    "end_word": "尾字符串",
+    "depType": "句法结构",
+    "wrong_type": "错句类型",
     # Global参数
     "keystr": "关键字",
     "tablename": "语料类型",
@@ -263,7 +269,7 @@ class DownloadApplyWidget(MessageBoxBase):
 
     def onQueryFailed(self, errorMsg: str):
         """查询失败回调"""
-        self.numberItem.updateValue(f"查询失败")
+        self.numberItem.updateValue("查询失败")
         self.yesButton.setEnabled(False)
         self.cleanupWorker()
 

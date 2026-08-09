@@ -82,6 +82,16 @@ class HskCorpusModel(QAbstractTableModel):
     def lastColumn(self) -> str:
         return self._lastColumn
 
+    def columns(self) -> List[str]:
+        """返回当前稳定列顺序，供结果表列设置使用。"""
+        return list(self._columns)
+
+    def recordAt(self, rowIndex: int) -> Optional[Dict]:
+        """返回指定行的记录副本，供详情视图读取。"""
+        if rowIndex < 0 or rowIndex >= len(self._rows):
+            return None
+        return dict(self._rows[rowIndex])
+
     # ------------------------------------------------------------------
     # QAbstractTableModel 接口
     # ------------------------------------------------------------------

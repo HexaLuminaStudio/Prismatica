@@ -46,12 +46,16 @@ import time
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
+    QAbstractItemView,
     QBoxLayout,
     QFrame,
     QHBoxLayout,
+    QMenu,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -83,10 +87,14 @@ from qfluentwidgets import (
 from app.core.utils import logger
 
 from app.core.services.hsk_corpus_service import HskCorpusService
+from app.core.services.hsk_local_corpus_service import hskLocalCorpusService
 from app.core.utils.data_paths import HSK_CORPUS_DB
 from app.core.utils.constant import hskCountryDict
 from app.view.widgets.freq_analyzer.worker_utils import WorkerMixin
 from app.view.widgets.hsk_corpus.hsk_corpus_model import HskCorpusModel
+from app.view.widgets.hsk_corpus.hsk_corpus_detail_drawer import (
+    HskCorpusDetailDrawer,
+)
 from app.view.widgets.hsk_corpus.hsk_corpus_search_worker import (
     HskCorpusSearchWorker,
 )
@@ -97,6 +105,17 @@ _UI_PULL_INTERVAL_MS = 60
 
 # 表格单次最多向 UI 渲染的行数(后台仍累计全量,但 UI 只显示前 N 条)
 _DISPLAY_LIMIT: int = 20
+
+# 高频阅读列优先显示；其余真实字段可通过「列设置」随时打开。
+_DEFAULT_RESULT_COLUMNS = {
+    "作文题目",
+    "国籍",
+    "证书级别",
+    "作文分数",
+    "总字数",
+}
+
+_INTERNAL_RESULT_COLUMNS = {"imported_at"}
 
 # ------------------------------------------------------------------
 # 绑定的 HSK 语料库文件路径(内部实现细节,不向用户暴露)
@@ -445,7 +464,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         # PRD-005:最近一次「搜索」成功的条件与导出 worker
         self._lastConditions: List[Dict] = []
         self._lastSearchFinished: bool = False
-        self._exportWorker = None  # type: Optional[Any]
+        self._exportWorker: Optional[Any] = None
         self._lastExportDir: Optional[str] = None  # 用于完成后「打开文件夹」
 
         # 条件行列表(动态增删)
@@ -470,6 +489,15 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._emptyStateTitle: Optional[StrongBodyLabel] = None
         self._emptyStateCaption: Optional[CaptionLabel] = None
         self._corpusCountLabel: Optional[CaptionLabel] = None
+        self._conditionSummary: Optional[QFrame] = None
+        self._conditionSummaryTitle: Optional[StrongBodyLabel] = None
+        self._conditionSummaryText: Optional[CaptionLabel] = None
+        self._resultSplitter: Optional[QSplitter] = None
+        self._detailDrawer: Optional[HskCorpusDetailDrawer] = None
+        self.columnSettingsBtn: Optional[PushButton] = None
+        self._columnMenu: Optional[QMenu] = None
+        self._columnActions: Dict[str, QAction] = {}
+        self._visibleResultColumns = set(_DEFAULT_RESULT_COLUMNS)
 
         # 主线程节流拉取 timer
         self._pullTimer = QTimer(self)
@@ -650,6 +678,13 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         )
         resultHeader.addWidget(self.statusLabel)
 
+        self.columnSettingsBtn = PushButton(
+            "列设置", self._tableCard, FluentIcon.SETTING
+        )
+        self.columnSettingsBtn.setToolTip("选择结果表中显示的字段")
+        self.columnSettingsBtn.setAccessibleName("设置检索结果列")
+        resultHeader.addWidget(self.columnSettingsBtn)
+
         # PRD-005:导出最近一次搜索的全部命中作文
         self.exportAllBtn = PushButton(
             "导出全部命中", self._tableCard, FluentIcon.SAVE
@@ -662,6 +697,28 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.exportAllBtn.clicked.connect(self._onExportAllClicked)
         resultHeader.addWidget(self.exportAllBtn)
         resultLayout.addLayout(resultHeader)
+
+        self._conditionSummary = QFrame(self._tableCard)
+        self._conditionSummary.setObjectName("hskConditionSummary")
+        self._conditionSummary.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True
+        )
+        summaryLayout = QVBoxLayout(self._conditionSummary)
+        summaryLayout.setContentsMargins(12, 9, 12, 9)
+        summaryLayout.setSpacing(2)
+        self._conditionSummaryTitle = StrongBodyLabel(
+            "尚未应用检索条件", self._conditionSummary
+        )
+        self._conditionSummaryTitle.setObjectName("hskConditionSummaryTitle")
+        summaryLayout.addWidget(self._conditionSummaryTitle)
+        self._conditionSummaryText = CaptionLabel(
+            "完成检索后，这里会保留本次实际使用的条件。",
+            self._conditionSummary,
+        )
+        self._conditionSummaryText.setObjectName("hskConditionSummaryText")
+        self._conditionSummaryText.setWordWrap(True)
+        summaryLayout.addWidget(self._conditionSummaryText)
+        resultLayout.addWidget(self._conditionSummary)
 
         self._resultStack = QStackedWidget(self._tableCard)
         self._resultStack.setObjectName("hskResultStack")
@@ -708,13 +765,43 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.tableView.setWordWrap(False)
         self.tableView.verticalHeader().setVisible(False)
         self.tableView.verticalHeader().setDefaultSectionSize(40)
+        self.tableView.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.tableView.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.tableView.setAlternatingRowColors(True)
         self.tableView.setAccessibleName("HSK 作文检索结果表")
 
         self.model = HskCorpusModel(self.tableView)
         self.model.setHeaderMap(self._service.columnHeaderMap())
         self.tableView.setModel(self.model)
+        self.model.reset()
+        self.tableView.selectionModel().currentRowChanged.connect(
+            self._onResultCurrentRowChanged
+        )
+        self.tableView.clicked.connect(self._onResultIndexActivated)
         self._resultStack.addWidget(self.tableView)
-        resultLayout.addWidget(self._resultStack, 1)
+
+        self._detailDrawer = HskCorpusDetailDrawer(self._tableCard)
+        self._detailDrawer.closed.connect(self._hideDetailDrawer)
+        self._detailDrawer.hide()
+
+        self._resultSplitter = QSplitter(
+            Qt.Orientation.Horizontal, self._tableCard
+        )
+        self._resultSplitter.setObjectName("hskResultSplitter")
+        self._resultSplitter.setChildrenCollapsible(False)
+        self._resultSplitter.setHandleWidth(8)
+        self._resultSplitter.addWidget(self._resultStack)
+        self._resultSplitter.addWidget(self._detailDrawer)
+        self._resultSplitter.setStretchFactor(0, 1)
+        self._resultSplitter.setStretchFactor(1, 0)
+        resultLayout.addWidget(self._resultSplitter, 1)
+
+        self._createColumnMenu()
+        self._applyColumnVisibility()
 
         self._dbPathLabel = CaptionLabel("", self._tableCard)
         self._dbPathLabel.setObjectName("hskDatabaseMessage")
@@ -745,6 +832,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             border = "#3B3B3B"
             text = "#F3F3F3"
             muted = "#B7B7B7"
+            accent = "#00B09C"
             accentSurface = "rgba(0, 176, 156, 0.18)"
             accentText = "#5DE0CF"
             dangerSurface = "rgba(255, 99, 99, 0.16)"
@@ -756,6 +844,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             border = "#D9E2E2"
             text = "#1F2A2A"
             muted = "#5D6B6B"
+            accent = "#007C70"
             accentSurface = "rgba(0, 176, 156, 0.12)"
             accentText = "#007C70"
             dangerSurface = "#FDEBEC"
@@ -807,9 +896,59 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             QWidget#hskConditionInput {{
                 background: transparent;
             }}
+            QFrame#hskConditionSummary {{
+                background: {accentSurface};
+                border: none;
+                border-left: 3px solid {accent};
+                border-radius: 7px;
+            }}
+            QLabel#hskConditionSummaryTitle {{
+                color: {accentText};
+            }}
+            QLabel#hskConditionSummaryText {{
+                color: {muted};
+            }}
             QStackedWidget#hskResultStack {{
                 background: transparent;
                 border: none;
+            }}
+            QSplitter#hskResultSplitter {{
+                background: transparent;
+                border: none;
+            }}
+            QSplitter#hskResultSplitter::handle {{
+                background: transparent;
+            }}
+            QFrame#hskDetailDrawer {{
+                background: {surfaceMuted};
+                border: 1px solid {border};
+                border-radius: 10px;
+            }}
+            QLabel#hskDetailMuted,
+            QLabel#hskDetailSectionLabel {{
+                color: {muted};
+            }}
+            QLabel#hskDetailTitle,
+            QLabel#hskDetailMetaValue {{
+                color: {text};
+            }}
+            QLabel#hskDetailBodyState {{
+                color: {muted};
+                background: {surface};
+                border-radius: 5px;
+                padding: 3px 7px;
+            }}
+            QLabel#hskDetailBodyState[available="true"] {{
+                color: {accentText};
+                background: {accentSurface};
+            }}
+            QPlainTextEdit#hskDetailBody {{
+                color: {text};
+                background: {surface};
+                border: 1px solid {border};
+                border-radius: 8px;
+                padding: 8px;
+                selection-background-color: {accent};
             }}
             QWidget#hskEmptyState {{
                 background: {surfaceMuted};
@@ -864,6 +1003,23 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             self._filterPanel.setMaximumWidth(360)
             self._filterPanel.setMaximumHeight(16777215)
 
+        if self._resultSplitter is not None and self._detailDrawer is not None:
+            detailOrientation = (
+                Qt.Orientation.Vertical
+                if self.width() < 1280
+                else Qt.Orientation.Horizontal
+            )
+            if self._resultSplitter.orientation() != detailOrientation:
+                self._resultSplitter.setOrientation(detailOrientation)
+            if detailOrientation == Qt.Orientation.Vertical:
+                self._detailDrawer.setMinimumWidth(0)
+                self._detailDrawer.setMaximumWidth(16777215)
+                self._detailDrawer.setMaximumHeight(360)
+            else:
+                self._detailDrawer.setMinimumWidth(300)
+                self._detailDrawer.setMaximumWidth(380)
+                self._detailDrawer.setMaximumHeight(16777215)
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._applyResponsiveLayout()
@@ -879,6 +1035,159 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
     def _showTableState(self) -> None:
         if self._resultStack is not None and self.tableView is not None:
             self._resultStack.setCurrentWidget(self.tableView)
+
+    # ------------------------------------------------------------------
+    # 结果列、条件摘要与详情抽屉
+    # ------------------------------------------------------------------
+    def _createColumnMenu(self) -> None:
+        if self.columnSettingsBtn is None or self.model is None:
+            return
+        self._columnMenu = QMenu(self.columnSettingsBtn)
+        self._columnMenu.setAccessibleName("HSK 检索结果列设置")
+        self._columnActions.clear()
+        for columnName in self.model.columns():
+            if columnName in _INTERNAL_RESULT_COLUMNS:
+                continue
+            action = QAction(columnName, self._columnMenu)
+            action.setCheckable(True)
+            action.setChecked(columnName in self._visibleResultColumns)
+            action.toggled.connect(
+                lambda checked, name=columnName: self._setColumnVisible(
+                    name, checked
+                )
+            )
+            self._columnMenu.addAction(action)
+            self._columnActions[columnName] = action
+        self._columnMenu.addSeparator()
+        restoreAction = QAction("恢复默认列", self._columnMenu)
+        restoreAction.triggered.connect(self._restoreDefaultColumns)
+        self._columnMenu.addAction(restoreAction)
+        self.columnSettingsBtn.setMenu(self._columnMenu)
+
+    def _setColumnVisible(self, columnName: str, isVisible: bool) -> bool:
+        """切换真实字段显示状态，并确保结果表至少保留一列。"""
+        if columnName in _INTERNAL_RESULT_COLUMNS:
+            return False
+        if isVisible:
+            self._visibleResultColumns.add(columnName)
+        elif columnName in self._visibleResultColumns:
+            if len(self._visibleResultColumns) == 1:
+                action = self._columnActions.get(columnName)
+                if action is not None:
+                    action.blockSignals(True)
+                    action.setChecked(True)
+                    action.blockSignals(False)
+                return False
+            self._visibleResultColumns.remove(columnName)
+        self._applyColumnVisibility()
+        return True
+
+    def _restoreDefaultColumns(self) -> None:
+        self._visibleResultColumns = set(_DEFAULT_RESULT_COLUMNS)
+        for columnName, action in self._columnActions.items():
+            action.blockSignals(True)
+            action.setChecked(columnName in self._visibleResultColumns)
+            action.blockSignals(False)
+        self._applyColumnVisibility()
+
+    def _applyColumnVisibility(self) -> None:
+        if self.tableView is None or self.model is None:
+            return
+        for columnIndex, columnName in enumerate(self.model.columns()):
+            shouldShow = (
+                columnName not in _INTERNAL_RESULT_COLUMNS
+                and columnName in self._visibleResultColumns
+            )
+            self.tableView.setColumnHidden(columnIndex, not shouldShow)
+        self._applyResultColumnWidths()
+
+    def _applyResultColumnWidths(self) -> None:
+        if self.tableView is None or self.model is None:
+            return
+        preferredWidths = {
+            "作文题目": 260,
+            "国籍": 110,
+            "证书级别": 96,
+            "作文分数": 96,
+            "总字数": 88,
+        }
+        for columnIndex, columnName in enumerate(self.model.columns()):
+            if self.tableView.isColumnHidden(columnIndex):
+                continue
+            width = preferredWidths.get(columnName, 120)
+            self.tableView.setColumnWidth(columnIndex, width)
+
+    @staticmethod
+    def _describeAppliedCondition(condition: Dict) -> str:
+        columnName = str(condition.get("column") or "")
+        displayColumn = "题目" if columnName == "作文题目" else columnName
+        if condition.get("type") == "score":
+            minimum = condition.get("min")
+            maximum = condition.get("max")
+            if minimum is not None and maximum is not None:
+                return f"{displayColumn}：{minimum}–{maximum}"
+            if minimum is not None:
+                return f"{displayColumn}：≥ {minimum}"
+            if maximum is not None:
+                return f"{displayColumn}：≤ {maximum}"
+            return ""
+        keyword = condition.get("keyword")
+        if keyword == "__EMPTY__":
+            return f"{displayColumn}：无"
+        if keyword in (None, ""):
+            return ""
+        return f"{displayColumn}：包含「{keyword}」"
+
+    def _updateConditionSummary(self, conditions: List[Dict]) -> None:
+        descriptions = [
+            self._describeAppliedCondition(condition)
+            for condition in conditions
+        ]
+        descriptions = [item for item in descriptions if item]
+        if self._conditionSummaryTitle is None or self._conditionSummaryText is None:
+            return
+        if not descriptions:
+            self._conditionSummaryTitle.setText("尚未应用检索条件")
+            self._conditionSummaryText.setText(
+                "完成检索后，这里会保留本次实际使用的条件。"
+            )
+            return
+        self._conditionSummaryTitle.setText(
+            f"已应用 {len(descriptions)} 个条件（全部满足）"
+        )
+        self._conditionSummaryText.setText("  且  ".join(descriptions))
+
+    def _onResultCurrentRowChanged(self, current, previous) -> None:
+        del previous
+        self._showResultDetail(current.row())
+
+    def _onResultIndexActivated(self, index) -> None:
+        self._showResultDetail(index.row())
+
+    def _showResultDetail(self, rowIndex: int) -> None:
+        if self.model is None or self._detailDrawer is None:
+            return
+        record = self.model.recordAt(rowIndex)
+        if record is None:
+            return
+        zwhao = str(record.get("作文母号") or "")
+        localRecord = hskLocalCorpusService.getRecord(zwhao) if zwhao else None
+        self._detailDrawer.setRecord(record, localRecord)
+        self._detailDrawer.show()
+        self._applyResponsiveLayout()
+        if self._resultSplitter is not None:
+            if self._resultSplitter.orientation() == Qt.Orientation.Horizontal:
+                totalWidth = max(640, self._resultSplitter.width())
+                self._resultSplitter.setSizes([max(320, totalWidth - 340), 340])
+            else:
+                totalHeight = max(520, self._resultSplitter.height())
+                self._resultSplitter.setSizes(
+                    [max(260, totalHeight - 300), 300]
+                )
+
+    def _hideDetailDrawer(self) -> None:
+        if self._detailDrawer is not None:
+            self._detailDrawer.hide()
 
     # ------------------------------------------------------------------
     # 条件行管理
@@ -936,6 +1245,9 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._addConditionRow()
         if self.model is not None:
             self.model.reset()
+            self._applyColumnVisibility()
+        self._hideDetailDrawer()
+        self._updateConditionSummary([])
         if hasattr(self, "exportAllBtn"):
             self.exportAllBtn.setEnabled(False)
         if self.elapsedLabel is not None:
@@ -1087,9 +1399,15 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
 
         # 重置 Model
         self.model.reset()
+        self._applyColumnVisibility()
+        self._hideDetailDrawer()
         # 状态条描述:把所有条件的描述拼起来
-        descList = [r.describe() for r in self._conditionRows if r.describe()]
-        queryDesc = " AND ".join(descList)
+        descList = [
+            self._describeAppliedCondition(condition)
+            for condition in conditions
+        ]
+        queryDesc = " 且 ".join(item for item in descList if item)
+        self._updateConditionSummary(conditions)
         columns = [str(item.get("column", "")) for item in conditions]
         logger.info(
             f"[HskCorpusBrowser] 开始检索, conditions={len(conditions)}, "
@@ -1196,10 +1514,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
                 "请减少筛选条件，或放宽关键词与分数范围后重试。",
             )
         if self.tableView and self.model and self.model.columnCount() > 0:
-            self.tableView.resizeColumnsToContents()
-            for col in range(self.model.columnCount()):
-                if self.tableView.columnWidth(col) > 280:
-                    self.tableView.setColumnWidth(col, 280)
+            self._applyColumnVisibility()
         self._currentWorker = None
 
         # PRD-005:搜索成功后启用「导出所有命中作文」按钮

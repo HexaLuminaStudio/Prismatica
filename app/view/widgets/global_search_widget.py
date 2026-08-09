@@ -6,7 +6,7 @@ Global搜索组件模块
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CheckBox,
     ComboBox,
@@ -72,11 +72,11 @@ class StringGeneralSearchWidget(GroupHeaderCardWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("字符串一般检索")
+        self.setTitle("关键词检索")
         self.setBorderRadius(8)
 
         self.keyWord = LineEdit(self)
-        self.keyWord.setPlaceholderText("输入关键字")
+        self.keyWord.setPlaceholderText("输入关键词或短语，例如「学习」")
         self.keyWord.setFixedWidth(200)
 
         self.addGroup(
@@ -100,7 +100,7 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("特定条件检索")
+        self.setTitle("上下文条件")
         self.setBorderRadius(8)
 
         self.typeCombobox = ComboBox(self)
@@ -182,11 +182,11 @@ class WordCombinationSearchWidget(GroupHeaderCardWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("词语搭配检索")
+        self.setTitle("词语搭配")
         self.setBorderRadius(8)
 
         self.keyWord = LineEdit(self)
-        self.keyWord.setPlaceholderText("输入关键字")
+        self.keyWord.setPlaceholderText("输入关键词或词语")
         self.keyWord.setFixedWidth(200)
 
         self.sortTypeCombobox = ComboBox(self)
@@ -237,7 +237,7 @@ class SpeechPartSearchWidget(GroupHeaderCardWidget):
         self.setBorderRadius(8)
 
         self.speechPartLineEdit = LineEdit(self)
-        self.speechPartLineEdit.setPlaceholderText("词性")
+        self.speechPartLineEdit.setPlaceholderText("输入词性代码，例如 n、v、a")
         self.speechPartLineEdit.setFixedWidth(200)
 
         self.addGroup(
@@ -261,9 +261,9 @@ class GlobalAdvancedSettingCardWidget(GroupHeaderCardWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("检索高级设置")
+        self.setTitle("高级筛选")
 
-        self.enableCheckBox = CheckBox("使用高级筛选条件", self)
+        self.enableCheckBox = CheckBox("启用高级筛选", self)
         self.enableCheckBox.setChecked(False)
         self.enableCheckBox.stateChanged.connect(self._enabelAdvancedSetting)
         self.headerLayout.addWidget(self.enableCheckBox, 0, Qt.AlignmentFlag.AlignRight)
@@ -333,14 +333,13 @@ class GlobalAdvancedSettingCardWidget(GroupHeaderCardWidget):
 
         for i in range(5):
             self.groupWidgets[i].setEnabled(False)
+            self.groupWidgets[i].setVisible(False)
 
     def _enabelAdvancedSetting(self, state):
-        if state == 2:
-            for i in range(5):
-                self.groupWidgets[i].setEnabled(True)
-        else:
-            for i in range(5):
-                self.groupWidgets[i].setEnabled(False)
+        isEnabled = state == 2
+        for i in range(5):
+            self.groupWidgets[i].setEnabled(isEnabled)
+            self.groupWidgets[i].setVisible(isEnabled)
 
     def returnValues(self):
         if self.enableCheckBox.isChecked():

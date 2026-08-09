@@ -6,7 +6,7 @@ HSK搜索组件模块
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CheckBox,
     ComboBox,
@@ -14,6 +14,13 @@ from qfluentwidgets import (
     GroupHeaderCardWidget,
     LineEdit,
     ScrollArea,
+)
+
+from app.core.utils import (
+    hskCountryDict,
+    hskEssayList,
+    syntacticRelationshipList,
+    wrongSentencePattern,
 )
 
 
@@ -70,11 +77,11 @@ class StringGeneralSearchWidget(GroupHeaderCardWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("字符串一般检索")
+        self.setTitle("关键词检索")
         self.setBorderRadius(8)
 
         self.keyWord = LineEdit(self)
-        self.keyWord.setPlaceholderText("输入关键字")
+        self.keyWord.setPlaceholderText("输入关键词或短语，例如「学习」")
         self.keyWord.setFixedWidth(200)
 
         self.addGroup(
@@ -96,7 +103,7 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("特定条件检索")
+        self.setTitle("上下文条件")
         self.setBorderRadius(8)
 
         self.initialString = LineEdit(self)
@@ -162,19 +169,16 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
         }
 
 
-from app.core.utils import syntacticRelationshipList
-
-
 class WordCombinationSearchWidget(GroupHeaderCardWidget):
     """词语搭配检索组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("词语搭配检索")
+        self.setTitle("句法搭配")
         self.setBorderRadius(8)
 
         self.keyWord = LineEdit(self)
-        self.keyWord.setPlaceholderText("输入关键字")
+        self.keyWord.setPlaceholderText("输入关键词或词语")
         self.keyWord.setFixedWidth(200)
 
         self.relationshipCombobox = ComboBox(self)
@@ -202,15 +206,12 @@ class WordCombinationSearchWidget(GroupHeaderCardWidget):
         }
 
 
-from app.core.utils import wrongSentencePattern
-
-
 class WrongSentenceSearchWidget(GroupHeaderCardWidget):
     """错误句检索组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("错误句检索")
+        self.setTitle("错句类型")
         self.setBorderRadius(8)
 
         self.sentencePatternComBobox = ComboBox(self)
@@ -233,17 +234,14 @@ class WrongSentenceSearchWidget(GroupHeaderCardWidget):
         }
 
 
-from app.core.utils import hskEssayList, hskCountryDict
-
-
 class AdvancedSettingCardWidget(GroupHeaderCardWidget):
     """高级设置组件"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setTitle("检索高级设置")
+        self.setTitle("高级筛选")
 
-        self.enableCheckBox = CheckBox("使用高级筛选条件", self)
+        self.enableCheckBox = CheckBox("启用高级筛选", self)
         self.enableCheckBox.setChecked(False)
         self.enableCheckBox.stateChanged.connect(self._enabelAdvancedSetting)
         self.headerLayout.addWidget(self.enableCheckBox, 0, Qt.AlignmentFlag.AlignRight)
@@ -281,14 +279,13 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
         )
         for i in range(3):
             self.groupWidgets[i].setEnabled(False)
+            self.groupWidgets[i].setVisible(False)
 
     def _enabelAdvancedSetting(self, state):
-        if state == 2:
-            for i in range(3):
-                self.groupWidgets[i].setEnabled(True)
-        else:
-            for i in range(3):
-                self.groupWidgets[i].setEnabled(False)
+        isEnabled = state == 2
+        for i in range(3):
+            self.groupWidgets[i].setEnabled(isEnabled)
+            self.groupWidgets[i].setVisible(isEnabled)
 
     def returnValues(self):
         if self.enableCheckBox.isChecked():

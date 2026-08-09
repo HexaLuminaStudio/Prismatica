@@ -59,6 +59,9 @@ class BatchDownloadDialog(MessageBoxBase):
     ) -> None:
         super().__init__(parent=parent)
         self.downloadType = downloadType
+        self.taskType = (
+            "hskDownload" if downloadType == "Hsk" else "globalDownload"
+        )
         self.infoDict = infoDict
 
         # 当前预览的预计条数(由 _onPreviewFinished 写入)
@@ -98,7 +101,6 @@ class BatchDownloadDialog(MessageBoxBase):
         from app.view.widgets.download_apply_widget import (
             InfoItem,
             ParamDisplay,
-            formatParams,
         )
 
         self.sourceItem = InfoItem(
@@ -187,7 +189,7 @@ class BatchDownloadDialog(MessageBoxBase):
 
     def _connectService(self) -> None:
         batchApplyService.itemsChanged.connect(self._onItemsChanged)
-        self._renderList()
+        self._onItemsChanged(batchApplyService.getCount())
 
     # ========================================================================
     # 当前条件预览
@@ -264,10 +266,15 @@ class BatchDownloadDialog(MessageBoxBase):
             return
         url = self.infoDict.get("url", "")
         payload = dict(self.infoDict.get("payload", {}))
-        ok = batchApplyService.addItem(url, payload, self._currentTotal)
+        ok = batchApplyService.addItem(
+            self.taskType,
+            url,
+            payload,
+            self._currentTotal,
+        )
         if not ok:
             # 重复:警告 InfoBar
-            from qfluentwidgets import InfoBar, InfoBarIcon, InfoBarPosition
+            from qfluentwidgets import InfoBar, InfoBarPosition
 
             InfoBar.warning(
                 title="重复",
@@ -280,13 +287,14 @@ class BatchDownloadDialog(MessageBoxBase):
             )
 
     def _onRemoveItemClicked(self, index: int) -> None:
-        batchApplyService.removeItem(index)
+        batchApplyService.removeItem(index, self.taskType)
 
     def _onClearListClicked(self) -> None:
-        batchApplyService.clearAll()
+        batchApplyService.clearAll(self.taskType)
 
-    def _onItemsChanged(self, count: int) -> None:
+    def _onItemsChanged(self, _count: int) -> None:
         self._renderList()
+        count = batchApplyService.getCount(self.taskType)
         # 更新底部按钮文本与启用状态
         self.yesButton.setText(f"批量下载 ({count})")
         self.yesButton.setEnabled(count > 0)
@@ -301,7 +309,7 @@ class BatchDownloadDialog(MessageBoxBase):
             if widget is not None:
                 widget.deleteLater()
 
-        items = batchApplyService.getItems()
+        items = batchApplyService.getItems(self.taskType)
         for index, item in enumerate(items):
             row = self._makeListRow(index, item)
             self.listLayout.insertWidget(self.listLayout.count() - 1, row)
@@ -353,21 +361,15 @@ class BatchDownloadDialog(MessageBoxBase):
 
     def _onAccept(self) -> None:
         """点击"批量下载 (N)" → 一次性创建 N 个任务 → 跳转 Task 页面"""
-        items = batchApplyService.getItems()
+        items = batchApplyService.getItems(self.taskType)
         if not items:
             return
         from app.core.services import taskManager
 
-        # 根据弹窗来源选择对应的 taskType(PRD-003 bug-fix)
-        if self.downloadType == "Hsk":
-            taskType = "hskDownload"
-        else:
-            taskType = "globalDownload"
-
         created = 0
         for item in items:
             try:
-                taskId = taskManager.createTask(taskType, item.toInfoDict())
+                taskId = taskManager.createTask(item.taskType, item.toInfoDict())
                 created += 1
                 logger.info(
                     f"[BatchDownloadDialog] 创建任务 {taskId}: {item.summary()[:40]}"
@@ -376,7 +378,7 @@ class BatchDownloadDialog(MessageBoxBase):
                 logger.error(f"[BatchDownloadDialog] createTask 失败: {e}")
 
         # 清空清单
-        batchApplyService.clearAll()
+        batchApplyService.clearAll(self.taskType)
 
         # InfoBar 提示(在父窗口上,弹窗已 accept 后会被销毁)
         if created > 0:
