@@ -36,6 +36,8 @@ from qfluentwidgets import (
     qconfig,
 )
 
+from app.view.widgets.prismatica_theme import pageBackgroundColor
+
 
 @dataclass(frozen=True)
 class AnalysisModule:
@@ -504,7 +506,7 @@ class AnalysisDesktopWidget(QWidget):
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()
-        background = "#202428" if dark else "#F6F7F9"
+        background = pageBackgroundColor(dark).name()
         surface = "#2B3035" if dark else "#FFFFFF"
         surfaceAlt = "#343B40" if dark else "#F0F5F4"
         border = "#465058" if dark else "#DDE4E2"

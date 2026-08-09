@@ -39,6 +39,7 @@ from qfluentwidgets import (
 
 from app.core.services import HskTokenRefreshThread, GlobalTokenRefreshThread
 from app.core.utils import cfg, qconfig, logger, signalBus
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 
 _ACCENT = "#00B09C"
@@ -1245,11 +1246,18 @@ class SettingInterface(ScrollArea):
         self.setObjectName("SettingInterface")
 
         self.scrollWidget.setObjectName("scrollWidget")
-        self.scrollWidget.setStyleSheet("background:#FAFAFA;border:none;")
+        self._applyPageTheme()
+        qconfig.themeChangedFinished.connect(self._applyPageTheme)
         self.setStyleSheet("background:transparent;border:none;")
 
         self.infoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.infoLabel.setStyleSheet("color:gray;font-size:12px;")
+
+    def _applyPageTheme(self) -> None:
+        """让设置页画布与其他业务页面使用同一背景令牌。"""
+        self.scrollWidget.setStyleSheet(
+            f"background:{pageBackgroundColor().name()};border:none;"
+        )
 
     def _initLayout(self):
         """初始化布局"""

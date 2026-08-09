@@ -45,7 +45,7 @@ from app.core.services import (
     GlobalGetTotalWorker,
     batchApplyService,
 )
-from app.view.widgets.prismatica_theme import shellPalette
+from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 
 
 @dataclass(frozen=True)
@@ -818,7 +818,7 @@ class DownloadTaskWorkbench(QWidget):
         self.setStyleSheet(
             f"""
             QWidget#downloadWorkbenchPage {{
-                background: {palette.window.name()};
+                background: {pageBackgroundColor().name()};
             }}
             QScrollArea#downloadWorkbenchScroll,
             QScrollArea#downloadWorkbenchScroll > QWidget > QWidget,

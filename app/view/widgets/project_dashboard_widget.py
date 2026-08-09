@@ -43,6 +43,7 @@ from app.core.services.research_report_service import researchReportService
 from app.core.utils import logger
 from app.view.widgets.project_manager_dialogs import RenameProjectDialog
 from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 
 _RESOURCE_TYPE_TO_MODULE = {
@@ -766,7 +767,7 @@ class ProjectDashboardWidget(QWidget):
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()
-        background = "#1F1F1F" if dark else "#FAFAFA"
+        background = pageBackgroundColor(dark).name()
         surface = "#2B2B2B" if dark else "#FFFFFF"
         border = "#3A3A3A" if dark else "#E5E5E5"
         text = "#F5F5F5" if dark else "#1F1F1F"

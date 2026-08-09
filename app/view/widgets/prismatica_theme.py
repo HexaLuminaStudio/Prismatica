@@ -9,6 +9,8 @@ from qfluentwidgets import isDarkTheme
 
 
 ACCENT = QColor("#00B09C")
+LIGHT_PAGE_BACKGROUND = QColor("#F6F8FA")
+DARK_PAGE_BACKGROUND = QColor("#202428")
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,7 @@ def shellPalette(dark: bool | None = None) -> ShellPalette:
             window=QColor("#181B1E"),
             titleBar=QColor("#1B1E21"),
             navigation=QColor(27, 30, 33, 238),
-            content=QColor("#202428"),
+            content=pageBackgroundColor(True),
             border=QColor("#343B40"),
             text=QColor("#F3F6F7"),
             mutedText=QColor("#AEB9BF"),
@@ -39,11 +41,24 @@ def shellPalette(dark: bool | None = None) -> ShellPalette:
         window=QColor("#EEF3F6"),
         titleBar=QColor("#F6F8FA"),
         navigation=QColor(247, 249, 250, 238),
-        content=QColor("#FCFDFD"),
+        content=pageBackgroundColor(False),
         border=QColor("#D6DEE3"),
         text=QColor("#20262C"),
         mutedText=QColor("#596873"),
     )
 
 
-__all__ = ["ACCENT", "ShellPalette", "shellPalette"]
+def pageBackgroundColor(dark: bool | None = None) -> QColor:
+    """返回所有业务页面共用的主题背景色。"""
+    dark = isDarkTheme() if dark is None else bool(dark)
+    return QColor(DARK_PAGE_BACKGROUND if dark else LIGHT_PAGE_BACKGROUND)
+
+
+__all__ = [
+    "ACCENT",
+    "DARK_PAGE_BACKGROUND",
+    "LIGHT_PAGE_BACKGROUND",
+    "ShellPalette",
+    "pageBackgroundColor",
+    "shellPalette",
+]

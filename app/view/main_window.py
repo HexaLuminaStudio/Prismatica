@@ -1,8 +1,8 @@
 # coding: utf-8
 
-from PySide6.QtCore import QEasingCurve, QSize, Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QStackedWidget, QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import (
     FluentIcon,
     NavigationItemPosition,
@@ -17,7 +17,8 @@ from app.core.utils.config import cfg, qconfig
 from app.core.services import taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .widgets.prismatica_navigation import PrismaticaNavigationBar
-from .widgets.prismatica_theme import shellPalette
+from .widgets.prismatica_theme import pageBackgroundColor, shellPalette
+from .widgets.page_transition import switchPageInstantly
 from .hsk_interface import HskInterface
 from .hsk_corpus_interface import HskCorpusInterface
 from .global_interface import GlobalInterface
@@ -118,12 +119,11 @@ class MainWindow(MSFluentWindow):
     def _applyShellTheme(self) -> None:
         palette = shellPalette()
         self.setCustomBackgroundColor(palette.window, palette.window)
-        content = palette.content
+        content = pageBackgroundColor()
         border = palette.border
         self.stackedWidget.setStyleSheet(
             "QFrame#prismaticaContentSurface {"
-            f"background-color: rgba({content.red()}, {content.green()}, "
-            f"{content.blue()}, 246);"
+            f"background-color: {content.name()};"
             f"border: 1px solid {border.name()};"
             "border-right: none; border-bottom: none;"
             "border-top-left-radius: 16px;"
@@ -147,27 +147,15 @@ class MainWindow(MSFluentWindow):
         self.navigationInterface = newNavigation
 
     def switchTo(self, interface: QWidget) -> None:
-        """使用与侧边栏一致的快速减速节奏切换业务页面。"""
+        """即时切换业务页面，避免整页动画重复绘制复杂控件。"""
         current = self.stackedWidget.currentWidget()
         self._syncAccountNavigationSelection(interface)
         if current is interface:
             return
         view = self.stackedWidget.view
-        # 认证页包含真实输入控件。位置型页面动画在 Windows 合成器下可能让
-        # 控件绘制坐标与命中区域短暂不同步，因此进入/离开认证页时直接切换。
-        if interface is self.loginInterface or current is self.loginInterface:
-            QStackedWidget.setCurrentWidget(view, interface)
-            return
-        if QApplication.isEffectEnabled(Qt.UIEffect.UI_General):
-            view.setCurrentWidget(
-                interface,
-                needPopOut=False,
-                showNextWidgetDirectly=True,
-                duration=220,
-                easingCurve=QEasingCurve.Type.OutCubic,
-            )
-            return
-        QStackedWidget.setCurrentWidget(view, interface)
+        # 业务页包含表格、图表和滚动区。整页位移动画会在 Windows 下连续重绘，
+        # 页面越复杂越容易出现掉帧；直接切换只触发一次最终状态绘制。
+        switchPageInstantly(view, interface)
 
     def _syncAccountNavigationSelection(self, interface: QWidget) -> None:
         accountNav = getattr(self, "accountNav", None)

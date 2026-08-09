@@ -51,6 +51,7 @@ from app.view.widgets.freq_analyzer.freq_engine import (
     TextCleaner,
 )
 from app.view.widgets.freq_analyzer.ui_helpers import _makeSwitchButton, _showInfoBar
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 if TYPE_CHECKING:
     from app.view.widgets.freq_analyzer.corpus_store import CorpusStore
@@ -424,7 +425,7 @@ class CorpusImportWidget(QWidget):
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()
-        canvas = "#202428" if dark else "#F5F7FA"
+        canvas = pageBackgroundColor(dark).name()
         surface = "#2B3035" if dark else "#FFFFFF"
         surfaceAlt = "#343B40" if dark else "#F3F7F7"
         border = "#465058" if dark else "#DCE4E8"

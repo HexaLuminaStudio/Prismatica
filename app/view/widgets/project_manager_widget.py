@@ -43,6 +43,7 @@ from app.core.services import projectManager
 from app.core.utils import logger
 from app.view.widgets.project_manager_dialogs import NewProjectDialog, RenameProjectDialog
 from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 
 _STATUS_TEXT = {"active": "进行中", "paused": "暂停", "archived": "已归档"}
@@ -623,7 +624,7 @@ class ProjectManagerWidget(QWidget):
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()
-        page = "#202428" if dark else "#FAFBFC"
+        page = pageBackgroundColor(dark).name()
         surface = "#2B3035" if dark else "#FFFFFF"
         muted = "#373E44" if dark else "#F3F5F6"
         border = "#465058" if dark else "#DDE3E7"

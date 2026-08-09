@@ -33,7 +33,6 @@ from qfluentwidgets import (
     ToolTipFilter,
     TransparentToolButton,
     VerticalSeparator,
-    isDarkTheme,
     themeColor,
 )
 from qfluentwidgetspro.chat import (
@@ -46,6 +45,7 @@ from qfluentwidgetspro.chat import (
 
 from app.core.services import ChatService
 from app.core.utils import cfg, logger, qconfig
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 
 # 角色头像资源(气泡用 URL 字符串,不是 QIcon)
@@ -400,10 +400,7 @@ class ChatInterface(QWidget):
     def updateBackgroundColor(self) -> None:
         """主题切换时刷新聊天页背景色"""
         try:
-            if isDarkTheme():
-                self.chatPage.page().setBackgroundColor(QColor(39, 39, 39))
-            else:
-                self.chatPage.page().setBackgroundColor(QColor(247, 249, 252))
+            self.chatPage.page().setBackgroundColor(pageBackgroundColor())
         except Exception as e:
             logger.warning(f"[ChatInterface] 设置背景色失败: {e}")
 

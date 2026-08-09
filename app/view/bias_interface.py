@@ -8,6 +8,7 @@ import io
 
 import numpy as np
 import pandas as pd
+from app.core.services.association_rule_service import mineAssociationRules
 from app.core.utils import logger
 from PySide6.QtCore import Qt, QThread, Signal, QSize
 from PySide6.QtSvgWidgets import QSvgWidget
@@ -44,6 +45,7 @@ from qfluentwidgets import (
     TransparentToggleToolButton,
     CheckBox,
     ScrollArea,
+    SpinBox,
 )
 from qfluentwidgetspro import RoundTableWidget
 
@@ -308,8 +310,8 @@ class FileLoaderThread(QThread):
         self.finished.emit()
 
 
-class AprioriWorkerThread(QThread):
-    """Apriori 关联规则挖掘后台线程（FR-ERR-003）"""
+class AssociationRuleWorkerThread(QThread):
+    """句子级偏误关联统计后台线程（FR-ERR-003）。"""
 
     progress = Signal(int, str)  # (percent 0-100, status)
     finished = Signal(object)  # (rulesDf) DataFrame
@@ -318,13 +320,17 @@ class AprioriWorkerThread(QThread):
     def __init__(
         self,
         transactions: list,
-        minSupport: float = 0.1,
+        minSupport: float = 0.01,
         minConfidence: float = 0.5,
+        minJointCount: int = 3,
+        familyWiseAlpha: float = 0.05,
     ):
         super().__init__()
         self.transactions = transactions
         self.minSupport = minSupport
         self.minConfidence = minConfidence
+        self.minJointCount = minJointCount
+        self.familyWiseAlpha = familyWiseAlpha
         self._isCanceled = False
 
     def cancel(self):
@@ -332,70 +338,37 @@ class AprioriWorkerThread(QThread):
 
     def run(self):
         try:
-            from mlxtend.preprocessing import TransactionEncoder
-            from mlxtend.frequent_patterns import apriori, association_rules
-            import pandas as pd
-
             if not self.transactions:
                 self.failed.emit("无有效事务数据")
                 return
 
-            # 进度提示
-            self.progress.emit(10, "正在编码事务...")
-
-            # 编码
-            te = TransactionEncoder()
-            teArray = te.fit(self.transactions).transform(self.transactions)
-            df = pd.DataFrame(teArray, columns=te.columns_)
-
-            # 进度提示
-            self.progress.emit(30, "正在挖掘频繁项集...")
+            self.progress.emit(15, "正在构建句子级列联表...")
 
             if self._isCanceled:
                 return
 
-            # 挖掘频繁项集
-            frequentItemsets = apriori(
-                df,
-                min_support=self.minSupport,
-                use_colnames=True,
-                max_len=3,
+            self.progress.emit(45, "正在执行 Fisher 精确检验...")
+            rules = mineAssociationRules(
+                self.transactions,
+                minSupport=self.minSupport,
+                minConfidence=self.minConfidence,
+                minJointCount=self.minJointCount,
+                familyWiseAlpha=self.familyWiseAlpha,
             )
 
             if self._isCanceled:
                 return
-
-            if frequentItemsets.empty:
-                self.progress.emit(100, "未找到满足最小支持度的频繁项集")
-                self.finished.emit(pd.DataFrame())
-                return
-
-            # 进度提示
-            self.progress.emit(70, "正在生成关联规则...")
-
-            # 生成规则
-            rules = association_rules(
-                frequentItemsets,
-                metric="confidence",
-                min_threshold=self.minConfidence,
-                num_itemsets=len(frequentItemsets),
-            )
 
             if rules.empty:
-                self.progress.emit(100, "未找到满足置信度的关联规则")
-                self.finished.emit(pd.DataFrame())
+                self.progress.emit(100, "未发现通过多重比较校正的正关联")
+                self.finished.emit(rules)
                 return
 
-            # 排序（按置信度降序）
-            rules = rules.sort_values(
-                ["confidence", "lift"], ascending=[False, False]
-            ).reset_index(drop=True)
-
-            self.progress.emit(100, f"挖掘完成，共 {len(rules)} 条规则")
+            self.progress.emit(100, f"统计完成，共保留 {len(rules)} 条方向规则")
             self.finished.emit(rules)
 
         except Exception as e:
-            logger.error(f"[Bias] Apriori 计算失败: {e}")
+            logger.error(f"[Bias] 关联统计失败: {e}")
             self.failed.emit(str(e))
 
 
@@ -1260,7 +1233,7 @@ class AssociationRulesDialog(MessageBoxBase):
         supportLabel.setStyleSheet("font-size: 12px;")
         self.supportSpin = DoubleSpinBox(self)
         self.supportSpin.setRange(0.01, 1.0)
-        self.supportSpin.setSingleStep(0.05)
+        self.supportSpin.setSingleStep(0.01)
         self.supportSpin.setDecimals(2)
         self.supportSpin.setValue(minSupport)
         self.supportSpin.setMinimumWidth(110)
@@ -1284,6 +1257,18 @@ class AssociationRulesDialog(MessageBoxBase):
             QSizePolicy.Policy.Fixed,
         )
 
+        jointCountLabel = BodyLabel("最小共现次数:", self)
+        jointCountLabel.setStyleSheet("font-size: 12px;")
+        self.jointCountSpin = SpinBox(self)
+        self.jointCountSpin.setRange(2, 100)
+        self.jointCountSpin.setValue(3)
+        self.jointCountSpin.setMinimumWidth(110)
+        self.jointCountSpin.setMaximumWidth(150)
+        self.jointCountSpin.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+
         self.recomputeBtn = PushButton("重新计算", self)
         self.recomputeBtn.setIcon(":app/icons/Refresh.svg")
         self.recomputeBtn.clicked.connect(self._recompute)
@@ -1292,15 +1277,25 @@ class AssociationRulesDialog(MessageBoxBase):
         paramLayout.addWidget(self.supportSpin, 0, 1)
         paramLayout.addWidget(confidenceLabel, 1, 0)
         paramLayout.addWidget(self.confidenceSpin, 1, 1)
+        paramLayout.addWidget(jointCountLabel, 2, 0)
+        paramLayout.addWidget(self.jointCountSpin, 2, 1)
         paramLayout.addWidget(
             self.recomputeBtn,
             0,
             2,
-            2,
+            3,
             1,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
         paramLayout.setColumnStretch(1, 1)
+
+        methodLabel = CaptionLabel(
+            "句子级事务 · 单侧 Fisher 精确检验 · Holm 校正 α=0.05 · 仅保留提升度 > 1。"
+            "同一作者或篇章内句子可能相关，结果用于探索而非因果推断。",
+            self,
+        )
+        methodLabel.setWordWrap(True)
+        methodLabel.setStyleSheet("color: #707070; font-size: 11px;")
 
         # Tab 切换：表格 / 散点图 / 网络图
         self.viewSegment = SegmentedWidget(self)
@@ -1312,9 +1307,19 @@ class AssociationRulesDialog(MessageBoxBase):
 
         # --- 表格视图 ---
         self.table = RoundTableWidget(self)
-        self.table.setColumnCount(6)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(
-            ["前项", "后项", "支持度", "置信度", "提升度", "杠杆值"]
+            [
+                "前项",
+                "后项",
+                "共现次数",
+                "支持度",
+                "置信度",
+                "提升度",
+                "杠杆值",
+                "确信度",
+                "Holm 校正 p",
+            ]
         )
         self.table.setSortingEnabled(True)
         self.table.setSelectionBehavior(RoundTableWidget.SelectionBehavior.SelectRows)
@@ -1322,19 +1327,23 @@ class AssociationRulesDialog(MessageBoxBase):
         self.table.setEditTriggers(RoundTableWidget.EditTrigger.NoEditTriggers)
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
-        # 数值列需要更宽以显示小数与百分号
         self.table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
-        # 列宽：支持度/置信度需容纳 "100.0%"，提升度需 "1.250" 等小数
-        self.table.setColumnWidth(2, 100)
-        self.table.setColumnWidth(3, 100)
-        self.table.setColumnWidth(4, 90)
-        self.table.setColumnWidth(5, 110)
-        for col in (2, 3, 4, 5):
+        numericColumnWidths = {
+            2: 78,
+            3: 82,
+            4: 82,
+            5: 76,
+            6: 92,
+            7: 82,
+            8: 102,
+        }
+        for col, width in numericColumnWidths.items():
+            self.table.setColumnWidth(col, width)
             self.table.horizontalHeader().setSectionResizeMode(
                 col, QHeaderView.ResizeMode.Fixed
             )
@@ -1403,6 +1412,7 @@ class AssociationRulesDialog(MessageBoxBase):
 
         self.viewLayout.addSpacing(6)
         self.viewLayout.addWidget(self.paramWidget)
+        self.viewLayout.addWidget(methodLabel)
         self.viewLayout.addSpacing(4)
         self.viewLayout.addWidget(self.viewSegment)
         self.viewLayout.addSpacing(6)
@@ -1449,13 +1459,18 @@ class AssociationRulesDialog(MessageBoxBase):
 
         self.minSupport = float(self.supportSpin.value())
         self.minConfidence = float(self.confidenceSpin.value())
+        self.minJointCount = int(self.jointCountSpin.value())
         self.recomputeBtn.setEnabled(False)
         self.exportCsvBtn.setEnabled(False)
         self.exportPngBtn.setEnabled(False)
         self.statusLabel.setText("正在挖掘...")
 
-        self._workerThread = AprioriWorkerThread(
-            self.transactions, self.minSupport, self.minConfidence
+        self._workerThread = AssociationRuleWorkerThread(
+            self.transactions,
+            self.minSupport,
+            self.minConfidence,
+            self.minJointCount,
+            0.05,
         )
         self._workerThread.progress.connect(self._onProgress)
         self._workerThread.finished.connect(self._onFinished)
@@ -1480,10 +1495,21 @@ class AssociationRulesDialog(MessageBoxBase):
 
     def _onFinished(self, rulesDf):
         self.recomputeBtn.setEnabled(True)
+        if rulesDf is None:
+            rulesDf = pd.DataFrame()
         self.rulesDf = rulesDf
+        transactionCount = int(
+            rulesDf.attrs.get("transactionCount", len(self.transactions))
+        )
+        testedPairCount = int(rulesDf.attrs.get("testedPairCount", 0))
+        familyWiseAlpha = float(rulesDf.attrs.get("familyWiseAlpha", 0.05))
 
         if rulesDf is None or rulesDf.empty:
-            self.statusLabel.setText("未找到满足条件的关联规则，请降低阈值重试")
+            self.statusLabel.setText(
+                f"未发现通过统计筛选的正关联：共 {transactionCount} 个句子事务，"
+                f"检验 {testedPairCount} 组偏误关系，Holm 校正 α={familyWiseAlpha:.2f}。"
+                "可以降低支持度或置信度查看，但不建议降低显著性标准。"
+            )
             self.table.setRowCount(0)
             return
 
@@ -1494,7 +1520,7 @@ class AssociationRulesDialog(MessageBoxBase):
         self.exportPngBtn.setEnabled(True)
 
         # 计算项目数与统计摘要
-        numTransactions = len(self.transactions)
+        numTransactions = transactionCount
         allItems = set()
         for t in self.transactions:
             allItems.update(t)
@@ -1505,13 +1531,13 @@ class AssociationRulesDialog(MessageBoxBase):
         confMax = rulesDf["confidence"].max()
         liftMin = rulesDf["lift"].min()
         liftMax = rulesDf["lift"].max()
+        adjustedPMax = rulesDf["adjusted p-value"].max()
 
         # 样本量警告
         warning = ""
-        if numTransactions < 10:
+        if numTransactions < 30:
             warning = (
-                f" ⚠ 样本量较少（事务={numTransactions}），统计结论仅供参考，"
-                f"建议加载更多文件后再挖掘。"
+                f" 样本量较少（句子={numTransactions}），结果仅适合作为探索性线索。"
             )
         elif numItems > numTransactions * 3:
             warning = (
@@ -1521,15 +1547,17 @@ class AssociationRulesDialog(MessageBoxBase):
 
         self.statusLabel.setText(
             f"完成：{len(rulesDf)} 条规则 | "
-            f"事务数={numTransactions}  项目数={numItems}  "
+            f"句子事务={numTransactions}  偏误类型={numItems}  "
             f"置信度范围=[{confMin * 100:.1f}%, {confMax * 100:.1f}%]  "
-            f"提升度=[{liftMin:.2f}, {liftMax:.2f}]{warning}"
+            f"提升度=[{liftMin:.2f}, {liftMax:.2f}]  "
+            f"最大校正 p={adjustedPMax:.4g}。关联不表示因果。{warning}"
         )
         logger.info(
             f"[Bias] 关联规则挖掘完成: {len(rulesDf)} 条, "
             f"事务={numTransactions}, 项目={numItems}, "
             f"置信度范围=[{confMin:.3f}, {confMax:.3f}], "
-            f"提升度范围=[{liftMin:.3f}, {liftMax:.3f}]"
+            f"提升度范围=[{liftMin:.3f}, {liftMax:.3f}], "
+            f"最大Holm校正p={adjustedPMax:.6g}"
         )
         InfoBar.success(
             "挖掘完成",
@@ -1543,6 +1571,7 @@ class AssociationRulesDialog(MessageBoxBase):
 
     def _populateTable(self, rulesDf):
         """填充表格"""
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rulesDf))
 
         def _formatSet(s):
@@ -1555,20 +1584,20 @@ class AssociationRulesDialog(MessageBoxBase):
             except (TypeError, ValueError):
                 return "—"
 
-        def _fmtLift(v):
-            # 提升度保留 3 位小数，避免显示为 1.00 时被误认为整数
+        def _fmtMetric(v, digits=3):
             try:
                 f = float(v)
                 import math as _math
 
-                if _math.isnan(f) or _math.isinf(f):
+                if _math.isnan(f):
                     return "—"
-                return f"{f:.3f}"
+                if _math.isinf(f):
+                    return "∞"
+                return f"{f:.{digits}f}"
             except (TypeError, ValueError):
                 return "—"
 
-        def _fmtLev(v):
-            # 杠杆值通常很小，保留 5 位小数 + 科学计数法
+        def _fmtSmallNumber(v):
             try:
                 f = float(v)
                 import math as _math
@@ -1581,6 +1610,14 @@ class AssociationRulesDialog(MessageBoxBase):
             except (TypeError, ValueError):
                 return "—"
 
+        def _setNumericItem(rowIndex, columnIndex, text, value):
+            item = QTableWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, value)
+            item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.table.setItem(rowIndex, columnIndex, item)
+
         for i in range(len(rulesDf)):
             row = rulesDf.iloc[i]
             self.table.setItem(
@@ -1589,33 +1626,53 @@ class AssociationRulesDialog(MessageBoxBase):
             self.table.setItem(
                 i, 1, QTableWidgetItem(_formatSet(row.get("consequents")))
             )
-            # 数值列：右侧对齐 + 显示真实小数
-            supportItem = QTableWidgetItem(_fmtPct(row.get("support")))
-            supportItem.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            _setNumericItem(
+                i,
+                2,
+                str(int(row.get("joint count", 0))),
+                int(row.get("joint count", 0)),
             )
-            self.table.setItem(i, 2, supportItem)
+            _setNumericItem(
+                i,
+                3,
+                _fmtPct(row.get("support")),
+                float(row.get("support", 0)),
+            )
+            _setNumericItem(
+                i,
+                4,
+                _fmtPct(row.get("confidence")),
+                float(row.get("confidence", 0)),
+            )
+            _setNumericItem(
+                i,
+                5,
+                _fmtMetric(row.get("lift")),
+                float(row.get("lift", 0)),
+            )
+            _setNumericItem(
+                i,
+                6,
+                _fmtSmallNumber(row.get("leverage")),
+                float(row.get("leverage", 0)),
+            )
+            _setNumericItem(
+                i,
+                7,
+                _fmtMetric(row.get("conviction")),
+                float(row.get("conviction", 0)),
+            )
+            _setNumericItem(
+                i,
+                8,
+                _fmtSmallNumber(row.get("adjusted p-value")),
+                float(row.get("adjusted p-value", 1)),
+            )
 
-            confItem = QTableWidgetItem(_fmtPct(row.get("confidence")))
-            confItem.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
-            self.table.setItem(i, 3, confItem)
-
-            liftItem = QTableWidgetItem(_fmtLift(row.get("lift")))
-            liftItem.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
-            self.table.setItem(i, 4, liftItem)
-
-            levItem = QTableWidgetItem(_fmtLev(row.get("leverage")))
-            levItem.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
-            self.table.setItem(i, 5, levItem)
+        self.table.setSortingEnabled(True)
 
     def _renderScatter(self):
-        """支持度 vs 置信度 散点图（点大小=提升度）"""
+        """提升度与置信度散点图，编码共现证据量和校正显著性。"""
         fig = self.scatterCanvas.figure
         fig.clear()
         ax = fig.add_subplot(111)
@@ -1632,35 +1689,41 @@ class AssociationRulesDialog(MessageBoxBase):
             )
             ax.axis("off")
         else:
-            support = self.rulesDf["support"].values
             confidence = self.rulesDf["confidence"].values
             lift = self.rulesDf["lift"].values
+            jointCounts = self.rulesDf["joint count"].values
+            adjustedPValues = np.clip(
+                self.rulesDf["adjusted p-value"].values.astype(float),
+                1e-12,
+                1.0,
+            )
+            significance = -np.log10(adjustedPValues)
 
-            # 点大小按提升度映射
-            sizes = np.clip((lift - 0.5) * 80, 20, 300)
+            sizes = np.clip(jointCounts * 12, 30, 320)
 
             scatter = ax.scatter(
-                support,
+                lift,
                 confidence,
                 s=sizes,
-                c=lift,
+                c=significance,
                 cmap="viridis",
                 alpha=0.7,
                 edgecolors="white",
                 linewidth=0.5,
             )
-            ax.set_xlabel("支持度 (Support)", fontsize=11)
+            ax.set_xlabel("提升度 (Lift)", fontsize=11)
             ax.set_ylabel("置信度 (Confidence)", fontsize=11)
             ax.set_title(
-                f"关联规则散点图（共 {len(self.rulesDf)} 条，点大小/颜色=提升度）",
+                "显著正关联分布（点大小=共现次数，颜色=-log10 校正p）",
                 fontsize=12,
                 pad=12,
             )
             ax.grid(linestyle="--", alpha=0.4)
-            ax.set_xlim(0, max(0.05, float(support.max()) * 1.1))
+            ax.axvline(1.0, color="#888", linestyle="--", linewidth=1)
+            ax.set_xlim(0.95, max(1.05, float(lift.max()) * 1.08))
             ax.set_ylim(0, 1.02)
             cbar = fig.colorbar(scatter, ax=ax, fraction=0.04, pad=0.03)
-            cbar.set_label("提升度 (Lift)", fontsize=10)
+            cbar.set_label("-log10(Holm 校正 p)", fontsize=10)
 
         fig.tight_layout()
         self.scatterCanvas.draw()
@@ -1884,6 +1947,7 @@ class MatchingWorker(QThread):
             ] = {}
             heatmapGroups: List[str] = []
             seenGroup: set = set()
+            transactions: List[List[str]] = []
 
             total = max(1, len(self._rows))
             for i, (fileName, excelRow, text, rowLevel, rowCountry) in enumerate(
@@ -1894,6 +1958,7 @@ class MatchingWorker(QThread):
                 if i % 200 == 0:
                     self.progress.emit(int((i / total) * 100), f"匹配中 {i}/{total}")
 
+                rowTypes = set()
                 for errorName, pattern, hasContent in self._patterns:
                     for match in pattern.finditer(text):
                         if hasContent:
@@ -1910,6 +1975,7 @@ class MatchingWorker(QThread):
                             continue
 
                         typeCounts[errorName] = typeCounts.get(errorName, 0) + 1
+                        rowTypes.add(errorName)
                         records.append(
                             (
                                 fileName,
@@ -1943,12 +2009,16 @@ class MatchingWorker(QThread):
                                 seenGroup.add(groupVal)
                                 heatmapGroups.append(groupVal)
 
+                # 每个有效句子都是一个事务；空列表代表该句未命中所选偏误。
+                transactions.append(sorted(rowTypes))
+
             self.progress.emit(100, f"完成，共 {len(records)} 条命中")
             payload = {
                 "records": records,
                 "typeCounts": typeCounts,
                 "heatmapData": heatmapData,
                 "heatmapGroups": heatmapGroups,
+                "transactions": transactions,
             }
             self.finished.emit(payload)
         except Exception as e:
@@ -1978,6 +2048,7 @@ class BiasInterface(QWidget):
 
         # 偏误统计
         self.currentRecords = []
+        self.associationTransactions = []
         self.typeCounts = {
             **{name: 0 for name in CHARACTERS_TYPES},
             **{name: 0 for name in SENTENCES_TYPES},
@@ -2591,33 +2662,37 @@ class BiasInterface(QWidget):
         self._mountDialogContent("heatmap", dialog)
 
     def _prepareAssociationResult(self) -> None:
-        fileToTypes = {}
-        for record in self.currentRecords:
-            if len(record) < 7:
-                continue
-            fileName = record[0]
-            errorName = record[3]
-            fileToTypes.setdefault(fileName, set()).add(errorName)
+        transactions = list(self.associationTransactions)
+        if not transactions:
+            rowToTypes = {}
+            for record in self.currentRecords:
+                if len(record) < 4:
+                    continue
+                rowKey = (record[0], record[1])
+                rowToTypes.setdefault(rowKey, set()).add(record[3])
+            transactions = [sorted(types) for types in rowToTypes.values()]
 
-        transactions = [sorted(types) for types in fileToTypes.values() if types]
-        if len(transactions) < 2:
+        transactionCount = len(transactions)
+        uniqueTypes = (
+            set().union(*(set(items) for items in transactions))
+            if transactions
+            else set()
+        )
+        if transactionCount < 10 or len(uniqueTypes) < 2:
             self._showResultMessage(
                 "rules",
                 "样本数量不足",
-                "关联规则按文件构建事务，至少需要两个包含偏误的 Excel 文件。",
+                "为避免极小样本直接生成规则，本工具最低要求 10 个有效句子事务，"
+                "并且至少有两种偏误类型；达到最低值也不代表样本已经充分。",
             )
             return
 
-        if len(transactions) <= 5:
-            minSupport = 0.2
-        elif len(transactions) <= 20:
-            minSupport = 0.1
-        else:
-            minSupport = 0.05
+        minSupport = max(0.01, min(0.10, round(3 / transactionCount, 2)))
 
         logger.info(
-            f"[Bias] 启动关联规则挖掘: 事务数={len(transactions)}, "
-            f"支持度阈值={minSupport}"
+            f"[Bias] 启动句子级关联统计: 事务数={transactionCount}, "
+            f"偏误类型数={len(uniqueTypes)}, 支持度阈值={minSupport}, "
+            "最小共现次数=3, Holm alpha=0.05"
         )
         dialog = AssociationRulesDialog(
             transactions,
@@ -2909,6 +2984,7 @@ class BiasInterface(QWidget):
         self.levelColumn = None
         self.countryColumn = None
         self.currentRecords = []
+        self.associationTransactions = []
         self.heatmapData = {}
         self.heatmapGroups = []
         self.typeCounts = {
@@ -3024,6 +3100,7 @@ class BiasInterface(QWidget):
         for name in self.typeCounts:
             self.typeCounts[name] = 0
         self.currentRecords = []
+        self.associationTransactions = []
         self.heatmapData = {}
         self.heatmapGroups = []
         self.tableWidget.setRowCount(0)
@@ -3152,6 +3229,7 @@ class BiasInterface(QWidget):
         records = payload["records"]
         typeCounts = payload["typeCounts"]
         self.currentRecords = records
+        self.associationTransactions = payload.get("transactions", [])
         self.heatmapData = payload["heatmapData"]
         self.heatmapGroups = payload["heatmapGroups"]
 

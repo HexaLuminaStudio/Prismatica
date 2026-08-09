@@ -43,6 +43,7 @@ from qfluentwidgets import (
 
 from app.core.services import CloudApiError, getCloudAccount, getCloudAuth
 from app.core.utils import logger, signalBus
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 from .widgets.account.redeem_dialog import RedeemDialog
 
@@ -914,7 +915,7 @@ class AccountInterface(ScrollArea):
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()
-        page = "#202428" if dark else "#F7F9FA"
+        page = pageBackgroundColor(dark).name()
         surface = "#2B2B2B" if dark else "#FFFFFF"
         muted = "#383838" if dark else "#F5F5F5"
         border = "#454545" if dark else "#E5E5E5"

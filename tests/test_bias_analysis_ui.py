@@ -1,6 +1,7 @@
 """偏误分析第一阶段界面结构回归测试。"""
 
 import os
+import re
 import sys
 import types
 
@@ -28,6 +29,7 @@ from app.view.bias_interface import (  # noqa: E402
     CHARACTERS_TYPES,
     ChartDialog,
     HeatmapDialog,
+    MatchingWorker,
 )
 
 
@@ -51,6 +53,7 @@ def _buildPayload() -> tuple[list[str], dict]:
         "typeCounts": {selectedTypes[0]: 1},
         "heatmapData": {(selectedTypes[0], "HSK4"): [record]},
         "heatmapGroups": ["HSK4"],
+        "transactions": [[selectedTypes[0]]],
     }
     return selectedTypes, payload
 
@@ -152,6 +155,27 @@ def test_chart_and_heatmap_reuse_canvas_when_switching_views():
     chartDialog.close()
     heatmapDialog.close()
     parentWidget.close()
+
+
+def test_matching_worker_keeps_no_error_sentences_in_rule_denominator():
+    _getApp()
+    errorName = next(iter(CHARACTERS_TYPES))
+    patternText, hasContent = CHARACTERS_TYPES[errorName]
+    worker = MatchingWorker(
+        rows=[
+            ("示例.xlsx", 2, "错[C]", "HSK4", "法国"),
+            ("示例.xlsx", 3, "这是正常句子", "HSK4", "法国"),
+        ],
+        compiledPatterns=[(errorName, re.compile(patternText), hasContent)],
+        charInput="",
+        wordInput="",
+    )
+    payloads = []
+    worker.finished.connect(payloads.append)
+
+    worker.run()
+
+    assert payloads[0]["transactions"] == [[errorName], []]
 
 
 def test_association_result_does_not_force_workspace_width(qtbot, monkeypatch):

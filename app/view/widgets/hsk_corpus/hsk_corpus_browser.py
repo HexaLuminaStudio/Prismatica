@@ -87,6 +87,7 @@ from qfluentwidgets import (
 from app.core.utils import logger
 
 from app.core.services.hsk_corpus_service import HskCorpusService
+from app.view.widgets.prismatica_theme import pageBackgroundColor
 from app.core.services.hsk_local_corpus_service import hskLocalCorpusService
 from app.core.utils.data_paths import HSK_CORPUS_DB
 from app.core.utils.constant import hskCountryDict
@@ -826,7 +827,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
     def _applyTheme(self) -> None:
         """按当前主题应用本页面的层级色与状态色。"""
         if isDarkTheme():
-            pageBackground = "#202020"
+            pageBackground = pageBackgroundColor(True).name()
             surface = "#252525"
             surfaceMuted = "#2D2D2D"
             border = "#3B3B3B"
@@ -838,7 +839,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             dangerSurface = "rgba(255, 99, 99, 0.16)"
             dangerText = "#FF9A9A"
         else:
-            pageBackground = "#F3F3F3"
+            pageBackground = pageBackgroundColor(False).name()
             surface = "#FFFFFF"
             surfaceMuted = "#F5F8F8"
             border = "#D9E2E2"
