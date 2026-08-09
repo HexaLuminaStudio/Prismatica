@@ -14,6 +14,8 @@ from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QBoxLayout,
     QFileDialog,
+    QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QSizePolicy,
@@ -40,7 +42,6 @@ from qfluentwidgets import (
     SubtitleLabel,
     TitleLabel,
     TransparentToggleToolButton,
-    CardWidget,
     CheckBox,
     ScrollArea,
 )
@@ -527,9 +528,10 @@ class ChartDialog(MessageBoxBase):
         # 图表画布
         self.canvas = FigureCanvas(Figure(figsize=(6, 5), dpi=100))
         self.canvas.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
         )
-        self._currentFigure = None
+        self.canvas.setMinimumSize(0, 0)
+        self._currentFigure = self.canvas.figure
 
         scrollArea = ScrollArea(self)
         scrollArea.setWidget(self.canvas)
@@ -587,10 +589,8 @@ class ChartDialog(MessageBoxBase):
             self._drawBar()
 
     def _drawPie(self):
-        if self._currentFigure:
-            plt.close(self._currentFigure)
-
-        fig = Figure(figsize=(6, 5), dpi=100)
+        fig = self.canvas.figure
+        fig.clear()
         ax = fig.add_subplot(111)
         self._currentFigure = fig
 
@@ -630,14 +630,11 @@ class ChartDialog(MessageBoxBase):
 
         ax.set_title(f"偏误类型占比分布（总计 {self.total} 条）", fontsize=12, pad=12)
         fig.tight_layout()
-        self.canvas.figure = fig
         self.canvas.draw()
 
     def _drawBar(self):
-        if self._currentFigure:
-            plt.close(self._currentFigure)
-
-        fig = Figure(figsize=(6, 5), dpi=100)
+        fig = self.canvas.figure
+        fig.clear()
         ax = fig.add_subplot(111)
         self._currentFigure = fig
 
@@ -676,7 +673,6 @@ class ChartDialog(MessageBoxBase):
 
         ax.set_title(f"偏误类型数量统计（总计 {self.total} 条）", fontsize=12, pad=12)
         fig.tight_layout()
-        self.canvas.figure = fig
         self.canvas.draw()
 
     def _export(self, fmt: str):
@@ -948,8 +944,10 @@ class HeatmapDialog(MessageBoxBase):
         # 画布
         self.canvas = FigureCanvas(Figure(figsize=(7, 6), dpi=100))
         self.canvas.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
         )
+        self.canvas.setMinimumSize(0, 0)
+        self._currentFigure = self.canvas.figure
 
         # 点击事件用于下钻
         self.canvas.mpl_connect("button_press_event", self._onCanvasClick)
@@ -1067,10 +1065,8 @@ class HeatmapDialog(MessageBoxBase):
         return matrix, sortedCols, sortedRows
 
     def _drawHeatmap(self):
-        if self._currentFigure:
-            plt.close(self._currentFigure)
-
-        fig = Figure(figsize=(7, 6), dpi=100)
+        fig = self.canvas.figure
+        fig.clear()
         ax = fig.add_subplot(111)
         self._currentFigure = fig
 
@@ -1129,7 +1125,6 @@ class HeatmapDialog(MessageBoxBase):
 
             fig.tight_layout()
 
-        self.canvas.figure = fig
         self.canvas.draw()
 
     def _onCanvasClick(self, event):
@@ -1255,10 +1250,11 @@ class AssociationRulesDialog(MessageBoxBase):
         closeBtn.clicked.connect(self._onClose)
 
         # 阈值参数面板
-        paramWidget = QWidget()
-        paramLayout = QHBoxLayout(paramWidget)
+        self.paramWidget = QWidget()
+        paramLayout = QGridLayout(self.paramWidget)
         paramLayout.setContentsMargins(0, 0, 0, 0)
-        paramLayout.setSpacing(12)
+        paramLayout.setHorizontalSpacing(10)
+        paramLayout.setVerticalSpacing(8)
 
         supportLabel = BodyLabel("最小支持度:", self)
         supportLabel.setStyleSheet("font-size: 12px;")
@@ -1267,7 +1263,12 @@ class AssociationRulesDialog(MessageBoxBase):
         self.supportSpin.setSingleStep(0.05)
         self.supportSpin.setDecimals(2)
         self.supportSpin.setValue(minSupport)
-        self.supportSpin.setFixedWidth(180)
+        self.supportSpin.setMinimumWidth(110)
+        self.supportSpin.setMaximumWidth(150)
+        self.supportSpin.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
 
         confidenceLabel = BodyLabel("最小置信度:", self)
         confidenceLabel.setStyleSheet("font-size: 12px;")
@@ -1276,18 +1277,30 @@ class AssociationRulesDialog(MessageBoxBase):
         self.confidenceSpin.setSingleStep(0.05)
         self.confidenceSpin.setDecimals(2)
         self.confidenceSpin.setValue(minConfidence)
-        self.confidenceSpin.setFixedWidth(180)
+        self.confidenceSpin.setMinimumWidth(110)
+        self.confidenceSpin.setMaximumWidth(150)
+        self.confidenceSpin.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
 
         self.recomputeBtn = PushButton("重新计算", self)
         self.recomputeBtn.setIcon(":app/icons/Refresh.svg")
         self.recomputeBtn.clicked.connect(self._recompute)
 
-        paramLayout.addWidget(supportLabel)
-        paramLayout.addWidget(self.supportSpin)
-        paramLayout.addWidget(confidenceLabel)
-        paramLayout.addWidget(self.confidenceSpin)
-        paramLayout.addStretch(1)
-        paramLayout.addWidget(self.recomputeBtn)
+        paramLayout.addWidget(supportLabel, 0, 0)
+        paramLayout.addWidget(self.supportSpin, 0, 1)
+        paramLayout.addWidget(confidenceLabel, 1, 0)
+        paramLayout.addWidget(self.confidenceSpin, 1, 1)
+        paramLayout.addWidget(
+            self.recomputeBtn,
+            0,
+            2,
+            2,
+            1,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        paramLayout.setColumnStretch(1, 1)
 
         # Tab 切换：表格 / 散点图 / 网络图
         self.viewSegment = SegmentedWidget(self)
@@ -1334,8 +1347,9 @@ class AssociationRulesDialog(MessageBoxBase):
         # --- 散点图视图 ---
         self.scatterCanvas = FigureCanvas(Figure(figsize=(7, 5), dpi=100))
         self.scatterCanvas.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
         )
+        self.scatterCanvas.setMinimumSize(0, 0)
         self.scatterScroll = ScrollArea(self)
         self.scatterScroll.setWidget(self.scatterCanvas)
         self.scatterScroll.setWidgetResizable(True)
@@ -1345,8 +1359,9 @@ class AssociationRulesDialog(MessageBoxBase):
         # --- 网络图视图 ---
         self.networkCanvas = FigureCanvas(Figure(figsize=(7, 6), dpi=100))
         self.networkCanvas.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding
         )
+        self.networkCanvas.setMinimumSize(0, 0)
         self.networkScroll = ScrollArea(self)
         self.networkScroll.setWidget(self.networkCanvas)
         self.networkScroll.setWidgetResizable(True)
@@ -1356,6 +1371,11 @@ class AssociationRulesDialog(MessageBoxBase):
         # 状态/进度
         self.statusLabel = CaptionLabel("点击「重新计算」开始挖掘...", self)
         self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        self.statusLabel.setWordWrap(True)
+        self.statusLabel.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
 
         # 导出
         exportLayout = QHBoxLayout()
@@ -1382,7 +1402,7 @@ class AssociationRulesDialog(MessageBoxBase):
         self.viewLayout.addLayout(headerLayout)
 
         self.viewLayout.addSpacing(6)
-        self.viewLayout.addWidget(paramWidget)
+        self.viewLayout.addWidget(self.paramWidget)
         self.viewLayout.addSpacing(4)
         self.viewLayout.addWidget(self.viewSegment)
         self.viewLayout.addSpacing(6)
@@ -1401,8 +1421,8 @@ class AssociationRulesDialog(MessageBoxBase):
         self.buttonLayout.addWidget(cancelBtn)
         self.buttonGroup.hide()
 
-        self.widget.setFixedWidth(760)
-        self.widget.setFixedHeight(560)
+        self.widget.setMinimumSize(440, 480)
+        self.widget.resize(680, 560)
 
         # 初始计算
         self._recompute()
@@ -1596,9 +1616,8 @@ class AssociationRulesDialog(MessageBoxBase):
 
     def _renderScatter(self):
         """支持度 vs 置信度 散点图（点大小=提升度）"""
-        if self._scatterFigure:
-            plt.close(self._scatterFigure)
-        fig = Figure(figsize=(7, 5), dpi=100)
+        fig = self.scatterCanvas.figure
+        fig.clear()
         ax = fig.add_subplot(111)
         self._scatterFigure = fig
 
@@ -1644,14 +1663,12 @@ class AssociationRulesDialog(MessageBoxBase):
             cbar.set_label("提升度 (Lift)", fontsize=10)
 
         fig.tight_layout()
-        self.scatterCanvas.figure = fig
         self.scatterCanvas.draw()
 
     def _renderNetwork(self):
         """网络图：节点=偏误类型，边=关联（权重=置信度）"""
-        if self._networkFigure:
-            plt.close(self._networkFigure)
-        fig = Figure(figsize=(7, 6), dpi=100)
+        fig = self.networkCanvas.figure
+        fig.clear()
         ax = fig.add_subplot(111)
         self._networkFigure = fig
 
@@ -1755,7 +1772,6 @@ class AssociationRulesDialog(MessageBoxBase):
                 ax.axis("off")
 
         fig.tight_layout()
-        self.networkCanvas.figure = fig
         self.networkCanvas.draw()
 
     def _exportCsv(self):
@@ -2013,8 +2029,15 @@ class BiasInterface(QWidget):
         self.workspaceLayout.setContentsMargins(0, 0, 0, 0)
         self.workspaceLayout.setSpacing(16)
 
-        self.conditionCard = CardWidget(self.scrollContent)
+        self.conditionCard = QWidget(self.scrollContent)
         self.conditionCard.setObjectName("biasConditionCard")
+        self.conditionCard.setStyleSheet(
+            "QWidget#biasConditionCard {"
+            "    background-color: #FFFFFF;"
+            "    border: 1px solid #DCE4EF;"
+            "    border-radius: 12px;"
+            "}"
+        )
         self.conditionCard.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Maximum,
@@ -2169,8 +2192,15 @@ class BiasInterface(QWidget):
             Qt.AlignmentFlag.AlignTop,
         )
 
-        self.resultCard = CardWidget(self.scrollContent)
+        self.resultCard = QWidget(self.scrollContent)
         self.resultCard.setObjectName("biasResultCard")
+        self.resultCard.setStyleSheet(
+            "QWidget#biasResultCard {"
+            "    background-color: #FFFFFF;"
+            "    border: 1px solid #DCE4EF;"
+            "    border-radius: 12px;"
+            "}"
+        )
         self.resultCard.setMinimumHeight(540)
         self.resultCard.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -2424,6 +2454,13 @@ class BiasInterface(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
 
+    @staticmethod
+    def _clearDropShadows(rootWidget: QWidget) -> None:
+        """移除结果内容中的投影，保留其他图形效果。"""
+        for widget in (rootWidget, *rootWidget.findChildren(QWidget)):
+            if isinstance(widget.graphicsEffect(), QGraphicsDropShadowEffect):
+                widget.setGraphicsEffect(None)
+
     def _disposeEmbeddedResult(self, key: str) -> None:
         dialog = self._embeddedDialogs.pop(key, None)
         if dialog is None:
@@ -2473,10 +2510,11 @@ class BiasInterface(QWidget):
         dialog._isEmbedded = True
         contentWidget = dialog.widget
         contentWidget.setParent(page)
+        self._clearDropShadows(contentWidget)
         contentWidget.setMinimumSize(0, 0)
         contentWidget.setMaximumSize(16777215, 16777215)
         contentWidget.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Ignored,
             QSizePolicy.Policy.Expanding,
         )
         for closeButton in contentWidget.findChildren(TransparentToggleToolButton):
@@ -2484,6 +2522,9 @@ class BiasInterface(QWidget):
 
         page.layout().addWidget(contentWidget)
         contentWidget.show()
+        page.layout().invalidate()
+        page.updateGeometry()
+        self.resultStack.updateGeometry()
         self._embeddedDialogs[key] = dialog
 
     def _prepareEmbeddedResult(self, key: str) -> None:

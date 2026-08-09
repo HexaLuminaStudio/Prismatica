@@ -8,7 +8,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pandas as pd
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QBoxLayout, QFileDialog, QTableWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QBoxLayout,
+    QFileDialog,
+    QSizePolicy,
+    QTableWidget,
+)
 
 
 proModule = types.ModuleType("qfluentwidgetspro")
@@ -16,7 +22,13 @@ proModule.RoundTableWidget = QTableWidget
 sys.modules["qfluentwidgetspro"] = proModule
 
 from app.view.resource import resource  # noqa: F401, E402
-from app.view.bias_interface import BiasInterface, CHARACTERS_TYPES  # noqa: E402
+from app.view.bias_interface import (  # noqa: E402
+    AssociationRulesDialog,
+    BiasInterface,
+    CHARACTERS_TYPES,
+    ChartDialog,
+    HeatmapDialog,
+)
 
 
 def _getApp() -> QApplication:
@@ -97,12 +109,69 @@ def test_bias_count_and_heatmap_are_mounted_in_result_pages():
     countDialog = widget._embeddedDialogs["count"]
     assert countDialog.isVisible() is False
     assert countDialog.widget.parent() is widget.resultPages["count"]
+    assert countDialog.widget.graphicsEffect() is None
 
     widget._runHeatmap()
     app.processEvents()
     heatmapDialog = widget._embeddedDialogs["heatmap"]
     assert heatmapDialog.isVisible() is False
     assert heatmapDialog.widget.parent() is widget.resultPages["heatmap"]
+    assert heatmapDialog.widget.graphicsEffect() is None
+    widget.close()
+
+
+def test_chart_and_heatmap_reuse_canvas_when_switching_views():
+    _getApp()
+    parentWidget = BiasInterface()
+    chartDialog = ChartDialog(
+        {"错字 [C]": 2, "别字 [B]": 1},
+        parentWidget,
+    )
+    chartFigure = chartDialog.canvas.figure
+    chartDialog._drawBar()
+    assert chartDialog.canvas.figure is chartFigure
+    assert chartDialog._currentFigure is chartFigure
+
+    heatmapData = {
+        ("错字 [C]", "HSK4"): [("a.xlsx", 1, "例句", "错字 [C]", "错")],
+        ("错字 [C]", "法国"): [("a.xlsx", 1, "例句", "错字 [C]", "错")],
+    }
+    heatmapDialog = HeatmapDialog(
+        heatmapData,
+        ["错字 [C]"],
+        ["HSK4", "法国"],
+        ["HSK4"],
+        ["法国"],
+        parentWidget,
+    )
+    heatmapFigure = heatmapDialog.canvas.figure
+    heatmapDialog._currentMode = "country"
+    heatmapDialog._drawHeatmap()
+    assert heatmapDialog.canvas.figure is heatmapFigure
+    assert heatmapDialog._currentFigure is heatmapFigure
+    chartDialog.close()
+    heatmapDialog.close()
+    parentWidget.close()
+
+
+def test_association_result_does_not_force_workspace_width(qtbot, monkeypatch):
+    monkeypatch.setattr(AssociationRulesDialog, "_recompute", lambda self: None)
+    widget = BiasInterface()
+    qtbot.addWidget(widget)
+    widget.resize(760, 900)
+    widget.show()
+
+    dialog = AssociationRulesDialog(
+        [["错字 [C]", "别字 [B]"], ["错字 [C]"]],
+        parent=widget,
+    )
+    widget._mountDialogContent("rules", dialog)
+    qtbot.wait(10)
+
+    assert dialog.statusLabel.wordWrap() is True
+    assert dialog.widget.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+    assert widget.scrollArea.horizontalScrollBar().maximum() == 0
+    assert widget.width() == 760
     widget.close()
 
 
