@@ -38,14 +38,12 @@ from qfluentwidgets import (
 )
 
 from app.core.services import HskTokenRefreshThread, GlobalTokenRefreshThread
-from app.core.services.startup_database_service import (
-    DatabaseVerificationResult,
-    DatabaseVerificationThread,
-    StartupDatabaseService,
-)
+from app.core.services.startup_database_service import StartupDatabaseService
 from app.core.utils import cfg, qconfig, logger, signalBus
 from app.view.widgets.prismatica_theme import pageBackgroundColor
-from app.view.widgets.startup_database_dialog import StartupDatabaseDialog
+from app.view.widgets.resource_verification_dialog import (
+    ResourceVerificationDialog,
+)
 
 
 _ACCENT = "#00B09C"
@@ -69,6 +67,17 @@ def _accentIcon(icon):
     if hasattr(icon, "icon"):
         return icon.icon(color=QColor(_ACCENT))
     return icon
+
+
+def _createTransparentActionWidget(parent: QWidget) -> QWidget:
+    """创建不绘制平台窗口底色的组合操作容器。"""
+    wrapper = QWidget(parent)
+    wrapper.setObjectName("settingActionWidget")
+    wrapper.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    wrapper.setStyleSheet(
+        "QWidget#settingActionWidget { background: transparent; border: none; }"
+    )
+    return wrapper
 
 
 class SettingStatusBadge(QLabel):
@@ -296,15 +305,13 @@ class SoftwareSettingWidget(OverviewGroupCard):
         )
 
         # HSK 作文数据库资源校验
-        self.resourceVerifyButton = PushButton("立即校验", self)
+        self.resourceVerifyButton = PushButton("校验资源", self)
         self.resourceVerifyButton.setIcon(FluentIcon.CHECKBOX)
         self.resourceVerifyButton.setFixedHeight(32)
         self.resourceVerifyButton.setAccessibleName("校验 HSK 作文资源文件")
         self.resourceVerifyButton.clicked.connect(self._onResourceActionClicked)
         self.resourceVerifyBadge = SettingStatusBadge(False, self)
         self.resourceVerifyBadge.setConfigured(False, missingText="待校验")
-        self._resourceVerificationThread = None
-        self._resourceRepairResources = []
         self._resourceService = StartupDatabaseService()
 
         # 添加设置组
@@ -325,7 +332,7 @@ class SoftwareSettingWidget(OverviewGroupCard):
         combo.setCurrentIndex(max(0, index))
 
     def _buildPathAction(self) -> QWidget:
-        wrapper = QWidget(self)
+        wrapper = _createTransparentActionWidget(self)
         layout = QHBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -334,7 +341,7 @@ class SoftwareSettingWidget(OverviewGroupCard):
         return wrapper
 
     def _buildTokenAction(self, badge, button) -> QWidget:
-        wrapper = QWidget(self)
+        wrapper = _createTransparentActionWidget(self)
         layout = QHBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -343,7 +350,7 @@ class SoftwareSettingWidget(OverviewGroupCard):
         return wrapper
 
     def _buildResourceAction(self) -> QWidget:
-        wrapper = QWidget(self)
+        wrapper = _createTransparentActionWidget(self)
         layout = QHBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
@@ -397,99 +404,20 @@ class SoftwareSettingWidget(OverviewGroupCard):
         )
 
     def _onResourceActionClicked(self) -> None:
-        """根据当前状态执行深度校验或下载修复。"""
-        if self._resourceVerificationThread is not None:
-            return
-        if self._resourceRepairResources:
-            dialog = StartupDatabaseDialog(
-                self._resourceService,
-                self._resourceRepairResources,
-                self.window(),
-            )
-            if dialog.exec():
-                self._resourceRepairResources = []
-                self._startResourceVerification()
-            return
-        self._startResourceVerification()
-
-    def _startResourceVerification(self) -> None:
-        """后台执行资源文件深度校验，避免阻塞设置页。"""
-        self.resourceVerifyButton.setEnabled(False)
-        self.resourceVerifyButton.setText("校验中…")
-        self.resourceVerifyBadge.setConfigured(False, missingText="校验中")
-        self._resourceVerificationThread = DatabaseVerificationThread(
+        """在 Fluent MessageBoxBase 中执行校验、修复与复检。"""
+        dialog = ResourceVerificationDialog(
             self._resourceService,
-            self,
+            self.window(),
         )
-        self._resourceVerificationThread.verificationFinished.connect(
-            self._onResourceVerificationFinished
-        )
-        self._resourceVerificationThread.verificationFailed.connect(
-            self._onResourceVerificationFailed
-        )
-        self._resourceVerificationThread.finished.connect(
-            self._onResourceVerificationThreadFinished
-        )
-        self._resourceVerificationThread.start()
-
-    def _onResourceVerificationFinished(
-        self,
-        results: list[DatabaseVerificationResult],
-    ) -> None:
-        invalidResults = [result for result in results if not result.isValid]
-        self.resourceVerifyButton.setEnabled(True)
-        if invalidResults:
-            self._resourceRepairResources = [
-                result.resource for result in invalidResults
-            ]
-            self.resourceVerifyBadge.setConfigured(False, missingText="需修复")
-            self.resourceVerifyButton.setText("修复资源")
-            details = "；".join(
-                f"{result.resource.displayName}：{result.message}"
-                for result in invalidResults
-            )
-            InfoBar.error(
-                title="发现资源异常",
-                content=f"{details}。点击“修复资源”可重新下载。",
-                position=InfoBarPosition.TOP,
-                parent=self.window(),
-                duration=6000,
-            )
+        dialog.exec()
+        if not dialog.hasVerified:
             return
-
-        self._resourceRepairResources = []
-        self.resourceVerifyBadge.setConfigured(True, configuredText="完整")
-        self.resourceVerifyButton.setText("再次校验")
-        details = "；".join(
-            f"{result.resource.displayName} {result.rowCount:,} 条"
-            for result in results
-        )
-        InfoBar.success(
-            title="资源文件完整",
-            content=f"已完成 SQLite 完整性检查：{details}。",
-            position=InfoBarPosition.TOP,
-            parent=self.window(),
-            duration=4000,
-        )
-
-    def _onResourceVerificationFailed(self, message: str) -> None:
-        self._resourceRepairResources = []
-        self.resourceVerifyBadge.setConfigured(False, missingText="校验失败")
-        self.resourceVerifyButton.setText("重新校验")
-        self.resourceVerifyButton.setEnabled(True)
-        InfoBar.error(
-            title="资源校验失败",
-            content=message or "无法读取资源文件，请稍后重试。",
-            position=InfoBarPosition.TOP,
-            parent=self.window(),
-            duration=5000,
-        )
-
-    def _onResourceVerificationThreadFinished(self) -> None:
-        thread = self._resourceVerificationThread
-        self._resourceVerificationThread = None
-        if thread is not None:
-            thread.deleteLater()
+        if dialog.allResourcesValid:
+            self.resourceVerifyBadge.setConfigured(True, configuredText="完整")
+            self.resourceVerifyButton.setText("再次校验")
+            return
+        self.resourceVerifyBadge.setConfigured(False, missingText="需修复")
+        self.resourceVerifyButton.setText("继续处理")
 
     def _showSuccessMessage(self, title: str, content: str):
         """显示成功提示"""
@@ -915,7 +843,7 @@ class AiChatSettingWidget(OverviewGroupCard):
         self._refreshStatus()
 
     def _buildApiKeyWidget(self) -> QWidget:
-        wrapper = QWidget(self)
+        wrapper = _createTransparentActionWidget(self)
         layout = QHBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
@@ -956,7 +884,7 @@ class AiChatSettingWidget(OverviewGroupCard):
     # ---- 系统提示词(文件上传)----
     def _buildSystemPromptWidget(self) -> QWidget:
         """组装系统提示词控件:状态标签 + 选择/清除按钮"""
-        wrapper = QWidget(self)
+        wrapper = _createTransparentActionWidget(self)
         layout = QHBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)

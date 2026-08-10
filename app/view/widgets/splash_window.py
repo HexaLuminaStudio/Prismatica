@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from qfluentwidgets import PrimaryPushButton, PushButton
 
 from app.core.utils import logger
 
@@ -74,6 +75,9 @@ class SplashWindow(QWidget):
 
     # 进度变化信号(0~100),便于跨线程安全地更新 UI
     progressChanged = Signal(int, str)
+    detailChanged = Signal(str)
+    retryRequested = Signal()
+    continueRequested = Signal()
     finished = Signal()
     # 真正淡出销毁后(在 _onFadeFinished 末尾)发出。
     # main.py / SplashLoader 监听此信号,确保主窗口 show() 在 splash 完全退场之后,
@@ -97,7 +101,9 @@ class SplashWindow(QWidget):
         self._targetProgress = 0
         self._currentProgress = 0
         self._stageText = "正在准备…"
+        self._detailText = "正在初始化启动环境"
         self._isFinished = False
+        self._isRecovering = False
         self._isHeld = (
             False  # 修复(2026-08-05):hold/release 状态守卫,避免重复 hide/show
         )
@@ -112,6 +118,7 @@ class SplashWindow(QWidget):
 
         # 进度信号由外部跨线程触发,槽函数内部已做线程安全处理
         self.progressChanged.connect(self._onProgressChanged)
+        self.detailChanged.connect(self._onDetailChanged)
 
 
     # ------------------------------------------------------------------
@@ -134,11 +141,11 @@ class SplashWindow(QWidget):
             f"border: 1px solid #e6e6e6;"
             f"}}"
         )
-        self._card.setFixedSize(440, 260)
+        self._card.setFixedSize(480, 360)
 
         cardLayout = QVBoxLayout(self._card)
-        cardLayout.setContentsMargins(36, 28, 36, 24)
-        cardLayout.setSpacing(12)
+        cardLayout.setContentsMargins(38, 28, 38, 26)
+        cardLayout.setSpacing(10)
         cardLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # ---- Logo ----
@@ -147,8 +154,8 @@ class SplashWindow(QWidget):
         if not logoPixmap.isNull():
             self._logoLabel.setPixmap(
                 logoPixmap.scaled(
-                    72,
-                    72,
+                    68,
+                    68,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -182,21 +189,46 @@ class SplashWindow(QWidget):
         # ---- 副标题 / 动态文案 ----
         self._stageLabel = QLabel(self._stageText, self._card)
         stageFont = QFont()
-        stageFont.setPointSize(10)
+        stageFont.setPointSize(11)
+        stageFont.setWeight(QFont.Weight.DemiBold)
         self._stageLabel.setFont(stageFont)
         self._stageLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._stageLabel.setStyleSheet(
-            f"color: rgb{SUBTEXT_COLOR.red(), SUBTEXT_COLOR.green(), SUBTEXT_COLOR.blue()};"
+            f"color: rgb{TEXT_COLOR_LIGHT.red(), TEXT_COLOR_LIGHT.green(), TEXT_COLOR_LIGHT.blue()};"
         )
         self._stageLabel.setWordWrap(True)
         cardLayout.addWidget(self._stageLabel)
+
+        self._detailLabel = QLabel(self._detailText, self._card)
+        detailFont = QFont()
+        detailFont.setPointSize(9)
+        self._detailLabel.setFont(detailFont)
+        self._detailLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._detailLabel.setStyleSheet(
+            f"color: rgb{SUBTEXT_COLOR.red(), SUBTEXT_COLOR.green(), SUBTEXT_COLOR.blue()};"
+        )
+        self._detailLabel.setWordWrap(True)
+        self._detailLabel.setMinimumHeight(34)
+        cardLayout.addWidget(self._detailLabel)
+
+        progressHeader = QHBoxLayout()
+        progressHeader.setContentsMargins(0, 2, 0, 0)
+        self._progressHintLabel = QLabel("启动进度", self._card)
+        self._progressHintLabel.setStyleSheet("color: #6b7280; font-size: 9pt;")
+        self._percentLabel = QLabel("0%", self._card)
+        self._percentLabel.setStyleSheet("color: #087b70; font-size: 9pt;")
+        self._percentLabel.setAlignment(Qt.AlignmentFlag.AlignRight)
+        progressHeader.addWidget(self._progressHintLabel)
+        progressHeader.addStretch(1)
+        progressHeader.addWidget(self._percentLabel)
+        cardLayout.addLayout(progressHeader)
 
         # ---- 进度条 ----
         self._progressBar = QProgressBar(self._card)
         self._progressBar.setRange(0, 100)
         self._progressBar.setValue(0)
         self._progressBar.setTextVisible(False)
-        self._progressBar.setFixedHeight(6)
+        self._progressBar.setFixedHeight(8)
         self._progressBar.setStyleSheet(
             "QProgressBar {"
             "    background-color: #eef0f2;"
@@ -209,6 +241,22 @@ class SplashWindow(QWidget):
             "}"
         )
         cardLayout.addWidget(self._progressBar)
+
+        self._actionContainer = QWidget(self._card)
+        actionLayout = QHBoxLayout(self._actionContainer)
+        actionLayout.setContentsMargins(0, 4, 0, 0)
+        actionLayout.setSpacing(10)
+        actionLayout.addStretch(1)
+        self._continueButton = PushButton("继续启动", self._actionContainer)
+        self._continueButton.setFixedHeight(32)
+        self._continueButton.clicked.connect(self.continueRequested.emit)
+        actionLayout.addWidget(self._continueButton)
+        self._retryButton = PrimaryPushButton("重新尝试", self._actionContainer)
+        self._retryButton.setFixedHeight(32)
+        self._retryButton.clicked.connect(self.retryRequested.emit)
+        actionLayout.addWidget(self._retryButton)
+        self._actionContainer.hide()
+        cardLayout.addWidget(self._actionContainer)
 
         outerLayout.addWidget(self._card, 0, Qt.AlignmentFlag.AlignCenter)
 
@@ -232,11 +280,17 @@ class SplashWindow(QWidget):
         """
         import time
 
-        self._targetProgress = max(0, min(100, int(pct)))
+        requestedProgress = max(0, min(100, int(pct)))
+        self._targetProgress = max(self._targetProgress, requestedProgress)
         self._lastExternalProgressAt = time.monotonic()
         if text:
             self._stageText = text
             self._stageLabel.setText(text)
+
+    @Slot(str)
+    def _onDetailChanged(self, text: str) -> None:
+        self._detailText = str(text or "")
+        self._detailLabel.setText(self._detailText)
 
     def setProgress(self, pct: int, text: str = "") -> None:
         """外部调用接口(主线程直接调用)。
@@ -249,6 +303,30 @@ class SplashWindow(QWidget):
         """仅更新阶段文案,不改变进度。"""
         self._stageText = text
         self._stageLabel.setText(text)
+
+    def setDetail(self, text: str) -> None:
+        """线程安全地更新启动阶段补充信息。"""
+        self.detailChanged.emit(str(text or ""))
+
+    def clearRecovery(self) -> None:
+        """恢复普通启动状态并隐藏恢复操作。"""
+        self._isRecovering = False
+        self._actionContainer.hide()
+        self._progressHintLabel.setText("启动进度")
+        self._retryButton.setEnabled(True)
+        self._continueButton.setEnabled(True)
+
+    def showRecovery(self, message: str) -> None:
+        """在启动窗口内展示资源准备失败与恢复操作。"""
+        self._isRecovering = True
+        self._stageLabel.setText("HSK 作文资源准备未完成")
+        self._detailLabel.setText(str(message or "请检查网络连接后重试。"))
+        self._progressHintLabel.setText("等待处理")
+        self._actionContainer.show()
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     # ------------------------------------------------------------------
     # 平滑进度动画(双轨制,让进度条始终在缓慢移动)
@@ -273,6 +351,8 @@ class SplashWindow(QWidget):
 
     def _advanceProgress(self) -> None:
         """高频追赶:每次最多前进 CHASE_STEP_MAX,让数字变化可观察。"""
+        if self._isRecovering:
+            return
         if self._currentProgress < self._targetProgress:
             gap = self._targetProgress - self._currentProgress
             step = max(1, gap // CHASE_STEP_DIVISOR)
@@ -281,20 +361,18 @@ class SplashWindow(QWidget):
                 self._targetProgress, self._currentProgress + step
             )
             self._progressBar.setValue(self._currentProgress)
-        elif self._currentProgress > self._targetProgress:
-            # 不应出现倒退;若发生,防御性吸附到目标
-            self._currentProgress = self._targetProgress
-            self._progressBar.setValue(self._currentProgress)
+            self._percentLabel.setText(f"{self._currentProgress}%")
 
     def _idleAdvanceProgress(self) -> None:
         """低频自由增长:仅在 current < target - IDLE_FLOOR_GAP 时推进,
         保证外部 setProgress 推进 target 后仍能继续往上爬到新 target。"""
-        if self._isFinished:
+        if self._isFinished or self._isRecovering:
             return
         ceiling = self._targetProgress - IDLE_FLOOR_GAP
         if self._currentProgress < ceiling:
             self._currentProgress = min(ceiling, self._currentProgress + IDLE_STEP)
             self._progressBar.setValue(self._currentProgress)
+            self._percentLabel.setText(f"{self._currentProgress}%")
 
     # ------------------------------------------------------------------
     # 居中显示
@@ -335,6 +413,7 @@ class SplashWindow(QWidget):
         if self._isFinished:
             return
         self._isFinished = True
+        self.clearRecovery()
 
         # 推进到 100% + 显示完成文案
         self.progressChanged.emit(100, "启动完成")
@@ -342,6 +421,7 @@ class SplashWindow(QWidget):
         self._targetProgress = 100
         self._currentProgress = 100
         self._progressBar.setValue(100)
+        self._percentLabel.setText("100%")
 
         # 延迟一小段时间让用户看到 100%,再淡出
         QTimer.singleShot(220, self._startFadeOut)

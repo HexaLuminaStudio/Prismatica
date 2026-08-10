@@ -239,73 +239,97 @@ if qconfig.get(cfg.FirstLaunch):
         log.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
 
 # ============================================================
-# HSK 作文数据库启动检查
-# - 必须早于 MainWindow 构造，否则 HskCorpusBrowser.ensureSchema()
-#   会先创建空库，掩盖“数据库文件缺失”的真实状态
-# - 仅在文件缺失、损坏或没有真实数据时弹出下载进度窗口
-# - 下载失败时不继续构造依赖这些数据库的主窗口
+# HSK 作文数据库启动准备
+# - 深度校验、缺失下载、下载进度与复检全部留在启动窗口内
+# - 校验失败时可重试或暂时继续，不再弹出独立窗口或提供退出选项
+# - 必须早于 MainWindow 构造，避免业务层先创建空数据库
 # ============================================================
-try:
-    from PySide6.QtWidgets import QDialog
+from app.core.services.startup_database_service import (
+    StartupDatabaseService,
+    StartupResourcePreparationThread,
+)
 
-    from app.core.services.startup_database_service import StartupDatabaseService
-    from app.view.widgets.startup_database_dialog import StartupDatabaseDialog
+_databaseService = StartupDatabaseService()
+_resourcePreparationThread = None
+_mainWindowLoadingStarted = False
 
-    _databaseService = StartupDatabaseService()
-    _missingDatabases = _databaseService.missingResources()
-    if _missingDatabases:
-        _splashWindow.hold()
-        QApplication.processEvents()
-        _databaseDialog = StartupDatabaseDialog(
-            _databaseService,
-            _missingDatabases,
-        )
-        _databaseReady = (
-            _databaseDialog.exec() == QDialog.DialogCode.Accepted
-        )
-        _databaseDialog = None
-        if not _databaseReady:
-            log.info("[Main] HSK 作文数据库未准备完成，用户退出软件")
-            try:
-                _splashWindow.finish()
-            except Exception:
-                pass
-            QApplication.instance().quit()
-            sys.exit(0)
-        _splashWindow.release(progress=26, text="HSK 作文数据库准备完成…")
-        QApplication.processEvents()
-except SystemExit:
-    raise
-except Exception as _databaseErr:
-    log.exception(f"[Main] HSK 作文数据库启动检查失败: {_databaseErr}")
-    try:
-        _splashWindow.hold()
-    except Exception:
-        pass
-    from qfluentwidgets import MessageBox
 
-    _databaseErrorBox = MessageBox(
-        "数据库准备失败",
-        "无法检查 HSK 作文数据库，软件不能安全启动。\n\n"
-        f"错误信息：{_databaseErr}",
-        None,
+def _startMainWindowLoading() -> None:
+    """资源流程结束后，只启动一次主窗口构造。"""
+    global _mainWindowLoadingStarted
+    if _mainWindowLoadingStarted:
+        return
+    _mainWindowLoadingStarted = True
+    _splashWindow.clearRecovery()
+    _splashWindow.setProgress(57, "正在准备主界面…")
+    _splashWindow.setDetail("正在加载界面、服务与项目状态")
+    _splashLoader.start()
+
+
+def _onResourceProgress(progress: int, stage: str, detail: str) -> None:
+    _splashWindow.setProgress(progress, stage)
+    _splashWindow.setDetail(detail)
+
+
+def _onResourcePreparationFinished(results) -> None:
+    totalRows = sum(result.rowCount for result in results)
+    log.info(
+        "[Main] HSK 作文资源启动校验完成，{} 个数据库，共 {} 条数据",
+        len(results),
+        totalRows,
     )
-    _databaseErrorBox.yesButton.setText("退出软件")
-    _databaseErrorBox.cancelButton.hide()
-    _databaseErrorBox.exec()
-    QApplication.instance().quit()
-    sys.exit(1)
+    _startMainWindowLoading()
 
-# ============================================================
-# 启动主窗口异步加载
-# - SplashLoader 在下一轮事件循环触发 MainWindow 构造
-# - 完成后通过 mainWindowReady 信号在主线程 show()
-# - splash 在主窗口 ready 后自动 finish() 并淡出销毁
-# ============================================================
-# 引导完成(或跳过引导) → 推进到 26%,留 4% 给 SplashLoader 衔接 30%
-_splashWindow.setProgress(26, "准备启动主窗口…")
-QApplication.processEvents()
-_splashLoader.start()  # 立即返回,异步构造
+
+def _onResourcePreparationFailed(message: str) -> None:
+    errorMessage = message or "无法校验或下载 HSK 作文资源"
+    log.warning("[Main] HSK 作文资源启动准备失败: {}", errorMessage)
+    _splashWindow.showRecovery(
+        f"{errorMessage}。请检查网络后重新尝试，或暂时继续启动。"
+    )
+
+
+def _onResourcePreparationThreadFinished() -> None:
+    global _resourcePreparationThread
+    thread = _resourcePreparationThread
+    _resourcePreparationThread = None
+    if thread is not None:
+        thread.deleteLater()
+
+
+def _startResourcePreparation() -> None:
+    """在后台执行启动资源准备，并将全部状态映射到启动窗口。"""
+    global _resourcePreparationThread
+    if _mainWindowLoadingStarted:
+        return
+    if _resourcePreparationThread is not None:
+        if _resourcePreparationThread.isRunning():
+            return
+        _resourcePreparationThread.deleteLater()
+
+    _splashWindow.clearRecovery()
+    _splashWindow.setProgress(27, "正在检查 HSK 作文资源…")
+    _splashWindow.setDetail("检查数据库文件、SQLite 完整性与数据记录")
+    _resourcePreparationThread = StartupResourcePreparationThread(
+        _databaseService,
+        app,
+    )
+    _resourcePreparationThread.progressChanged.connect(_onResourceProgress)
+    _resourcePreparationThread.preparationFinished.connect(
+        _onResourcePreparationFinished
+    )
+    _resourcePreparationThread.preparationFailed.connect(
+        _onResourcePreparationFailed
+    )
+    _resourcePreparationThread.finished.connect(
+        _onResourcePreparationThreadFinished
+    )
+    _resourcePreparationThread.start()
+
+
+_splashWindow.retryRequested.connect(_startResourcePreparation)
+_splashWindow.continueRequested.connect(_startMainWindowLoading)
+_startResourcePreparation()
 
 # 应用程序退出处理
 result = app.exec()

@@ -88,6 +88,12 @@ class SplashLoader(QObject):
         except (RuntimeError, AttributeError):
             pass
 
+    def _reportMainWindowProgress(self, pct: int, text: str) -> None:
+        """把 MainWindow 原有 30~95 区间映射到资源准备后的 58~95。"""
+        sourceProgress = max(30, min(95, int(pct)))
+        mappedProgress = 58 + round((sourceProgress - 30) * 37 / 65)
+        self._reportProgress(mappedProgress, text)
+
     # ------------------------------------------------------------------
     # 主流程
     # ------------------------------------------------------------------
@@ -130,12 +136,11 @@ class SplashLoader(QObject):
         try:
             from app.view.main_window import MainWindow
 
-            # 主窗口构造从 30% 开始(由 MainWindow 内部 _reportProgress 推进到 95%)。
-            # 在此之前先推进到 28%,留 2% 的 gap 让动画从外部衔接过来。
-            self._reportProgress(28, "开始构造主窗口…")
+            # HSK 资源准备占用 28%~55%，主窗口从 58% 继续，避免进度倒退。
+            self._reportProgress(57, "开始构造主窗口…")
             self._processEventsBriefly()
             mainWindow = MainWindow(
-                progressCallback=self._reportProgress,
+                progressCallback=self._reportMainWindowProgress,
                 startHidden=True,  # 关键:构造期间隐藏主窗口,避免闪现
             )
 
@@ -220,11 +225,11 @@ class SplashLoader(QObject):
                 try:
                     from app.view.main_window import MainWindow
 
-                    outerSelf._loader._reportProgress(15, "初始化主窗口框架")
+                    outerSelf._loader._reportProgress(57, "初始化主窗口框架")
                     QApplication.processEvents()
 
                     window = MainWindow(
-                        progressCallback=outerSelf._loader._reportProgress,
+                        progressCallback=outerSelf._loader._reportMainWindowProgress,
                         startHidden=True,  # 构造期间隐藏,等 startupCompleted 后再 show
                     )
                     # 转回主线程,后续 show()/GUI 操作必须在主线程执行

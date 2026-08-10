@@ -148,9 +148,11 @@ class StartupDatabaseService:
                 uri=True,
                 timeout=5.0,
             )
+            cursor = None
             try:
-                connection.execute("PRAGMA query_only = ON")
-                tableRow = connection.execute(
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA query_only = ON")
+                tableRow = cursor.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
                     (resource.tableName,),
                 ).fetchone()
@@ -162,7 +164,7 @@ class StartupDatabaseService:
                         fileSize=fileSize,
                     )
                 if deepCheck:
-                    quickCheckRows = connection.execute("PRAGMA quick_check").fetchall()
+                    quickCheckRows = cursor.execute("PRAGMA quick_check").fetchall()
                     if quickCheckRows != [("ok",)]:
                         return DatabaseVerificationResult(
                             resource,
@@ -171,12 +173,12 @@ class StartupDatabaseService:
                             fileSize=fileSize,
                         )
                     rowCount = int(
-                        connection.execute(
+                        cursor.execute(
                             f'SELECT COUNT(*) FROM "{resource.tableName}"'
                         ).fetchone()[0]
                     )
                 else:
-                    dataRow = connection.execute(
+                    dataRow = cursor.execute(
                         f'SELECT 1 FROM "{resource.tableName}" LIMIT 1'
                     ).fetchone()
                     rowCount = 1 if dataRow is not None else 0
@@ -188,6 +190,8 @@ class StartupDatabaseService:
                         fileSize=fileSize,
                     )
             finally:
+                if cursor is not None:
+                    cursor.close()
                 connection.close()
         except sqlite3.Error:
             return DatabaseVerificationResult(
@@ -320,3 +324,106 @@ class DatabaseVerificationThread(QThread):
         except Exception as exc:
             logger.exception("[StartupDatabase] 设置页资源校验异常: {}", exc)
             self.verificationFailed.emit(str(exc))
+
+
+class StartupResourcePreparationThread(QThread):
+    """启动窗口使用的资源深度校验与缺失文件下载线程。"""
+
+    progressChanged = Signal(int, str, str)
+    preparationFinished = Signal(object)
+    preparationFailed = Signal(str)
+
+    def __init__(
+        self,
+        service: Optional[StartupDatabaseService] = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._service = service or StartupDatabaseService()
+
+    @staticmethod
+    def _formatBytes(byteCount: int) -> str:
+        value = float(max(0, byteCount))
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return (
+                    f"{value:.0f} {unit}"
+                    if unit == "B"
+                    else f"{value:.1f} {unit}"
+                )
+            value /= 1024
+        return f"{value:.1f} GB"
+
+    def run(self) -> None:
+        try:
+            self.progressChanged.emit(
+                28,
+                "正在校验 HSK 作文资源",
+                "检查文件格式、SQLite 完整性与数据行",
+            )
+            results = self._service.verifyResources()
+            invalidResources = [
+                result.resource for result in results if not result.isValid
+            ]
+            if invalidResources:
+                self.progressChanged.emit(
+                    32,
+                    "检测到资源缺失或损坏",
+                    f"需要准备 {len(invalidResources)} 个数据库文件",
+                )
+
+                def _onProgress(
+                    resourceIndex: int,
+                    resourceCount: int,
+                    displayName: str,
+                    downloadedBytes: int,
+                    totalBytes: int,
+                    resourcePercent: int,
+                ) -> None:
+                    normalizedPercent = max(0, resourcePercent)
+                    overallFraction = (
+                        (resourceIndex - 1) + normalizedPercent / 100
+                    ) / max(1, resourceCount)
+                    startupPercent = 34 + int(overallFraction * 16)
+                    if totalBytes > 0:
+                        sizeText = (
+                            f"{self._formatBytes(downloadedBytes)} / "
+                            f"{self._formatBytes(totalBytes)}"
+                        )
+                    else:
+                        sizeText = f"已下载 {self._formatBytes(downloadedBytes)}"
+                    self.progressChanged.emit(
+                        startupPercent,
+                        f"正在下载{displayName}",
+                        f"文件 {resourceIndex}/{resourceCount} · {sizeText}",
+                    )
+
+                self._service.downloadResources(
+                    invalidResources,
+                    onProgress=_onProgress,
+                )
+
+            self.progressChanged.emit(
+                51,
+                "正在复核资源文件",
+                "确认数据库可读且数据完整",
+            )
+            finalResults = self._service.verifyResources()
+            failedResults = [result for result in finalResults if not result.isValid]
+            if failedResults:
+                details = "；".join(
+                    f"{result.resource.displayName}：{result.message}"
+                    for result in failedResults
+                )
+                raise DatabaseResourceError(details)
+
+            totalRows = sum(result.rowCount for result in finalResults)
+            self.progressChanged.emit(
+                55,
+                "HSK 作文资源准备完成",
+                f"2 个数据库 · 共 {totalRows:,} 条数据",
+            )
+            self.preparationFinished.emit(finalResults)
+        except Exception as exc:
+            logger.warning("[StartupDatabase] 启动资源准备失败: {}", exc)
+            self.preparationFailed.emit(str(exc))
