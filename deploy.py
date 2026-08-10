@@ -14,7 +14,7 @@ args = [
     "--standalone",
     "--assume-yes-for-downloads",
     "--mingw64",
-    "--windows-icon-from-ico=E:/Prismatica/app/view/resource/images/logo.ico",
+    "--windows-icon-from-ico=E:/Prismatica/PrismaticaUI/app/view/resource/images/logo.ico",
     "--enable-plugins=pyside6",
     "--clean-cache=all",
     "--show-progress",
@@ -22,7 +22,7 @@ args = [
     "--windows-console-mode=disable",
     "--include-module=ctypes,qframelesswindow.webengine",
     "--output-dir=E:/Prismatica/build",
-    "E:/Prismatica/main.py",
+    "E:/Prismatica/PrismaticaUI/main.py",
 ]
 
 dist_folder = Path("E:/Prismatica/build/main.dist")

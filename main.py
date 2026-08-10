@@ -54,9 +54,7 @@ if _dpi_scale != "Auto":
         os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
         os.environ["QT_SCALE_FACTOR"] = str(scale)
     except (TypeError, ValueError) as e:
-        log.warning(
-            f"[Main] DPI缩放配置无效 ({_dpi_scale!r})，使用系统自动缩放: {e}"
-        )
+        log.warning(f"[Main] DPI缩放配置无效 ({_dpi_scale!r})，使用系统自动缩放: {e}")
 
 # create application
 app = QApplication(sys.argv)
@@ -65,7 +63,6 @@ app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
 from app.view.widgets.splash_window import SplashWindow
 from app.core.services.splash_loader import SplashLoader
 from qfluentwidgets import InfoBar, InfoBarPosition
-
 
 _splashWindow = SplashWindow()
 # 初始目标 5%(SplashWindow 内部已设);自由增长定时器会从 0 自动爬升
