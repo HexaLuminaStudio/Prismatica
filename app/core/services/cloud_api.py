@@ -26,12 +26,18 @@ import socket
 import time
 import uuid
 from dataclasses import dataclass, field
+from importlib.metadata import PackageNotFoundError, version
 from typing import Any, Dict, Optional
 
 import requests
 from requests.exceptions import ConnectionError, RequestException, Timeout
 
 from app.core.utils import cfg, logger
+
+try:
+    CLIENT_VERSION = version("prismatica")
+except PackageNotFoundError:
+    CLIENT_VERSION = "dev"
 
 
 @dataclass
@@ -131,6 +137,7 @@ class CloudApi:
         headers = {
             "Content-Type": "application/json",
             "X-Client-Platform": "prismatica-desktop",
+            "X-Client-Version": CLIENT_VERSION,
             "X-Device-Id": self._deviceId(),
             "X-Request-Id": requestId or str(uuid.uuid4()),
         }

@@ -16,6 +16,7 @@ from .cloud_insight_service import (
     CloudInsightService,
     getCloudInsightService,
 )
+from .cloud_resource import CloudResource, CloudResourceManifest, getCloudResource
 from .cloud_user import ensureBelowMaxDevices
 from .feature_gate import FeatureGate, GateResult, getFeatureGate
 from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
@@ -59,6 +60,9 @@ __all__ = [
     "CloudInsightService",
     "FEATURE_AI_INSIGHT",
     "getCloudInsightService",
+    "CloudResource",
+    "CloudResourceManifest",
+    "getCloudResource",
     "FeatureGate",
     "GateResult",
     "getFeatureGate",

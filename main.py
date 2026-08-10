@@ -281,9 +281,18 @@ def _onResourcePreparationFinished(results) -> None:
     _startMainWindowLoading()
 
 
-def _onResourcePreparationFailed(message: str) -> None:
+def _onResourcePreparationFailed(code: str, message: str) -> None:
     errorMessage = message or "无法校验或下载 HSK 作文资源"
     log.warning("[Main] HSK 作文资源启动准备失败: {}", errorMessage)
+    if code == "RESOURCE_SUBSCRIPTION_REQUIRED":
+        _splashWindow.showRecovery(
+            "当前账号没有可用于下载 HSK 作文资源的有效订阅。你可以直接跳过，"
+            "但在资源修复完成前，相关 HSK 作文功能可能无法使用。",
+            stage="当前订阅暂无资源下载权限",
+            continueText="直接跳过",
+            retryText="重新验证",
+        )
+        return
     _splashWindow.showRecovery(
         f"{errorMessage}。请检查网络后重新尝试，或暂时继续启动。"
     )

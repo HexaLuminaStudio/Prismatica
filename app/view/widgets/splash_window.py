@@ -20,7 +20,6 @@
 """
 
 from PySide6.QtCore import (
-    Property,
     QEasingCurve,
     QPropertyAnimation,
     Qt,
@@ -28,7 +27,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QCloseEvent, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QCloseEvent, QColor, QFont, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
@@ -313,15 +312,26 @@ class SplashWindow(QWidget):
         self._isRecovering = False
         self._actionContainer.hide()
         self._progressHintLabel.setText("启动进度")
+        self._continueButton.setText("继续启动")
+        self._retryButton.setText("重新尝试")
         self._retryButton.setEnabled(True)
         self._continueButton.setEnabled(True)
 
-    def showRecovery(self, message: str) -> None:
+    def showRecovery(
+        self,
+        message: str,
+        *,
+        stage: str = "HSK 作文资源准备未完成",
+        continueText: str = "继续启动",
+        retryText: str = "重新尝试",
+    ) -> None:
         """在启动窗口内展示资源准备失败与恢复操作。"""
         self._isRecovering = True
-        self._stageLabel.setText("HSK 作文资源准备未完成")
+        self._stageLabel.setText(stage)
         self._detailLabel.setText(str(message or "请检查网络连接后重试。"))
         self._progressHintLabel.setText("等待处理")
+        self._continueButton.setText(continueText)
+        self._retryButton.setText(retryText)
         self._actionContainer.show()
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
         self.show()

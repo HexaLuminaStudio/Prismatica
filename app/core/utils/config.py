@@ -1,4 +1,5 @@
 # coding:utf-8
+import json
 import os
 import sys
 
@@ -155,43 +156,28 @@ class Config(QConfig):
         OptionsValidator([100, 200, 500, 1000, 2000]),
     )
 
-    # HSK 作文数据库启动下载配置
-    # - URL 默认可由环境变量注入，生产打包前应写入稳定的 HTTPS 直链
-    # - SHA-256 可选；配置后会在替换正式数据库前校验文件完整性
-    hskCorpusDownloadUrl = ConfigItem(
-        "HskDatabaseDownload",
-        "CorpusDbUrl",
-        os.getenv(
-            "HSK_CORPUS_DB_DOWNLOAD_URL",
-            "https://prismatica.cn-zj1.rains3.com/hsk_corpus.db",
-        ),
-    )
-    hskLocalCorpusDownloadUrl = ConfigItem(
-        "HskDatabaseDownload",
-        "LocalCorpusDbUrl",
-        os.getenv(
-            "HSK_LOCAL_CORPUS_DB_DOWNLOAD_URL",
-            "https://prismatica.cn-zj1.rains3.com/hsk_corpus_local.db",
-        ),
-    )
-    hskCorpusDownloadSha256 = ConfigItem(
-        "HskDatabaseDownload",
-        "CorpusDbSha256",
-        os.getenv(
-            "HSK_CORPUS_DB_SHA256",
-            "a4aa0cdc635eeb8c4b5784ead9d61a0dede2d16945b731e378eb8aec33408a2c",
-        ),
-    )
-    hskLocalCorpusDownloadSha256 = ConfigItem(
-        "HskDatabaseDownload",
-        "LocalCorpusDbSha256",
-        os.getenv(
-            "HSK_LOCAL_CORPUS_DB_SHA256",
-            "e7ffbc954b06d6b57992e4cccfc44b55f494214fcb61732aff32395d3c575e9a",
-        ),
-    )
+
+def _removeLegacyResourceDownloadConfig() -> None:
+    """升级时清除旧版曾写入本地配置文件的数据库直链。"""
+    if not CONFIG_FILE.is_file():
+        return
+    try:
+        payload = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or "HskDatabaseDownload" not in payload:
+            return
+        payload.pop("HskDatabaseDownload", None)
+        temporaryPath = CONFIG_FILE.with_suffix(".json.tmp")
+        temporaryPath.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=4),
+            encoding="utf-8",
+        )
+        temporaryPath.replace(CONFIG_FILE)
+    except (OSError, ValueError, TypeError):
+        # 配置清理失败不应阻断启动；旧字段已不再注册，也不会参与下载。
+        return
 
 
+_removeLegacyResourceDownloadConfig()
 cfg = Config()
 cfg.themeMode.value = Theme.AUTO
 qconfig.load(str(CONFIG_FILE.absolute()), cfg)

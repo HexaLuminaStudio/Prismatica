@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional, Tuple
 
@@ -17,8 +17,11 @@ from app.core.api.database_download import (
     DatabaseDownloadError,
     streamDownload,
 )
-from app.core.utils import cfg, logger, qconfig
+from app.core.utils import logger
 from app.core.utils.data_paths import HSK_CORPUS_DB, HSK_LOCAL_CORPUS_DB
+
+from .cloud_api import CloudApiError
+from .cloud_resource import CloudResourceManifest, getCloudResource
 
 
 class DatabaseResourceError(RuntimeError):
@@ -49,27 +52,23 @@ class DatabaseVerificationResult:
 
 
 def getStartupDatabaseResources() -> List[DatabaseResource]:
-    """从集中配置构建两个 HSK 作文数据库资源。"""
+    """构建本地资源定义；下载地址和摘要只能由云端短期清单补充。"""
     return [
         DatabaseResource(
             key="hskCorpus",
             displayName="HSK 作文数据表",
             targetPath=HSK_CORPUS_DB,
-            url=str(qconfig.get(cfg.hskCorpusDownloadUrl) or "").strip(),
+            url="",
             tableName="hsk_corpus",
-            expectedSha256=str(
-                qconfig.get(cfg.hskCorpusDownloadSha256) or ""
-            ).strip(),
+            expectedSha256="",
         ),
         DatabaseResource(
             key="hskLocalCorpus",
             displayName="HSK 作文正文库",
             targetPath=HSK_LOCAL_CORPUS_DB,
-            url=str(qconfig.get(cfg.hskLocalCorpusDownloadUrl) or "").strip(),
+            url="",
             tableName="hsk_local_corpus",
-            expectedSha256=str(
-                qconfig.get(cfg.hskLocalCorpusDownloadSha256) or ""
-            ).strip(),
+            expectedSha256="",
         ),
     ]
 
@@ -81,15 +80,43 @@ class StartupDatabaseService:
         self,
         resources: Optional[Iterable[DatabaseResource]] = None,
         downloadFunction: Callable = streamDownload,
+        resourceResolver: Optional[Callable[[], List[CloudResourceManifest]]] = None,
     ) -> None:
-        self._resources = (
-            list(resources) if resources is not None else getStartupDatabaseResources()
-        )
+        usesDefaultResources = resources is None
+        self._resources = list(resources) if resources is not None else getStartupDatabaseResources()
         self._downloadFunction = downloadFunction
+        self._resourceResolver = (
+            resourceResolver
+            if resourceResolver is not None
+            else (getCloudResource().bootstrap if usesDefaultResources else None)
+        )
 
     @property
     def resources(self) -> List[DatabaseResource]:
         return list(self._resources)
+
+    def resolveAuthorizedResources(self) -> List[DatabaseResource]:
+        """用后端签发的短期清单刷新 URL 和完整性摘要。"""
+        if self._resourceResolver is None:
+            return self.resources
+        manifests = self._resourceResolver()
+        manifestByKey = {manifest.resourceKey: manifest for manifest in manifests}
+        updatedResources = []
+        for resource in self._resources:
+            manifest = manifestByKey.get(resource.key)
+            if manifest is None:
+                raise DatabaseResourceError(
+                    f"云端资源清单缺少{resource.displayName}。"
+                )
+            updatedResources.append(
+                replace(
+                    resource,
+                    url=manifest.downloadUrl,
+                    expectedSha256=manifest.sha256,
+                )
+            )
+        self._resources = updatedResources
+        return self.resources
 
     def validateDatabase(
         self,
@@ -236,6 +263,16 @@ class StartupDatabaseService:
     ) -> None:
         """依次下载资源，校验成功后原子替换正式文件。"""
         resourceList = list(resources)
+        if self._resourceResolver is not None:
+            if onStatus is not None:
+                onStatus("正在验证账号订阅与设备权限…")
+            authorizedResources = {
+                resource.key: resource for resource in self.resolveAuthorizedResources()
+            }
+            resourceList = [
+                authorizedResources.get(resource.key, resource)
+                for resource in resourceList
+            ]
         totalCount = len(resourceList)
         for resourceIndex, resource in enumerate(resourceList, start=1):
             if isCancelled is not None and isCancelled():
@@ -331,7 +368,7 @@ class StartupResourcePreparationThread(QThread):
 
     progressChanged = Signal(int, str, str)
     preparationFinished = Signal(object)
-    preparationFailed = Signal(str)
+    preparationFailed = Signal(str, str)
 
     def __init__(
         self,
@@ -398,9 +435,19 @@ class StartupResourcePreparationThread(QThread):
                         f"文件 {resourceIndex}/{resourceCount} · {sizeText}",
                     )
 
+                def _onStatus(status: str) -> None:
+                    if "权限" not in status:
+                        return
+                    self.progressChanged.emit(
+                        33,
+                        status,
+                        "后端正在校验登录账号、当前设备与有效订阅",
+                    )
+
                 self._service.downloadResources(
                     invalidResources,
                     onProgress=_onProgress,
+                    onStatus=_onStatus,
                 )
 
             self.progressChanged.emit(
@@ -424,6 +471,13 @@ class StartupResourcePreparationThread(QThread):
                 f"2 个数据库 · 共 {totalRows:,} 条数据",
             )
             self.preparationFinished.emit(finalResults)
+        except CloudApiError as exc:
+            logger.warning(
+                "[StartupDatabase] 启动资源授权失败: code={} message={}",
+                exc.code,
+                exc.message,
+            )
+            self.preparationFailed.emit(exc.code, exc.message)
         except Exception as exc:
             logger.warning("[StartupDatabase] 启动资源准备失败: {}", exc)
-            self.preparationFailed.emit(str(exc))
+            self.preparationFailed.emit("", str(exc))
