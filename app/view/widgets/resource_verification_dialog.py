@@ -6,7 +6,7 @@ from __future__ import annotations
 import threading
 from typing import Dict, Iterable, Optional
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QDate, QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
 from qfluentwidgets import (
@@ -41,7 +41,7 @@ def _formatBytes(byteCount: int) -> str:
 
 
 class _ResourceStatusRow(QFrame):
-    """展示单个数据库的名称、文件名与当前校验状态。"""
+    """展示单个数据库的名称、当日日期与当前校验状态。"""
 
     def __init__(self, resource: DatabaseResource, parent=None) -> None:
         super().__init__(parent)
@@ -69,9 +69,9 @@ class _ResourceStatusRow(QFrame):
         textLayout = QVBoxLayout()
         textLayout.setSpacing(3)
         titleLabel = StrongBodyLabel(resource.displayName, self)
-        fileLabel = CaptionLabel(resource.targetPath.name, self)
+        dateLabel = CaptionLabel(QDate.currentDate().toString("yyyy年M月d日"), self)
         textLayout.addWidget(titleLabel)
-        textLayout.addWidget(fileLabel)
+        textLayout.addWidget(dateLabel)
         layout.addLayout(textLayout, 1)
 
         stateLayout = QVBoxLayout()
