@@ -13,6 +13,7 @@ from .cloud_api import CloudApiError, getCloudApi
 from .cloud_billing import getCloudBilling
 from .feature_gate import GateResult, getFeatureGate
 from .pricing_catalog import getPricingCatalog
+from .responsive_call import runResponsiveCall
 
 ANALYSIS_EXPORT_FEATURE = "analysis_export"
 
@@ -34,7 +35,9 @@ class PaidExportTransaction:
         billId = str((self._result.context.get("preauth") or {}).get("billId", ""))
         for attempt in range(2):
             try:
-                settled = getCloudBilling().commitFixed(billId)
+                settled = runResponsiveCall(
+                    lambda: getCloudBilling().commitFixed(billId)
+                )
                 signalBus.balanceChanged.emit(int(settled.get("balanceAfter", 0) or 0))
                 self._finished = True
                 return True
@@ -49,7 +52,7 @@ class PaidExportTransaction:
         refundFn = self._result.context.get("refund")
         try:
             if refundFn is not None:
-                refundFn()
+                runResponsiveCall(refundFn)
         except Exception:
             logger.exception("[PaidExport] 释放导出预占失败")
         finally:
@@ -65,7 +68,7 @@ def beginPaidAnalysisExport(
     cost = catalog.fixedCost(ANALYSIS_EXPORT_FEATURE)
     if cost is None:
         try:
-            catalog.refreshBlocking()
+            catalog.refreshResponsive()
             cost = catalog.fixedCost(ANALYSIS_EXPORT_FEATURE)
         except Exception as error:
             MessageBox("价格加载失败", str(error), parent).exec()
@@ -81,14 +84,19 @@ def beginPaidAnalysisExport(
     )
     confirm.yesButton.setText(f"确认导出（{cost} 点）")
     confirm.cancelButton.setText("取消")
-    if not confirm.exec():
+    isConfirmed = bool(confirm.exec())
+    confirm.hide()
+    confirm.deleteLater()
+    if not isConfirmed:
         return None
     gate = getFeatureGate()
-    result = gate.requireFeature(
-        ANALYSIS_EXPORT_FEATURE,
-        resourceUsed=1,
-        taskId="analysis-export",
-        description=description,
+    result = runResponsiveCall(
+        lambda: gate.requireFeature(
+            ANALYSIS_EXPORT_FEATURE,
+            resourceUsed=1,
+            taskId="analysis-export",
+            description=description,
+        )
     )
     if not result.ok:
         gate.handleBlockReason(result, parent)

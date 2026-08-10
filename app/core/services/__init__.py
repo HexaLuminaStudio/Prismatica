@@ -28,6 +28,7 @@ from .paid_metered import (
     beginPaidMeteredAction,
 )
 from .pricing_catalog import PricingCatalog, getPricingCatalog
+from .responsive_call import runResponsiveCall
 from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
 from .global_service import GlobalTokenRefreshThread
 from .hsk_corpus_service import HskCorpusService, hskCorpusService
@@ -85,5 +86,6 @@ __all__ = [
     "beginPaidAnalysisExport",
     "beginPaidMeteredAction",
     "getPricingCatalog",
+    "runResponsiveCall",
     "ensureBelowMaxDevices",
 ]

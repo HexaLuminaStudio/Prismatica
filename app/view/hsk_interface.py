@@ -212,6 +212,7 @@ class HskInterface(QWidget):
 
             dialog = DownloadApplyWidget("Hsk", infoDict, self.window())
             if dialog.exec():
+                dialog.hide()
                 from app.core.services import taskManager
 
                 transaction = beginPaidMeteredAction(
@@ -285,7 +286,7 @@ class HskInterface(QWidget):
         costs = [catalog.meteredCost(HSK_DOWNLOAD_FEATURE, item.total) for item in items]
         if any(cost is None for cost in costs):
             try:
-                catalog.refreshBlocking()
+                catalog.refreshResponsive()
             except Exception as error:
                 MessageBox("价格加载失败", str(error), self.window()).exec()
                 return
@@ -304,6 +305,8 @@ class HskInterface(QWidget):
         confirm.cancelButton.setText("取消")
         if not confirm.exec():
             return
+        confirm.hide()
+        confirm.deleteLater()
 
         created = 0
         successfulIndexes = []

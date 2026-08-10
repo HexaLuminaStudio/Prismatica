@@ -13,6 +13,7 @@ from .cloud_api import CloudApiError
 from .cloud_billing import getCloudBilling
 from .feature_gate import GateResult, getFeatureGate
 from .pricing_catalog import getPricingCatalog
+from .responsive_call import runResponsiveCall
 
 HSK_DOWNLOAD_FEATURE = "hsk_download"
 GLOBAL_DOWNLOAD_FEATURE = "global_download"
@@ -56,7 +57,9 @@ class PaidMeteredTransaction:
             return False
         for attempt in range(2):
             try:
-                settled = getCloudBilling().commitMetered(self.billId)
+                settled = runResponsiveCall(
+                    lambda: getCloudBilling().commitMetered(self.billId)
+                )
                 signalBus.balanceChanged.emit(int(settled.get("balanceAfter", 0) or 0))
                 self._finished = True
                 return True
@@ -72,7 +75,7 @@ class PaidMeteredTransaction:
         refundFn = self._result.context.get("refund")
         try:
             if refundFn is not None:
-                refundFn()
+                runResponsiveCall(refundFn)
         except Exception:
             logger.exception("[PaidMetered] 释放按量计费预占失败")
         finally:
@@ -85,7 +88,7 @@ def _catalogCost(featureCode: str, resourceUsed: int) -> int | None:
     if cost is not None:
         return cost
     try:
-        catalog.refreshBlocking()
+        catalog.refreshResponsive()
     except Exception:
         return None
     return catalog.meteredCost(featureCode, resourceUsed)
@@ -119,15 +122,20 @@ def beginPaidMeteredAction(
         )
         confirm.yesButton.setText(f"确认继续（{catalogCost} 点）")
         confirm.cancelButton.setText("取消")
-        if not confirm.exec():
+        isConfirmed = bool(confirm.exec())
+        confirm.hide()
+        confirm.deleteLater()
+        if not isConfirmed:
             return None
 
     gate = getFeatureGate()
-    result = gate.requireFeature(
-        featureCode,
-        resourceUsed=resourceUsed,
-        taskId=featureCode,
-        description=description,
+    result = runResponsiveCall(
+        lambda: gate.requireFeature(
+            featureCode,
+            resourceUsed=resourceUsed,
+            taskId=featureCode,
+            description=description,
+        )
     )
     if not result.ok:
         gate.handleBlockReason(result, parent)

@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from app.core.utils import logger
 
 from .cloud_api import getCloudApi
+from .responsive_call import runResponsiveCall
 
 PRICE_REFRESH_MS = 30_000
 
@@ -64,6 +65,20 @@ class PricingCatalog(QObject):
 
     def refreshBlocking(self) -> Dict[str, Any]:
         data = getCloudApi().get("/v1/pricing/catalog", withAuth=False, timeout=5.0) or {}
+        if isinstance(data, dict):
+            self._applyCatalog(data)
+        return dict(self._catalog)
+
+    def refreshResponsive(self) -> Dict[str, Any]:
+        """后台获取价格目录，并在调用线程安全地应用新快照。"""
+        data = runResponsiveCall(
+            lambda: getCloudApi().get(
+                "/v1/pricing/catalog",
+                withAuth=False,
+                timeout=5.0,
+            )
+            or {}
+        )
         if isinstance(data, dict):
             self._applyCatalog(data)
         return dict(self._catalog)
