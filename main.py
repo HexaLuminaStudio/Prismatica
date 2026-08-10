@@ -239,6 +239,64 @@ if qconfig.get(cfg.FirstLaunch):
         log.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
 
 # ============================================================
+# HSK 作文数据库启动检查
+# - 必须早于 MainWindow 构造，否则 HskCorpusBrowser.ensureSchema()
+#   会先创建空库，掩盖“数据库文件缺失”的真实状态
+# - 仅在文件缺失、损坏或没有真实数据时弹出下载进度窗口
+# - 下载失败时不继续构造依赖这些数据库的主窗口
+# ============================================================
+try:
+    from PySide6.QtWidgets import QDialog
+
+    from app.core.services.startup_database_service import StartupDatabaseService
+    from app.view.widgets.startup_database_dialog import StartupDatabaseDialog
+
+    _databaseService = StartupDatabaseService()
+    _missingDatabases = _databaseService.missingResources()
+    if _missingDatabases:
+        _splashWindow.hold()
+        QApplication.processEvents()
+        _databaseDialog = StartupDatabaseDialog(
+            _databaseService,
+            _missingDatabases,
+        )
+        _databaseReady = (
+            _databaseDialog.exec() == QDialog.DialogCode.Accepted
+        )
+        _databaseDialog = None
+        if not _databaseReady:
+            log.info("[Main] HSK 作文数据库未准备完成，用户退出软件")
+            try:
+                _splashWindow.finish()
+            except Exception:
+                pass
+            QApplication.instance().quit()
+            sys.exit(0)
+        _splashWindow.release(progress=26, text="HSK 作文数据库准备完成…")
+        QApplication.processEvents()
+except SystemExit:
+    raise
+except Exception as _databaseErr:
+    log.exception(f"[Main] HSK 作文数据库启动检查失败: {_databaseErr}")
+    try:
+        _splashWindow.hold()
+    except Exception:
+        pass
+    from qfluentwidgets import MessageBox
+
+    _databaseErrorBox = MessageBox(
+        "数据库准备失败",
+        "无法检查 HSK 作文数据库，软件不能安全启动。\n\n"
+        f"错误信息：{_databaseErr}",
+        None,
+    )
+    _databaseErrorBox.yesButton.setText("退出软件")
+    _databaseErrorBox.cancelButton.hide()
+    _databaseErrorBox.exec()
+    QApplication.instance().quit()
+    sys.exit(1)
+
+# ============================================================
 # 启动主窗口异步加载
 # - SplashLoader 在下一轮事件循环触发 MainWindow 构造
 # - 完成后通过 mainWindowReady 信号在主线程 show()

@@ -38,8 +38,14 @@ from qfluentwidgets import (
 )
 
 from app.core.services import HskTokenRefreshThread, GlobalTokenRefreshThread
+from app.core.services.startup_database_service import (
+    DatabaseVerificationResult,
+    DatabaseVerificationThread,
+    StartupDatabaseService,
+)
 from app.core.utils import cfg, qconfig, logger, signalBus
 from app.view.widgets.prismatica_theme import pageBackgroundColor
+from app.view.widgets.startup_database_dialog import StartupDatabaseDialog
 
 
 _ACCENT = "#00B09C"
@@ -289,6 +295,18 @@ class SoftwareSettingWidget(OverviewGroupCard):
             bool(qconfig.get(cfg.GlobalLoginToken)), self
         )
 
+        # HSK 作文数据库资源校验
+        self.resourceVerifyButton = PushButton("立即校验", self)
+        self.resourceVerifyButton.setIcon(FluentIcon.CHECKBOX)
+        self.resourceVerifyButton.setFixedHeight(32)
+        self.resourceVerifyButton.setAccessibleName("校验 HSK 作文资源文件")
+        self.resourceVerifyButton.clicked.connect(self._onResourceActionClicked)
+        self.resourceVerifyBadge = SettingStatusBadge(False, self)
+        self.resourceVerifyBadge.setConfigured(False, missingText="待校验")
+        self._resourceVerificationThread = None
+        self._resourceRepairResources = []
+        self._resourceService = StartupDatabaseService()
+
         # 添加设置组
         self._addSettingGroups()
 
@@ -322,6 +340,15 @@ class SoftwareSettingWidget(OverviewGroupCard):
         layout.setSpacing(10)
         layout.addWidget(badge)
         layout.addWidget(button)
+        return wrapper
+
+    def _buildResourceAction(self) -> QWidget:
+        wrapper = QWidget(self)
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        layout.addWidget(self.resourceVerifyBadge)
+        layout.addWidget(self.resourceVerifyButton)
         return wrapper
 
     def _addSettingGroups(self):
@@ -362,6 +389,107 @@ class SoftwareSettingWidget(OverviewGroupCard):
             "用于访问公共语料网关的身份令牌",
             self._buildTokenAction(self.globalTokenBadge, self.globalRefreshButton),
         )
+        self.addGroup(
+            FluentIcon.CHECKBOX,
+            "资源文件校验",
+            "检查 HSK 作文数据表与正文库的 SQLite 完整性",
+            self._buildResourceAction(),
+        )
+
+    def _onResourceActionClicked(self) -> None:
+        """根据当前状态执行深度校验或下载修复。"""
+        if self._resourceVerificationThread is not None:
+            return
+        if self._resourceRepairResources:
+            dialog = StartupDatabaseDialog(
+                self._resourceService,
+                self._resourceRepairResources,
+                self.window(),
+            )
+            if dialog.exec():
+                self._resourceRepairResources = []
+                self._startResourceVerification()
+            return
+        self._startResourceVerification()
+
+    def _startResourceVerification(self) -> None:
+        """后台执行资源文件深度校验，避免阻塞设置页。"""
+        self.resourceVerifyButton.setEnabled(False)
+        self.resourceVerifyButton.setText("校验中…")
+        self.resourceVerifyBadge.setConfigured(False, missingText="校验中")
+        self._resourceVerificationThread = DatabaseVerificationThread(
+            self._resourceService,
+            self,
+        )
+        self._resourceVerificationThread.verificationFinished.connect(
+            self._onResourceVerificationFinished
+        )
+        self._resourceVerificationThread.verificationFailed.connect(
+            self._onResourceVerificationFailed
+        )
+        self._resourceVerificationThread.finished.connect(
+            self._onResourceVerificationThreadFinished
+        )
+        self._resourceVerificationThread.start()
+
+    def _onResourceVerificationFinished(
+        self,
+        results: list[DatabaseVerificationResult],
+    ) -> None:
+        invalidResults = [result for result in results if not result.isValid]
+        self.resourceVerifyButton.setEnabled(True)
+        if invalidResults:
+            self._resourceRepairResources = [
+                result.resource for result in invalidResults
+            ]
+            self.resourceVerifyBadge.setConfigured(False, missingText="需修复")
+            self.resourceVerifyButton.setText("修复资源")
+            details = "；".join(
+                f"{result.resource.displayName}：{result.message}"
+                for result in invalidResults
+            )
+            InfoBar.error(
+                title="发现资源异常",
+                content=f"{details}。点击“修复资源”可重新下载。",
+                position=InfoBarPosition.TOP,
+                parent=self.window(),
+                duration=6000,
+            )
+            return
+
+        self._resourceRepairResources = []
+        self.resourceVerifyBadge.setConfigured(True, configuredText="完整")
+        self.resourceVerifyButton.setText("再次校验")
+        details = "；".join(
+            f"{result.resource.displayName} {result.rowCount:,} 条"
+            for result in results
+        )
+        InfoBar.success(
+            title="资源文件完整",
+            content=f"已完成 SQLite 完整性检查：{details}。",
+            position=InfoBarPosition.TOP,
+            parent=self.window(),
+            duration=4000,
+        )
+
+    def _onResourceVerificationFailed(self, message: str) -> None:
+        self._resourceRepairResources = []
+        self.resourceVerifyBadge.setConfigured(False, missingText="校验失败")
+        self.resourceVerifyButton.setText("重新校验")
+        self.resourceVerifyButton.setEnabled(True)
+        InfoBar.error(
+            title="资源校验失败",
+            content=message or "无法读取资源文件，请稍后重试。",
+            position=InfoBarPosition.TOP,
+            parent=self.window(),
+            duration=5000,
+        )
+
+    def _onResourceVerificationThreadFinished(self) -> None:
+        thread = self._resourceVerificationThread
+        self._resourceVerificationThread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def _showSuccessMessage(self, title: str, content: str):
         """显示成功提示"""

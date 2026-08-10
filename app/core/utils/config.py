@@ -77,9 +77,7 @@ class Config(QConfig):
 
     # 云端 API base URL(2026-08-05 PRD v2)
     # 默认指向雨云公网 FastAPI 后端,生产换 HTTPS + 域名后会同步更新
-    cloudBaseUrl = ConfigItem(
-        "Cloud", "BaseUrl", "http://103.236.55.211:8000"
-    )
+    cloudBaseUrl = ConfigItem("Cloud", "BaseUrl", "http://103.236.55.211:8000")
     DpiScale = OptionsConfigItem(
         "MainWindow",
         "DpiScale",
@@ -150,16 +148,47 @@ class Config(QConfig):
         False,
         BoolValidator(),
     )
-    HskCorpusXlsxPath = ConfigItem(
-        "HskCorpus",
-        "XlsxPath",
-        str(INSTALL_DIR / "test" / "hsk_corpus.xlsx"),
-    )
     HskCorpusSearchLimit = OptionsConfigItem(
         "HskCorpus",
         "SearchLimit",
         500,
         OptionsValidator([100, 200, 500, 1000, 2000]),
+    )
+
+    # HSK 作文数据库启动下载配置
+    # - URL 默认可由环境变量注入，生产打包前应写入稳定的 HTTPS 直链
+    # - SHA-256 可选；配置后会在替换正式数据库前校验文件完整性
+    hskCorpusDownloadUrl = ConfigItem(
+        "HskDatabaseDownload",
+        "CorpusDbUrl",
+        os.getenv(
+            "HSK_CORPUS_DB_DOWNLOAD_URL",
+            "https://prismatica.cn-zj1.rains3.com/hsk_corpus.db",
+        ),
+    )
+    hskLocalCorpusDownloadUrl = ConfigItem(
+        "HskDatabaseDownload",
+        "LocalCorpusDbUrl",
+        os.getenv(
+            "HSK_LOCAL_CORPUS_DB_DOWNLOAD_URL",
+            "https://prismatica.cn-zj1.rains3.com/hsk_corpus_local.db",
+        ),
+    )
+    hskCorpusDownloadSha256 = ConfigItem(
+        "HskDatabaseDownload",
+        "CorpusDbSha256",
+        os.getenv(
+            "HSK_CORPUS_DB_SHA256",
+            "a4aa0cdc635eeb8c4b5784ead9d61a0dede2d16945b731e378eb8aec33408a2c",
+        ),
+    )
+    hskLocalCorpusDownloadSha256 = ConfigItem(
+        "HskDatabaseDownload",
+        "LocalCorpusDbSha256",
+        os.getenv(
+            "HSK_LOCAL_CORPUS_DB_SHA256",
+            "e7ffbc954b06d6b57992e4cccfc44b55f494214fcb61732aff32395d3c575e9a",
+        ),
     )
 
 
