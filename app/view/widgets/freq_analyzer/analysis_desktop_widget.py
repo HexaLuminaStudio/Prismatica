@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
+from app.core.services import getPricingCatalog
 from app.core.utils import logger
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -206,6 +207,9 @@ class AnalysisDesktopWidget(QWidget):
         self._emptyState: QWidget = None  # type: ignore[assignment]
         self._emptyIconWidget: IconWidget = None  # type: ignore[assignment]
         self._buildUi()
+        self._pricingCatalog = getPricingCatalog()
+        self._pricingCatalog.catalogChanged.connect(self._updatePricingNotice)
+        self._updatePricingNotice()
         self.setCorpusStore(corpusStore)
         if corpusManager is not None:
             corpusManager.activeCorpusChanged.connect(self.refresh)
@@ -248,6 +252,23 @@ class AnalysisDesktopWidget(QWidget):
         self.corpusNameLabel.setObjectName("analysisCorpusName")
         header.addWidget(self.corpusNameLabel, 0, Qt.AlignmentFlag.AlignTop)
         pageLayout.addLayout(header)
+
+        self.pricingNotice = QFrame(self.page)
+        self.pricingNotice.setObjectName("analysisPricingNotice")
+        pricingLayout = QHBoxLayout(self.pricingNotice)
+        pricingLayout.setContentsMargins(14, 10, 14, 10)
+        pricingLayout.setSpacing(10)
+        pricingIcon = IconWidget(FluentIcon.INFO, self.pricingNotice)
+        pricingIcon.setFixedSize(18, 18)
+        pricingLayout.addWidget(pricingIcon, 0, Qt.AlignmentFlag.AlignTop)
+        self.pricingNoticeLabel = BodyLabel(
+            "本地分析免费 · 正在加载导出与 AI 的公开价格…",
+            self.pricingNotice,
+        )
+        self.pricingNoticeLabel.setObjectName("analysisPricingNoticeLabel")
+        self.pricingNoticeLabel.setWordWrap(True)
+        pricingLayout.addWidget(self.pricingNoticeLabel, 1)
+        pageLayout.addWidget(self.pricingNotice)
 
         self.summaryPanel = QFrame(self.page)
         self.summaryPanel.setObjectName("analysisSummaryPanel")
@@ -310,6 +331,33 @@ class AnalysisDesktopWidget(QWidget):
         layout.addWidget(labelWidget, 0, Qt.AlignmentFlag.AlignHCenter)
         frame.valueLabel = valueLabel
         return frame
+
+    def _updatePricingNotice(self, _catalog=None) -> None:
+        if not hasattr(self, "pricingNoticeLabel"):
+            return
+        catalog = getattr(self, "_pricingCatalog", None)
+        if catalog is None:
+            return
+        exportCost = catalog.fixedCost("analysis_export")
+        aiRule = catalog.rule("ai_insight") or catalog.rule("ai_chat")
+        version = catalog.version
+        parts = ["本地分析免费"]
+        if exportCost is None:
+            parts.append("分析结果导出价格加载中")
+        else:
+            parts.append(f"分析结果导出固定 {exportCost} 点/次，与分析量无关")
+        if aiRule:
+            inputCost = int(aiRule.get("inputTokenCostPer1K", 0) or 0)
+            outputCost = int(aiRule.get("outputTokenCostPer1K", 0) or 0)
+            parts.append(
+                f"AI 按真实 Token 另计：输入 {inputCost} 点/千 Token，"
+                f"输出 {outputCost} 点/千 Token"
+            )
+        else:
+            parts.append("AI 价格加载中")
+        if version:
+            parts.append(f"价格版本 {version}（约 30 秒自动刷新）")
+        self.pricingNoticeLabel.setText(" · ".join(parts))
 
     def _addSection(
         self,
@@ -488,11 +536,11 @@ class AnalysisDesktopWidget(QWidget):
         layout.addWidget(title)
 
         hint = BodyLabel(
-            "请先在「导入与清洗」中导入文件,启用并完成清洗后,此处将开放全部功能模块。",
+            "请在「导入与清洗」中导入并清洗",
             frame,
         )
         hint.setObjectName("analysisEmptyHint")
-        hint.setWordWrap(True)
+        hint.setWordWrap(False)
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignHCenter)
 
@@ -530,6 +578,9 @@ class AnalysisDesktopWidget(QWidget):
                 padding: 5px 10px; border-radius: 6px; font-weight: 600; }}
             QFrame#analysisSummaryPanel {{ background: {surface}; border: 1px solid {border};
                 border-radius: 12px; }}
+            QFrame#analysisPricingNotice {{ background: {surfaceAlt}; border: 1px solid {border};
+                border-radius: 9px; }}
+            QLabel#analysisPricingNoticeLabel {{ color: {muted}; font-size: 12px; }}
             QFrame#analysisMetric {{ background: transparent; border: none;
                 border-left: 1px solid {border}; }}
             QLabel#analysisMetricValue {{ color: {accent}; font-size: 18px; font-weight: 700; }}

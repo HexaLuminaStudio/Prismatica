@@ -466,6 +466,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._lastConditions: List[Dict] = []
         self._lastSearchFinished: bool = False
         self._exportWorker: Optional[Any] = None
+        self._exportBillingTransaction: Optional[Any] = None
         self._lastExportDir: Optional[str] = None  # 用于完成后「打开文件夹」
 
         # 条件行列表(动态增删)
@@ -763,7 +764,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.tableView.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self.tableView.setWordWrap(False)
+        self.tableView.setWordWrap(True)
         self.tableView.verticalHeader().setVisible(False)
         self.tableView.verticalHeader().setDefaultSectionSize(40)
         self.tableView.setSelectionBehavior(
@@ -1635,16 +1636,34 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             return  # 用户取消
 
         v = dlg.value
-        # ---- 3. 启动 Worker ----
-        self._exportWorker = HskCorpusExportWorker(
-            zwhaoList=v["zwhaoList"],
-            outputDir=v["outputDir"],
-            fileFormat=v["fileFormat"],
-            skipMissingTitle=False,  # 作文母号(zwhao)是唯一标识,不再用 Title 过滤
-            mergeMode=v["mergeMode"],
-            mergeFileName=v["mergeFileName"],
-            parent=self,
+        from app.core.services import HSK_ESSAY_EXPORT_FEATURE, beginPaidMeteredAction
+
+        transaction = beginPaidMeteredAction(
+            self.window(),
+            HSK_ESSAY_EXPORT_FEATURE,
+            int(v["billedEssayCount"]),
+            f"导出 {int(v['billedEssayCount']):,} 篇 HSK 作文",
+            confirmedCost=int(v["quotedCost"]),
+            showConfirmation=False,
         )
+        if transaction is None:
+            return
+        self._exportBillingTransaction = transaction
+        # ---- 3. 启动 Worker ----
+        try:
+            self._exportWorker = HskCorpusExportWorker(
+                zwhaoList=v["zwhaoList"],
+                outputDir=v["outputDir"],
+                fileFormat=v["fileFormat"],
+                skipMissingTitle=False,  # 作文母号(zwhao)是唯一标识,不再用 Title 过滤
+                mergeMode=v["mergeMode"],
+                mergeFileName=v["mergeFileName"],
+                parent=self,
+            )
+        except Exception:
+            transaction.refund()
+            self._exportBillingTransaction = None
+            raise
         self._exportWorker.progress.connect(self._onExportProgress)
         self._exportWorker.finishedWithResult.connect(self._onExportFinished)
         self._exportWorker.failed.connect(self._onExportFailed)
@@ -1652,7 +1671,13 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._lastExportDir = v["outputDir"]
         self.exportAllBtn.setEnabled(False)
         self.exportAllBtn.setText("导出中...")
-        self._exportWorker.start()
+        try:
+            self._exportWorker.start()
+        except Exception:
+            transaction.refund()
+            self._exportBillingTransaction = None
+            self._exportWorker = None
+            raise
 
         InfoBar.info(
             title="开始导出",
@@ -1684,15 +1709,25 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         if self.statusLabel:
             self.statusLabel.setText("就绪")
 
+        billingSettled = True
+        if self._exportBillingTransaction is not None:
+            if successCount > 0:
+                billingSettled = self._exportBillingTransaction.commit()
+            else:
+                self._exportBillingTransaction.refund()
+            self._exportBillingTransaction = None
+
         content = (
             f"成功 {successCount:,} 篇 · 跳过 {skippedCount:,} 篇 · "
             f"失败 {failCount:,} 篇"
         )
 
         # 用 InfoBar.new 而非 .success,以便挂自定义按钮
+        if not billingSettled:
+            content += " · 文件已生成，但账单同步暂未完成"
         bar = InfoBar.new(
-            InfoBarIcon.SUCCESS,
-            title="导出完成",
+            InfoBarIcon.SUCCESS if billingSettled else InfoBarIcon.WARNING,
+            title="导出完成" if billingSettled else "导出完成，账单待同步",
             content=content,
             orient=Qt.Orientation.Horizontal,
             isClosable=True,
@@ -1723,6 +1758,9 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self.exportAllBtn.setText("导出命中作文")
         if self.statusLabel:
             self.statusLabel.setText("就绪")
+        if self._exportBillingTransaction is not None:
+            self._exportBillingTransaction.refund()
+            self._exportBillingTransaction = None
 
         InfoBar.error(
             title="导出失败",
@@ -1752,4 +1790,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
                     logger.warning("[HskCorpusBrowser] 导出 worker 未在 100ms 内退出")
         except Exception as e:
             logger.warning(f"[HskCorpusBrowser] 停止导出 worker 失败: {e}")
+        if self._exportBillingTransaction is not None:
+            self._exportBillingTransaction.refund()
+            self._exportBillingTransaction = None
         super().closeEvent(event)

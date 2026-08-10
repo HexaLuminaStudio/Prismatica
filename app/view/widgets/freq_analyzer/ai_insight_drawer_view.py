@@ -610,11 +610,8 @@ class AiInsightDrawerView(QWidget):
         self.thumbDownBtn.setEnabled(True)
 
     def _modelText(self) -> str:
-        """当前模型显示(与 AI 聊天共用 cfg.AiModelChat)"""
-        apiKey = qconfig.get(cfg.AiApiKey)
-        if not apiKey:
-            return "未配置 API Key(请到「设置 → AI 解读」)"
-        return f"模型:{qconfig.get(cfg.AiModelChat) or 'deepseek-chat'}"
+        """平台模型由服务端统一配置，客户端不接触供应商密钥。"""
+        return "Prismatica 平台模型 · 按真实 Token 计费"
 
     # ------------------------------------------------------------------
     # 槽

@@ -15,6 +15,7 @@ from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001�
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 from app.core.models.project import RESOURCE_TYPE_FREQ
+from app.core.services import beginPaidAnalysisExport
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -842,10 +843,16 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             return
         if not path.endswith(".csv"):
             path += ".csv"
+        transaction = beginPaidAnalysisExport(self, "词频表 CSV")
+        if transaction is None:
+            return
         try:
             self.unigramDf.to_csv(path, index=False, encoding="utf-8-sig")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"已保存：{path}", self)
         except Exception as e:
+            transaction.refund()
             logger.error(f"[FreqAnalyzerWidget] CSV 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 

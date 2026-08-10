@@ -116,13 +116,6 @@ class AiInsightService(QObject):
             logger.warning("[AiInsightService] 已有进行中的解读，忽略新请求")
             return False
 
-        if not qconfig.get(cfg.AiApiKey):
-            logger.warning(
-                f"[AiInsightService] 未配置API Key, type={analysisType}"
-            )
-            self.failed.emit("未配置 API Key，请在「设置 → AI 解读」中填写。")
-            return False
-
         # 注入 corpusMeta
         if corpusMeta:
             data = dict(data or {})
@@ -154,6 +147,7 @@ class AiInsightService(QObject):
             message=prompts["user"],
             prompt=prompts["system"],
             fileText="",
+            featureCode="ai_insight",
         )
         return True
 

@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
+from app.core.services import beginPaidAnalysisExport
 
 # matplotlib 后端必须在 from matplotlib import pyplot 之前显式指定
 # P0-A3 fix 2026-07-18:严格 import 顺序 + force=True
@@ -956,6 +957,9 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             return
         if not path.lower().endswith(f".{ext}"):
             path += f".{ext}"
+        transaction = beginPaidAnalysisExport(self, f"共现网络 {fmt.upper()}")
+        if transaction is None:
+            return
         try:
             if fmt in ("png", "svg"):
                 self._figure.savefig(
@@ -971,8 +975,11 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             elif fmt == "graphml":
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(self._engine.exportGraphML(self._network))
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"已保存:{path}", self, duration=2500)
         except Exception as e:
+            transaction.refund()
             logger.error(f"[NetworkWidget] {fmt} 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 

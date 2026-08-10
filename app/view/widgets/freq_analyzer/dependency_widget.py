@@ -66,6 +66,7 @@ from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
+from app.core.services import beginPaidAnalysisExport
 
 
 # ---------------------------------------------------------------------------
@@ -837,10 +838,15 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         path = self._currentFigureSavePath(ext)
         if not path:
             return
+        charge = beginPaidAnalysisExport(self, f"导出句法依存图 {ext.upper()}")
+        if charge is None:
+            return
         try:
             self.figure.savefig(path, format=ext, dpi=150, bbox_inches="tight")
-            _showInfoBar("success", "导出成功", path, self, duration=2500)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", path, self, duration=2500)
         except Exception as e:
+            charge.refund()
             logger.exception("[DependencyWidget] 导出失败")
             MessageBox("导出失败", str(e), self).exec()
 
@@ -858,10 +864,15 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
+        charge = beginPaidAnalysisExport(self, "导出句法依存 CoNLL-U")
+        if charge is None:
+            return
         try:
             Path(path).write_text(toConllU(parse), encoding="utf-8")
-            _showInfoBar("success", "导出成功", path, self, duration=2500)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", path, self, duration=2500)
         except Exception as e:
+            charge.refund()
             logger.exception("[DependencyWidget] CoNLL-U 导出失败")
             MessageBox("导出失败", str(e), self).exec()
 

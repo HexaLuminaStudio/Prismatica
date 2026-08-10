@@ -6,7 +6,7 @@ HSK搜索组件模块
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QSizePolicy, QWidget
 from qfluentwidgets import (
     CheckBox,
     ComboBox,
@@ -22,6 +22,16 @@ from app.core.utils import (
     syntacticRelationshipList,
     wrongSentencePattern,
 )
+
+
+class _InputWidthPolicyMixin:
+    """用于搜索卡片内输入控件的宽度适配."""
+
+    def _setInputWidthPolicy(self, widget: QWidget) -> None:
+        widget.setMinimumWidth(160)
+        widget.setMaximumWidth(320)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        widget.setMinimumHeight(32)
 
 
 class HskSearchContainer(QWidget):
@@ -72,7 +82,7 @@ class HskSearchContainer(QWidget):
         ]
 
 
-class StringGeneralSearchWidget(GroupHeaderCardWidget):
+class StringGeneralSearchWidget(_InputWidthPolicyMixin, GroupHeaderCardWidget):
     """字符串一般检索组件"""
 
     def __init__(self, parent=None):
@@ -82,7 +92,7 @@ class StringGeneralSearchWidget(GroupHeaderCardWidget):
 
         self.keyWord = LineEdit(self)
         self.keyWord.setPlaceholderText("输入关键词或短语，例如「学习」")
-        self.keyWord.setFixedWidth(200)
+        self._setInputWidthPolicy(self.keyWord)
 
         self.addGroup(
             QIcon(":app/icons/Write.svg"),
@@ -98,7 +108,7 @@ class StringGeneralSearchWidget(GroupHeaderCardWidget):
         }
 
 
-class SpecificConditionSearchWidget(GroupHeaderCardWidget):
+class SpecificConditionSearchWidget(_InputWidthPolicyMixin, GroupHeaderCardWidget):
     """特定条件检索组件"""
 
     def __init__(self, parent=None):
@@ -108,24 +118,24 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
 
         self.initialString = LineEdit(self)
         self.initialString.setPlaceholderText("字符串")
-        self.initialString.setFixedWidth(200)
+        self._setInputWidthPolicy(self.initialString)
 
         self.previousWords = LineEdit(self)
         self.previousWords.setPlaceholderText("前词")
-        self.previousWords.setFixedWidth(200)
+        self._setInputWidthPolicy(self.previousWords)
 
         self.compactSpinBox = CompactSpinBox(self)
         self.compactSpinBox.setRange(0, 100)
         self.compactSpinBox.setValue(0)
-        self.compactSpinBox.setFixedWidth(200)
+        self._setInputWidthPolicy(self.compactSpinBox)
 
         self.postWord = LineEdit(self)
         self.postWord.setPlaceholderText("后词")
-        self.postWord.setFixedWidth(200)
+        self._setInputWidthPolicy(self.postWord)
 
         self.tailString = LineEdit(self)
         self.tailString.setPlaceholderText("尾字符串")
-        self.tailString.setFixedWidth(200)
+        self._setInputWidthPolicy(self.tailString)
 
         self.addGroup(
             QIcon(":app/icons/Write.svg"),
@@ -169,7 +179,7 @@ class SpecificConditionSearchWidget(GroupHeaderCardWidget):
         }
 
 
-class WordCombinationSearchWidget(GroupHeaderCardWidget):
+class WordCombinationSearchWidget(_InputWidthPolicyMixin, GroupHeaderCardWidget):
     """词语搭配检索组件"""
 
     def __init__(self, parent=None):
@@ -179,11 +189,11 @@ class WordCombinationSearchWidget(GroupHeaderCardWidget):
 
         self.keyWord = LineEdit(self)
         self.keyWord.setPlaceholderText("输入关键词或词语")
-        self.keyWord.setFixedWidth(200)
+        self._setInputWidthPolicy(self.keyWord)
 
         self.relationshipCombobox = ComboBox(self)
         self.relationshipCombobox.addItems(syntacticRelationshipList)
-        self.relationshipCombobox.setFixedWidth(200)
+        self._setInputWidthPolicy(self.relationshipCombobox)
 
         self.addGroup(
             QIcon(":app/icons/Write.svg"),
@@ -206,7 +216,7 @@ class WordCombinationSearchWidget(GroupHeaderCardWidget):
         }
 
 
-class WrongSentenceSearchWidget(GroupHeaderCardWidget):
+class WrongSentenceSearchWidget(_InputWidthPolicyMixin, GroupHeaderCardWidget):
     """错误句检索组件"""
 
     def __init__(self, parent=None):
@@ -216,7 +226,7 @@ class WrongSentenceSearchWidget(GroupHeaderCardWidget):
 
         self.sentencePatternComBobox = ComboBox(self)
         self.sentencePatternComBobox.addItems(wrongSentencePattern.keys())
-        self.sentencePatternComBobox.setFixedWidth(200)
+        self._setInputWidthPolicy(self.sentencePatternComBobox)
 
         self.addGroup(
             QIcon(":app/icons/Write.svg"),
@@ -234,7 +244,7 @@ class WrongSentenceSearchWidget(GroupHeaderCardWidget):
         }
 
 
-class AdvancedSettingCardWidget(GroupHeaderCardWidget):
+class AdvancedSettingCardWidget(_InputWidthPolicyMixin, GroupHeaderCardWidget):
     """高级设置组件"""
 
     def __init__(self, parent=None):
@@ -247,17 +257,17 @@ class AdvancedSettingCardWidget(GroupHeaderCardWidget):
         self.headerLayout.addWidget(self.enableCheckBox, 0, Qt.AlignmentFlag.AlignRight)
 
         self.essayTitle = ComboBox(self)
-        self.essayTitle.setFixedWidth(200)
+        self._setInputWidthPolicy(self.essayTitle)
 
         self.essayTitle.addItems(hskEssayList)
 
         self.certificateLevel = ComboBox(self)
-        self.certificateLevel.setFixedWidth(200)
+        self._setInputWidthPolicy(self.certificateLevel)
         self.certificateLevel.addItems(["不限", "A", "B", "C", "未参加"])
 
         self.nationality = LineEdit(self)
         self.nationality.setPlaceholderText("输入国家中文名,如「日本」")
-        self.nationality.setFixedWidth(200)
+        self._setInputWidthPolicy(self.nationality)
 
         self.addGroup(
             QIcon(":app/icons/EssayTitle.svg"),

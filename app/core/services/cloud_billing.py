@@ -65,6 +65,12 @@ class CloudBilling:
             or {}
         )
 
+    def commitFixed(self, billId: str) -> Dict[str, Any]:
+        return self._api.post("/v1/billing/commit-fixed", body={"billId": billId}) or {}
+
+    def commitMetered(self, billId: str) -> Dict[str, Any]:
+        return self._api.post("/v1/billing/commit-metered", body={"billId": billId}) or {}
+
     def refund(self, billId: str) -> Dict[str, Any]:
         return self._api.post("/v1/billing/refund", body={"billId": billId}) or {}
 

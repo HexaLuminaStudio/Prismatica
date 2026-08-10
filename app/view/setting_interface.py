@@ -9,11 +9,13 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -117,7 +119,9 @@ class OverviewGroupCard(GroupHeaderCardWidget):
     def __init__(self, title: str, headerIcon, summary: str = "", parent=None):
         super().__init__(parent)
         self.setTitle(title)
-        self.setFixedWidth(832)
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(832)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.setObjectName("overviewSettingCard")
 
         self.headerIconContainer = QWidget(self.headerView)
@@ -138,15 +142,24 @@ class OverviewGroupCard(GroupHeaderCardWidget):
         self.headerLayout.insertWidget(0, self.headerIconContainer)
         self.headerLayout.setSpacing(12)
         self.headerLayout.setContentsMargins(24, 0, 24, 0)
-        self.headerView.setFixedHeight(60)
+        self.headerView.setMinimumHeight(60)
+        self.headerView.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
 
         self.headerSummaryLabel = CaptionLabel(summary, self.headerView)
         self.headerSummaryLabel.setStyleSheet(f"color: {_MUTED};")
+        self.headerSummaryLabel.setWordWrap(True)
+        self.headerSummaryLabel.setMinimumWidth(0)
+        self.headerSummaryLabel.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.headerLayout.addStretch(1)
         self.headerLayout.addWidget(self.headerSummaryLabel)
 
         _setChineseUiFont(self.headerLabel, 11, QFont.Weight.DemiBold)
         self.setBorderRadius(8)
+        self._isCompact = False
         self._applyCardStyle()
         qconfig.themeChangedFinished.connect(self._applyCardStyle)
         # 不使用 QGraphicsDropShadowEffect：设置页在导航的 300ms 切页动画中
@@ -173,27 +186,27 @@ class OverviewGroupCard(GroupHeaderCardWidget):
 
     def addGroup(self, icon, title, content, widget, stretch=0):
         group = super().addGroup(icon, title, content, widget, stretch)
-        group.setMinimumHeight(76)
+        group.setMinimumHeight(0)
         group.hBoxLayout.setContentsMargins(24, 18, 24, 18)
         group.hBoxLayout.setSpacing(16)
         group.textLayout.setSpacing(3)
         group.textLayout.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         group.titleLabel.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         group.contentLabel.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
-        # CardGroupWidget 默认在文字与控件之间插入 stretch，文字列只按
-        # sizeHint 分配宽度，中文说明会过早换行。移除该 spacer 并让文字列
-        # 吸收剩余空间，行为与设计稿的 flex: 1 一致。
-        spacerItem = group.hBoxLayout.itemAt(2)
-        if spacerItem is not None and spacerItem.spacerItem() is not None:
-            group.hBoxLayout.takeAt(2)
-        group.hBoxLayout.setStretch(1, 1)
+        # 将图标和文字组成可伸缩的前导区域。原组件把文字、spacer 和右侧控件
+        # 放在同一行，窗口变窄后会优先把副文字压到几像素宽。
         group.hBoxLayout.removeWidget(group.iconWidget)
+        for index in range(group.hBoxLayout.count() - 1, -1, -1):
+            item = group.hBoxLayout.itemAt(index)
+            if item.layout() is group.textLayout or item.spacerItem() is not None:
+                group.hBoxLayout.takeAt(index)
+
         group.iconContainer = QWidget(group)
         group.iconContainer.setFixedSize(QSize(36, 36))
         group.iconContainer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -207,12 +220,81 @@ class OverviewGroupCard(GroupHeaderCardWidget):
         group.iconWidget.setFixedSize(QSize(20, 20))
         group.iconWidget.setStyleSheet("background: transparent;")
         iconLayout.addWidget(group.iconWidget)
-        group.hBoxLayout.insertWidget(0, group.iconContainer)
-        group.contentLabel.setWordWrap(False)
+
+        group.leadingWidget = QWidget(group)
+        group.leadingWidget.setObjectName("settingGroupLeadingWidget")
+        group.leadingWidget.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True
+        )
+        group.leadingWidget.setStyleSheet(
+            "QWidget#settingGroupLeadingWidget { "
+            "background-color: transparent; border: none; }"
+        )
+        group.leadingWidget.setMinimumWidth(0)
+        group.leadingWidget.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        group.leadingLayout = QHBoxLayout(group.leadingWidget)
+        group.leadingLayout.setContentsMargins(0, 0, 0, 0)
+        group.leadingLayout.setSpacing(16)
+        group.leadingLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        group.leadingLayout.addWidget(
+            group.iconContainer, 0, Qt.AlignmentFlag.AlignTop
+        )
+        group.leadingLayout.addLayout(group.textLayout, 1)
+        group.hBoxLayout.insertWidget(0, group.leadingWidget, 1)
+
+        group.controlWidget = widget
+        group.titleLabel.setMinimumWidth(0)
+        group.titleLabel.setWordWrap(True)
+        group.titleLabel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        group.contentLabel.setWordWrap(True)
+        group.contentLabel.setMinimumWidth(0)
+        group.contentLabel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+        )
         group.contentLabel.setTextColor(QColor(_MUTED), QColor("#A8B0BC"))
         _setChineseUiFont(group.titleLabel, 10, QFont.Weight.DemiBold)
         _setChineseUiFont(group.contentLabel, 9)
+        self._applyGroupLayout(group, self._isCompact)
         return group
+
+    def setCompactLayout(self, isCompact: bool) -> None:
+        """在窄窗口中把设置控件移到说明文字下方，避免副文字被横向挤压。"""
+        if self._isCompact == isCompact:
+            return
+        self._isCompact = isCompact
+        for group in self.groupWidgets:
+            self._applyGroupLayout(group, isCompact)
+        self.updateGeometry()
+
+    @staticmethod
+    def _applyGroupLayout(group, isCompact: bool) -> None:
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if isCompact
+            else QBoxLayout.Direction.LeftToRight
+        )
+        group.hBoxLayout.setDirection(direction)
+        group.hBoxLayout.setContentsMargins(
+            16 if isCompact else 24,
+            16 if isCompact else 18,
+            16 if isCompact else 24,
+            16 if isCompact else 18,
+        )
+        group.hBoxLayout.setSpacing(12 if isCompact else 16)
+        group.hBoxLayout.setStretch(0, 1)
+        group.hBoxLayout.setAlignment(
+            group.controlWidget,
+            Qt.AlignmentFlag(0)
+            if isCompact
+            else Qt.AlignmentFlag.AlignVCenter,
+        )
+        group.contentLabel.updateGeometry()
+        group.titleLabel.updateGeometry()
+        group.updateGeometry()
 
     def addInfoBanner(self, text: str) -> QLabel:
         bannerWrapper = QWidget(self.view)
@@ -232,6 +314,56 @@ class OverviewGroupCard(GroupHeaderCardWidget):
         return banner
 
 
+class DisplaySettingWidget(OverviewGroupCard):
+    """界面缩放设置，默认跟随 Windows 的逐显示器 DPI。"""
+
+    _SCALE_OPTIONS = (
+        ("跟随系统（推荐）", "Auto"),
+        ("100%", 1.0),
+        ("125%", 1.25),
+        ("150%", 1.5),
+        ("175%", 1.75),
+        ("200%", 2.0),
+    )
+
+    def __init__(self, parent=None):
+        super().__init__("显示与缩放", FluentIcon.LAYOUT, "Windows DPI", parent)
+        self.dpiScaleComboBox = ComboBox(self)
+        for label, value in self._SCALE_OPTIONS:
+            self.dpiScaleComboBox.addItem(label, userData=value)
+        currentIndex = self.dpiScaleComboBox.findData(qconfig.get(cfg.DpiScale))
+        self.dpiScaleComboBox.setCurrentIndex(max(0, currentIndex))
+        self.dpiScaleComboBox.setFixedSize(172, 32)
+        self.dpiScaleComboBox.setAccessibleName("界面显示缩放比例")
+        self.dpiScaleComboBox.currentIndexChanged.connect(self._onDpiScaleChanged)
+
+        self.addGroup(
+            FluentIcon.LAYOUT,
+            "界面缩放",
+            "自动模式会跟随 Windows，并在不同 DPI 的显示器之间平滑切换",
+            self.dpiScaleComboBox,
+        )
+        self.addInfoBanner(
+            "小屏幕或高分屏建议使用“跟随系统”。修改缩放比例后需重启软件，"
+            "主窗口仍会自动限制在当前屏幕的可用区域内。"
+        )
+
+    def _onDpiScaleChanged(self, _index: int) -> None:
+        scale = self.dpiScaleComboBox.currentData()
+        if scale == qconfig.get(cfg.DpiScale):
+            return
+        qconfig.set(cfg.DpiScale, scale)
+        InfoBar.info(
+            title="重启后生效",
+            content="界面缩放比例已保存，重启软件后将应用新的显示设置。",
+            orient=Qt.Orientation.Horizontal,
+            isClosable=True,
+            position=InfoBarPosition.TOP,
+            duration=5000,
+            parent=self.window(),
+        )
+
+
 class SoftwareSettingWidget(OverviewGroupCard):
     """软件设置组件"""
 
@@ -247,12 +379,15 @@ class SoftwareSettingWidget(OverviewGroupCard):
             qconfig.get(cfg.DownloadSavePath), self
         )
         self.downloadPathLabel.setToolTip(qconfig.get(cfg.DownloadSavePath))
-        self.downloadPathLabel.setFixedWidth(228)
-        self.downloadPathLabel.setFixedHeight(32)
+        self.downloadPathLabel.setMinimumWidth(0)
+        self.downloadPathLabel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         pathFont = QFont("Cascadia Mono")
         pathFont.setFamilies(["Cascadia Mono", "Consolas", "Microsoft YaHei UI"])
         pathFont.setPointSize(9)
         self.downloadPathLabel.setFont(pathFont)
+        self.downloadPathLabel.setWordWrap(True)
         self.downloadPathLabel.setStyleSheet(
             "color: #4B5563; background: #F7F8FA; border: 1px solid #E5E7EB; "
             "border-radius: 6px; padding: 7px 10px;"
@@ -655,70 +790,28 @@ class AiInsightSettingWidget(OverviewGroupCard):
 
         # 字段变化 → 刷新状态条
         self.styleCombo.currentIndexChanged.connect(self._refreshStatus)
-        # 监听共用 LLM 配置变化（API Key / 模型 / Base URL 改完时即时刷新）
-        cfg.AiApiKey.valueChanged.connect(self._refreshStatus)
-        cfg.AiModelChat.valueChanged.connect(self._refreshStatus)
-        cfg.AiBaseUrl.valueChanged.connect(self._refreshStatus)
 
     def _refreshStatus(self, *_args) -> None:
         self.statusLabel.setText(self._summaryText())
 
     def _summaryText(self) -> str:
-        return (
-            "ⓘ  AI 解读与 AI 聊天共用同一套 LLM，请到「AI 聊天设置」中配置 "
-            "API Key、Base URL 与模型。"
-        )
+        return "ⓘ  AI 解读使用 Prismatica 平台模型，按服务端记录的输入与输出 Token 独立计费。"
 
 
 class AiChatSettingWidget(OverviewGroupCard):
     """AI 聊天设置组件
 
-    允许用户配置:
-        - API Key (DeepSeek / OpenAI 等 OpenAI 兼容服务)
-        - Base URL
-        - Chat 模型(自由输入)
-        - 多轮上下文轮数
-        - 系统提示词
+    平台统一保管 API Key 与模型配置；用户只配置多轮上下文和系统提示词。
 
     所有配置项通过 ``qconfig`` 持久化,与 ``cfg`` 中对应键双向同步,
     设置变更后底部状态条实时刷新摘要。
     """
 
     def __init__(self, parent=None):
-        super().__init__("AI 聊天设置", FluentIcon.CHAT, "LLM · DeepSeek", parent)
+        super().__init__("AI 聊天设置", FluentIcon.CHAT, "平台 AI · Token 计费", parent)
 
-        # ---- 表单字段 ----
-        self.apiKeyEdit = LineEdit()
-        self.apiKeyEdit.setPlaceholderText("请输入 API Key(支持 DeepSeek / OpenAI 等)")
-        self.apiKeyEdit.setEchoMode(LineEdit.EchoMode.Password)
-        self.apiKeyEdit.setText(qconfig.get(cfg.AiApiKey) or "")
-        self.apiKeyEdit.textChanged.connect(
-            lambda v: qconfig.set(cfg.AiApiKey, v.strip())
-        )
-        self.apiKeyEdit.setFixedSize(240, 32)
-        self.apiKeyVisibilityButton = PushButton("显示", self)
-        self.apiKeyVisibilityButton.setIcon(FluentIcon.VIEW)
-        self.apiKeyVisibilityButton.setFixedSize(76, 32)
-        self.apiKeyVisibilityButton.clicked.connect(self._toggleApiKeyVisibility)
-
-        self.baseUrlEdit = LineEdit()
-        self.baseUrlEdit.setPlaceholderText("https://api.deepseek.com")
-        self.baseUrlEdit.setText(
-            qconfig.get(cfg.AiBaseUrl) or "https://api.deepseek.com"
-        )
-        self.baseUrlEdit.textChanged.connect(
-            lambda v: qconfig.set(cfg.AiBaseUrl, v.strip())
-        )
-        self.baseUrlEdit.setFixedSize(260, 32)
-
-        # Chat 模型:自由输入框,用户可填任意模型 ID
-        self.chatModelEdit = LineEdit()
-        self.chatModelEdit.setPlaceholderText("如 deepseek-chat / gpt-4o / qwen-max …")
-        self.chatModelEdit.setText(qconfig.get(cfg.AiModelChat) or "deepseek-chat")
-        self.chatModelEdit.textChanged.connect(
-            lambda v: qconfig.set(cfg.AiModelChat, v.strip())
-        )
-        self.chatModelEdit.setFixedSize(200, 32)
+        self.platformAiLabel = CaptionLabel("由 Prismatica 云端安全提供，无需填写 API Key")
+        self.platformAiLabel.setStyleSheet(f"color: {_MUTED};")
 
         self.maxHistoryCombo = ComboBox()
         for n in (5, 10, 20, 50):
@@ -736,7 +829,14 @@ class AiChatSettingWidget(OverviewGroupCard):
 
         # 系统提示词:不再用输入框,改为本地文件上传(.txt / .md / .json 等文本文件)
         self.systemPromptFileLabel = CaptionLabel(self._systemPromptText())
-        self.systemPromptFileLabel.setFixedSize(297, 32)
+        self.systemPromptFileLabel.setMinimumWidth(0)
+        self.systemPromptFileLabel.setMinimumHeight(32)
+        self.systemPromptFileLabel.setMaximumWidth(297)
+        self.systemPromptFileLabel.setWordWrap(True)
+        self.systemPromptFileLabel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.systemPromptFileLabel.setAccessibleName("当前系统提示词文件路径")
         self.systemPromptFileLabel.setToolTip(self._systemPromptText())
         promptPathFont = QFont("Cascadia Mono")
         promptPathFont.setFamilies(
@@ -763,22 +863,10 @@ class AiChatSettingWidget(OverviewGroupCard):
 
         # ---- 添加设置组 ----
         self.addGroup(
-            FluentIcon.VPN,
-            "API Key",
-            "用于调用大模型服务的鉴权密钥 · 已启用密码遮罩",
-            self._buildApiKeyWidget(),
-        )
-        self.addGroup(
-            FluentIcon.LINK,
-            "Base URL",
-            "OpenAI 兼容接口的接入地址",
-            self.baseUrlEdit,
-        )
-        self.addGroup(
-            FluentIcon.IOT,
-            "Chat 模型",
-            "用于聊天的模型标识",
-            self.chatModelEdit,
+            FluentIcon.CLOUD,
+            "平台 AI 服务",
+            "API Key 和模型仅由云端保管；每次调用按真实 Token 账单结算",
+            self.platformAiLabel,
         )
         self.addGroup(
             FluentIcon.HISTORY,
@@ -789,7 +877,7 @@ class AiChatSettingWidget(OverviewGroupCard):
         systemPromptGroup = self.addGroup(
             FluentIcon.DOCUMENT,
             "系统提示词",
-            "作为 system message 注入的自定义提示词文件（.md / .txt）",
+            "作为AI提示词文件",
             self._buildSystemPromptWidget(),
         )
         systemPromptGroup.contentLabel.setWordWrap(True)
@@ -802,14 +890,17 @@ class AiChatSettingWidget(OverviewGroupCard):
             "#aiStatusFooter { background: #F5F5F5; border-top: 1px solid #E5E5E5; "
             "border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }"
         )
-        self.statusFooter.setFixedHeight(44)
-        statusRowLayout = QHBoxLayout(self.statusFooter)
-        statusRowLayout.setContentsMargins(24, 10, 24, 10)
-        statusRowLayout.setSpacing(8)
+        self.statusFooter.setMinimumHeight(44)
+        self.statusFooter.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.statusRowLayout = QHBoxLayout(self.statusFooter)
+        self.statusRowLayout.setContentsMargins(24, 10, 24, 10)
+        self.statusRowLayout.setSpacing(8)
         statusIcon = IconWidget(_accentIcon(FluentIcon.SPEED_MEDIUM), self.statusFooter)
         statusIcon.setFixedSize(16, 16)
-        statusRowLayout.addWidget(statusIcon)
-        statusRowLayout.addWidget(self.statusLabel)
+        self.statusRowLayout.addWidget(statusIcon)
+        self.statusRowLayout.addWidget(self.statusLabel)
         self.modelPill = QLabel(self.statusFooter)
         self.modelPill.setStyleSheet(
             "QLabel { color: #1F1F1F; background: white; border: 1px solid #E5E5E5; "
@@ -822,75 +913,85 @@ class AiChatSettingWidget(OverviewGroupCard):
             "QLabel { color: #1F1F1F; background: white; border: 1px solid #E5E5E5; "
             "border-radius: 10px; padding: 2px 8px; }"
         )
-        statusRowLayout.addWidget(self.modelPill)
-        statusRowLayout.addWidget(self.historyPrefixLabel)
-        statusRowLayout.addWidget(self.historyPill)
-        statusRowLayout.addStretch(1)
-        effectiveLabel = CaptionLabel("设置保存后立即生效", self.statusFooter)
-        effectiveLabel.setStyleSheet(f"color: {_MUTED};")
-        statusRowLayout.addWidget(effectiveLabel)
+        self.statusRowLayout.addWidget(self.modelPill)
+        self.statusRowLayout.addWidget(self.historyPrefixLabel)
+        self.statusRowLayout.addWidget(self.historyPill)
+        self.statusRowLayout.addStretch(1)
+        self.effectiveLabel = CaptionLabel("设置保存后立即生效", self.statusFooter)
+        self.effectiveLabel.setStyleSheet(f"color: {_MUTED};")
+        self.statusRowLayout.addWidget(self.effectiveLabel)
         self.groupLayout.addWidget(self.statusFooter)
 
         # 字段变更 → 刷新状态条
-        for sig in (
-            self.apiKeyEdit.textChanged,
-            self.baseUrlEdit.textChanged,
-            self.chatModelEdit.textChanged,
-            self.maxHistoryCombo.currentIndexChanged,
-        ):
+        for sig in (self.maxHistoryCombo.currentIndexChanged,):
             sig.connect(self._refreshStatus)
 
         self._refreshStatus()
 
-    def _buildApiKeyWidget(self) -> QWidget:
-        wrapper = _createTransparentActionWidget(self)
-        layout = QHBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self.apiKeyEdit)
-        layout.addWidget(self.apiKeyVisibilityButton)
-        return wrapper
-
-    def _toggleApiKeyVisibility(self) -> None:
-        isHidden = self.apiKeyEdit.echoMode() == LineEdit.EchoMode.Password
-        self.apiKeyEdit.setEchoMode(
-            LineEdit.EchoMode.Normal if isHidden else LineEdit.EchoMode.Password
+    def setCompactLayout(self, isCompact: bool) -> None:
+        super().setCompactLayout(isCompact)
+        self.systemPromptLayout.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if isCompact
+            else QBoxLayout.Direction.LeftToRight
         )
-        self.apiKeyVisibilityButton.setText("隐藏" if isHidden else "显示")
-        self.apiKeyVisibilityButton.setIcon(
-            FluentIcon.HIDE if isHidden else FluentIcon.VIEW
+        self.systemPromptFileLabel.setMaximumWidth(
+            16777215 if isCompact else 297
         )
+        self.systemPromptLayout.setAlignment(
+            self.systemPromptButtonHost, Qt.AlignmentFlag.AlignLeft
+        )
+        self.systemPromptLayout.invalidate()
+        self.systemPromptFileLabel.updateGeometry()
+        self.statusRowLayout.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if isCompact
+            else QBoxLayout.Direction.LeftToRight
+        )
+        self.statusRowLayout.setContentsMargins(
+            16 if isCompact else 24,
+            12 if isCompact else 10,
+            16 if isCompact else 24,
+            12 if isCompact else 10,
+        )
+        for label in (self.statusLabel, self.effectiveLabel):
+            label.setWordWrap(isCompact)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+        self.statusFooter.updateGeometry()
 
     def _refreshStatus(self, *_args) -> None:
-        chatModel = qconfig.get(cfg.AiModelChat) or "deepseek-chat"
         maxHistory = qconfig.get(cfg.AiMaxHistory) or 10
-        self.modelPill.setText(chatModel)
+        self.modelPill.setText("平台模型")
         self.historyPill.setText(f"{maxHistory} 轮")
-        self.setHeaderSummary(f"LLM · {self._providerName()}")
-
-    def _providerName(self) -> str:
-        baseUrl = (qconfig.get(cfg.AiBaseUrl) or "").lower()
-        if "deepseek" in baseUrl:
-            return "DeepSeek"
-        if "openai" in baseUrl:
-            return "OpenAI"
-        return "自定义服务"
+        self.setHeaderSummary("平台 AI · Token 计费")
 
     def _summaryText(self) -> str:
-        chatModel = qconfig.get(cfg.AiModelChat) or "deepseek-chat"
         maxHist = qconfig.get(cfg.AiMaxHistory) or 10
-        return f"当前 LLM：{chatModel} · 历史 {maxHist} 轮"
+        return f"平台 AI · 历史 {maxHist} 轮 · 按真实 Token 计费"
 
     # ---- 系统提示词(文件上传)----
     def _buildSystemPromptWidget(self) -> QWidget:
         """组装系统提示词控件:状态标签 + 选择/清除按钮"""
         wrapper = _createTransparentActionWidget(self)
-        layout = QHBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(self.systemPromptFileLabel)
-        layout.addWidget(self.systemPromptFileButton)
-        layout.addWidget(self.systemPromptClearButton)
+        wrapper.setMinimumWidth(0)
+        wrapper.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.systemPromptLayout = QHBoxLayout(wrapper)
+        self.systemPromptLayout.setContentsMargins(0, 0, 0, 0)
+        self.systemPromptLayout.setSpacing(8)
+        self.systemPromptLayout.addWidget(self.systemPromptFileLabel, 1)
+
+        self.systemPromptButtonHost = _createTransparentActionWidget(wrapper)
+        buttonLayout = QHBoxLayout(self.systemPromptButtonHost)
+        buttonLayout.setContentsMargins(0, 0, 0, 0)
+        buttonLayout.setSpacing(8)
+        buttonLayout.addWidget(self.systemPromptFileButton)
+        buttonLayout.addWidget(self.systemPromptClearButton)
+        self.systemPromptLayout.addWidget(self.systemPromptButtonHost)
         return wrapper
 
     def _systemPromptText(self) -> str:
@@ -939,6 +1040,7 @@ class AiChatSettingWidget(OverviewGroupCard):
         qconfig.set(cfg.AiSystemPrompt, path)
         self.systemPromptFileLabel.setText(self._systemPromptText())
         self.systemPromptFileLabel.setToolTip(path)
+        self.systemPromptFileLabel.updateGeometry()
         InfoBar.success(
             title="",
             content=f"已设置提示词文件:{Path(path).name}",
@@ -951,6 +1053,7 @@ class AiChatSettingWidget(OverviewGroupCard):
         qconfig.set(cfg.AiSystemPrompt, "")
         self.systemPromptFileLabel.setText(self._systemPromptText())
         self.systemPromptFileLabel.setToolTip(self._systemPromptText())
+        self.systemPromptFileLabel.updateGeometry()
         InfoBar.success(
             title="",
             content="已清除提示词文件,将使用默认提示词。",
@@ -1027,10 +1130,11 @@ class AboutSettingWidget(OverviewGroupCard):
         sectionLayout.addWidget(header)
 
         gridWidget = QWidget(section)
-        grid = QGridLayout(gridWidget)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(24)
-        grid.setVerticalSpacing(4)
+        self.systemInfoGrid = QGridLayout(gridWidget)
+        self.systemInfoGrid.setContentsMargins(0, 0, 0, 0)
+        self.systemInfoGrid.setHorizontalSpacing(24)
+        self.systemInfoGrid.setVerticalSpacing(4)
+        self.systemInfoCells = []
         for index, (key, value) in enumerate(infoItems):
             cell = QFrame(gridWidget)
             cell.setStyleSheet(
@@ -1039,15 +1143,32 @@ class AboutSettingWidget(OverviewGroupCard):
             cellLayout = QHBoxLayout(cell)
             cellLayout.setContentsMargins(0, 6, 0, 6)
             keyLabel = CaptionLabel(key, cell)
+            keyLabel.setMinimumWidth(0)
+            keyLabel.setWordWrap(True)
             keyLabel.setStyleSheet(f"color: {_MUTED}; border: none;")
             valueLabel = CaptionLabel(value, cell)
+            valueLabel.setMinimumWidth(0)
+            valueLabel.setWordWrap(True)
+            valueLabel.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+            )
             valueLabel.setStyleSheet(f"color: {_TEXT}; border: none;")
             cellLayout.addWidget(keyLabel)
             cellLayout.addStretch(1)
             cellLayout.addWidget(valueLabel)
-            grid.addWidget(cell, index // 2, index % 2)
+            self.systemInfoCells.append(cell)
+            self.systemInfoGrid.addWidget(cell, index // 2, index % 2)
         sectionLayout.addWidget(gridWidget)
         return section
+
+    def setCompactLayout(self, isCompact: bool) -> None:
+        super().setCompactLayout(isCompact)
+        for index, cell in enumerate(self.systemInfoCells):
+            row = index if isCompact else index // 2
+            column = 0 if isCompact else index % 2
+            self.systemInfoGrid.addWidget(cell, row, column)
+        self.systemInfoGrid.invalidate()
+        self.systemInfoSection.updateGeometry()
 
     def _restartMainTour(self):
         """重新启动主窗口引导遮罩(2026-07-28 新增)。
@@ -1219,7 +1340,11 @@ class SettingInterface(ScrollArea):
         self.scrollWidget = QWidget()
         self.expandLayout = QVBoxLayout(self.scrollWidget)
         self.contentWidget = QWidget(self.scrollWidget)
-        self.contentWidget.setFixedWidth(832)
+        self.contentWidget.setMinimumWidth(0)
+        self.contentWidget.setMaximumWidth(832)
+        self.contentWidget.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
         self.contentLayout = QVBoxLayout(self.contentWidget)
         self.contentLayout.setContentsMargins(0, 0, 0, 0)
         self.contentLayout.setSpacing(32)
@@ -1265,6 +1390,9 @@ class SettingInterface(ScrollArea):
         heroLayout.addSpacing(8)
         heroLayout.addWidget(self.subtitleLabel, 0, Qt.AlignmentFlag.AlignHCenter)
         heroLayout.addSpacing(4)
+
+        # 显示与缩放设置组件
+        self.displaySettingWidget = DisplaySettingWidget(self.scrollWidget)
 
         # 软件设置组件
         self.softwareSettingWidget = SoftwareSettingWidget(self.scrollWidget)
@@ -1320,10 +1448,11 @@ class SettingInterface(ScrollArea):
         self.expandLayout.setContentsMargins(24, 40, 24, 40)
         self.expandLayout.setSpacing(0)
         self.expandLayout.addWidget(
-            self.contentWidget, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter
+            self.contentWidget, 0, Qt.AlignmentFlag.AlignTop
         )
 
         self.contentLayout.addWidget(self.heroWidget)
+        self.contentLayout.addWidget(self.displaySettingWidget)
         self.contentLayout.addWidget(self.softwareSettingWidget)
         self.contentLayout.addWidget(self.aiChatSettingWidget)
         self.contentLayout.addWidget(self.aiInsightSettingWidget)
@@ -1333,3 +1462,22 @@ class SettingInterface(ScrollArea):
     def _connectSignals(self):
         """连接信号槽"""
         pass
+
+    def resizeEvent(self, event) -> None:
+        """宽屏居中展示，窄屏改为纵向设置行并完整展示换行文字。"""
+        super().resizeEvent(event)
+        viewportWidth = self.viewport().width()
+        isCompact = viewportWidth < 760
+        sideMargin = 8 if isCompact else max(24, (viewportWidth - 832) // 2)
+        self.expandLayout.setContentsMargins(sideMargin, 40, sideMargin, 40)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        showSummary = not isCompact
+        for card in (
+            self.displaySettingWidget,
+            self.softwareSettingWidget,
+            self.aiChatSettingWidget,
+            self.aiInsightSettingWidget,
+            self.aboutSettingWidget,
+        ):
+            card.headerSummaryLabel.setVisible(showSummary)
+            card.setCompactLayout(isCompact)

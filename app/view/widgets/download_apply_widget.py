@@ -13,7 +13,8 @@ from qfluentwidgets import (
     ImageLabel,
 )
 
-from app.core.services import GetTotalWorker, GlobalGetTotalWorker
+from app.core.services import GetTotalWorker, GlobalGetTotalWorker, getPricingCatalog
+from app.core.services.paid_metered import GLOBAL_DOWNLOAD_FEATURE, HSK_DOWNLOAD_FEATURE
 
 
 # 参数标签映射（中文化）
@@ -187,6 +188,8 @@ class DownloadApplyWidget(MessageBoxBase):
         # 保存参数
         self.downloadType = downloadType
         self.infoDict = infoDict
+        self.totalCount = 0
+        self.quotedCost: int | None = None
 
         # 根据下载类型选择图标
         iconName = "Hsk" if downloadType == "Hsk" else "Global"
@@ -222,12 +225,16 @@ class DownloadApplyWidget(MessageBoxBase):
         self.numberItem = InfoItem(
             ":app/icons/Number.svg", "语料数量：", "查询中...", self.cardWidget
         )
+        self.priceItem = InfoItem(
+            ":app/icons/Number.svg", "预计费用：", "等待数量确认", self.cardWidget
+        )
 
         # 添加到卡片布局
         self.cardLayout.addWidget(self.downloadTypeItem)
         self.cardLayout.addWidget(self.paramsLabel)
         self.cardLayout.addWidget(self.paramsDisplay)
         self.cardLayout.addWidget(self.numberItem)
+        self.cardLayout.addWidget(self.priceItem)
 
         # 添加到视图布局
         self.viewLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignCenter)
@@ -243,6 +250,7 @@ class DownloadApplyWidget(MessageBoxBase):
 
         # 启动查询线程
         self.worker = None
+        getPricingCatalog().catalogChanged.connect(self._onCatalogChanged)
         self.startQuery()
 
     def startQuery(self):
@@ -259,13 +267,43 @@ class DownloadApplyWidget(MessageBoxBase):
 
     def onQueryFinished(self, total: int):
         """查询成功回调"""
+        self.totalCount = max(0, int(total))
         if total > 0:
             self.numberItem.updateValue(f"{total} 条")
-            self.yesButton.setEnabled(True)
+            self._updatePrice()
         else:
             self.numberItem.updateValue("未找到数据")
+            self.priceItem.updateValue("无可计费内容")
             self.yesButton.setEnabled(False)
         self.cleanupWorker()
+
+    def _onCatalogChanged(self, _catalog: Dict[str, Any]) -> None:
+        if self.totalCount > 0:
+            self._updatePrice()
+
+    def _updatePrice(self) -> None:
+        featureCode = (
+            HSK_DOWNLOAD_FEATURE
+            if self.downloadType == "Hsk"
+            else GLOBAL_DOWNLOAD_FEATURE
+        )
+        catalog = getPricingCatalog()
+        cost = catalog.meteredCost(featureCode, self.totalCount)
+        if cost is None:
+            self.quotedCost = None
+            self.priceItem.updateValue("价格同步中...")
+            self.yesButton.setEnabled(False)
+            catalog.refreshAsync()
+            return
+        self.quotedCost = int(cost)
+        rule = catalog.rule(featureCode)
+        unitSize = int(rule.get("unitSize", 1_000) or 1_000)
+        perUnitCost = int(rule.get("perUnitCost", 0) or 0)
+        self.priceItem.updateValue(
+            f"{cost} 点（每 {unitSize:,} 条 {perUnitCost} 点，不足一档按一档计）"
+        )
+        self.yesButton.setText(f"确认并预占 {cost} 点")
+        self.yesButton.setEnabled(True)
 
     def onQueryFailed(self, errorMsg: str):
         """查询失败回调"""
@@ -321,6 +359,10 @@ class DownloadApplyWidget(MessageBoxBase):
 
     def closeEvent(self, event):
         """对话框关闭时清理资源"""
+        try:
+            getPricingCatalog().catalogChanged.disconnect(self._onCatalogChanged)
+        except Exception:
+            pass
         self.cleanupWorker()
         super().closeEvent(event)
 

@@ -227,6 +227,7 @@ class ResearchReportService(QObject):
         self._chat.ask(
             message=user_message,
             prompt=_SYSTEM_PROMPT,
+            featureCode="ai_report",
         )
         return True
 

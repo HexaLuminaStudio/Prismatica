@@ -78,6 +78,7 @@ from app.core.models.project import RESOURCE_TYPE_KWIC
 
 # P0-fix:统一使用 loguru,与项目其它模块保持一致
 from app.core.utils import logger
+from app.core.services import beginPaidAnalysisExport
 
 
 # 节点词高亮颜色（柔和黄色背景）
@@ -1177,6 +1178,9 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 return
             if not path.lower().endswith(".txt"):
                 path += ".txt"
+            charge = beginPaidAnalysisExport(self, "导出 KWIC TXT")
+            if charge is None:
+                return
             try:
                 with open(path, "w", encoding="utf-8") as f:
                     secondaryTxt = (
@@ -1198,8 +1202,10 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             f"[{hit.sourceFile}] "
                             f"{hit.leftText}  《{hit.nodeText}》  {hit.rightText}\n"
                         )
-                _showInfoBar("success", "导出成功", f"已保存：{path}", self)
+                if charge.commit():
+                    _showInfoBar("success", "导出成功", f"已保存：{path}", self)
             except Exception as e:
+                charge.refund()
                 logger.error(f"[ConcordanceWidget] TXT 导出失败: {e}")
                 _showInfoBar("error", "导出失败", str(e), self, duration=3000)
         else:
@@ -1211,6 +1217,9 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 return
             if not path.lower().endswith(".csv"):
                 path += ".csv"
+            charge = beginPaidAnalysisExport(self, "导出 KWIC CSV")
+            if charge is None:
+                return
             try:
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
                     writer = csv.writer(f)
@@ -1224,8 +1233,10 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                                 hit.rightText,
                             ]
                         )
-                _showInfoBar("success", "导出成功", f"已保存：{path}", self)
+                if charge.commit():
+                    _showInfoBar("success", "导出成功", f"已保存：{path}", self)
             except Exception as e:
+                charge.refund()
                 logger.error(f"[ConcordanceWidget] CSV 导出失败: {e}")
                 _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 

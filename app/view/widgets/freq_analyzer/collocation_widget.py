@@ -69,6 +69,7 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
+from app.core.services import beginPaidAnalysisExport
 
 
 # ---------------------------------------------------------------------------
@@ -1039,6 +1040,9 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
+        charge = beginPaidAnalysisExport(self, "导出搭配词表")
+        if charge is None:
+            return
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
@@ -1075,8 +1079,10 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             "是" if e.isSignificant else "否",
                         ]
                     )
-            _showInfoBar("success", "导出成功", f"已保存到 {path}", self)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", f"已保存到 {path}", self)
         except Exception as e:
+            charge.refund()
             logger.exception(f"[CollocationWidget] 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self)
 
@@ -1092,13 +1098,18 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
+        charge = beginPaidAnalysisExport(self, "导出搭配网络边列表")
+        if charge is None:
+            return
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(["节点词", "搭配词", "MI"])
                 for node, collocate, weight in self._result.networkEdges:
                     w.writerow([node, collocate, f"{weight:.4f}"])
-            _showInfoBar("success", "导出成功", f"已保存到 {path}", self)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", f"已保存到 {path}", self)
         except Exception as e:
+            charge.refund()
             logger.exception(f"[CollocationWidget] 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self)

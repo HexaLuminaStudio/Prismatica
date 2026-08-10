@@ -1,16 +1,16 @@
 # coding: utf-8
 """
-AI 聊天服务
+平台 AI 聊天服务
 
 参考 qfluentwidgetspro/chat demo 实现:
-- LLMThread: 后台调用 OpenAI 兼容 API (默认 DeepSeek) 进行流式对话
+- LLMThread: 后台调用 PrismaticaAPI，由服务端持有供应商 API Key 并按真实 Token 结算
 - ChatService: 顶层服务,持有 LLMThread 并对外暴露业务接口
 
 设计要点:
 - 遵循项目分层(view → service → api):本模块属于 service 层,
   视图层 (app.view.chat_interface) 仅通过本服务发起对话。
-- 流式 token 通过 signal 推回 UI,与 ChatWidget.setStreamMessage 协作。
-- 模型 ID 由用户在「设置 → AI 聊天」自由填写,默认 deepseek-chat。
+- 服务端完成请求后通过 signal 推回文本与供应商真实 Token 用量。
+- 模型 ID 与供应商 API Key 只由 PrismaticaAPI 的环境变量配置。
 - 历史消息窗口由 cfg.AiMaxHistory 控制,默认保留 10 轮。
 - 错误处理:任何 LLM 异常都向 UI emit failed 信号,UI 给出友好提示。
 """
@@ -22,15 +22,17 @@ from typing import List, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
-from app.core.utils import cfg, logger, qconfig
+from app.core.utils import cfg, logger, qconfig, signalBus
+
+from .cloud_api import CloudApiError, getCloudApi
 
 
 class LLMThread(QThread):
-    """后台调用 OpenAI 兼容 API 的流式对话线程。
+    """后台调用 PrismaticaAPI 平台 AI 端点的对话线程。
 
     Signals:
-        textReceived(str, int): 每个分片文本 + 该分片的 token 数(由 tiktoken 估算)
-        chatFinished(): 流式响应正常结束
+        textReceived(str, int): 完整响应文本 + 供应商返回的真实 Token 总数
+        chatFinished(): 响应正常结束
             注意:不能命名为 finished,QThread 自带同名信号会在 run 退出时
             自动 emit,导致下游信号被触发两次。
         failed(str): 调用过程中出现异常,参数为错误描述
@@ -47,7 +49,8 @@ class LLMThread(QThread):
         self._message: str = ""
         self._fileText: str = ""
         self._prompt: str = ""
-        self._model: str = "deepseek-chat"
+        self._model: str = "平台模型"
+        self._featureCode: str = "ai_chat"
         self._responseText: str = ""
 
         # ---- 长寿命状态(随对话进行累积)----
@@ -63,6 +66,7 @@ class LLMThread(QThread):
         message: str,
         prompt: Optional[str] = None,
         fileText: str = "",
+        featureCode: str = "ai_chat",
     ) -> None:
         """发起一次对话。
 
@@ -78,10 +82,8 @@ class LLMThread(QThread):
             logger.debug("[LLMThread] 消息为空,忽略请求")
             return
 
-        apiKey = qconfig.get(cfg.AiApiKey) or ""
-        if not apiKey:
-            logger.warning("[LLMThread] 未配置API Key,拒绝发起对话")
-            self.failed.emit("未配置 API Key,请在「设置 → AI 聊天」中填写。")
+        if not getCloudApi().isLoggedIn():
+            self.failed.emit("请先登录 Prismatica 账号后再使用平台 AI。")
             return
 
         self._message = message
@@ -92,9 +94,7 @@ class LLMThread(QThread):
             or "你是一个AI助手,请用中文回答用户的问题。"
         )
         self._responseText = ""
-
-        # 模型选择:始终使用用户在设置页配置的 Chat 模型(支持任意自定义 ID)
-        self._model = qconfig.get(cfg.AiModelChat) or "deepseek-chat"
+        self._featureCode = featureCode
 
         logger.info(
             f"[LLMThread] 发起对话: model={self._model}, "
@@ -146,47 +146,39 @@ class LLMThread(QThread):
     # ------------------------------------------------------------------
     def run(self) -> None:  # noqa: D401
         try:
-            # 延迟导入 openai / tiktoken:避免未配置环境时拖慢启动
-            from openai import OpenAI
-            import tiktoken
-
-            apiKey = qconfig.get(cfg.AiApiKey) or ""
-            baseUrl = qconfig.get(cfg.AiBaseUrl) or "https://api.deepseek.com"
-
-            client = OpenAI(api_key=apiKey, base_url=baseUrl)
-            encoder = tiktoken.get_encoding("cl100k_base")
-
             messages = [
                 {"role": "system", "content": self._prompt},
                 *self._history,
                 {"role": "user", "content": self._message + self._fileText},
             ]
+            import uuid
 
-            response = client.chat.completions.create(
-                model=self._model,
-                messages=messages,
-                stream=True,
+            response = getCloudApi().post(
+                "/v1/ai/chat",
+                body={
+                    "featureCode": self._featureCode,
+                    "messages": messages,
+                    "temperature": 0.3,
+                },
+                idempotencyKey=str(uuid.uuid4()),
+                timeout=180.0,
             )
-
-            for chunk in response:
-                # 流式循环里检查中断标记:UI 主动 stop() 时能快速退出,
-                # 否则 isRunning() 会一直返回 True,导致用户重新打开抽屉时被拒
-                if self.isInterruptionRequested():
-                    logger.info("[LLMThread] 检测到中断请求,提前结束流式")
-                    # 走 chatFinished 路径,UI 端按"被中断"语义处理
-                    self.chatFinished.emit()
-                    return
-                if not chunk.choices:
-                    continue
-                data = chunk.choices[0].delta
-                text = data.content
-                if not text:
-                    continue
-
-                self._responseText += text
-                tokenUsage = len(encoder.encode(text))
-                self._tokenUsage += tokenUsage
-                self.textReceived.emit(text, tokenUsage)
+            if self.isInterruptionRequested():
+                self.chatFinished.emit()
+                return
+            text = str((response or {}).get("message", ""))
+            if not text:
+                raise CloudApiError("BAD_RESPONSE", "平台 AI 未返回有效文本")
+            usage = (response or {}).get("usage") or {}
+            billing = (response or {}).get("billing") or {}
+            self._model = str((response or {}).get("model", "平台模型"))
+            self._responseText = text
+            self._tokenUsage = int(usage.get("totalTokens", 0) or 0)
+            self.textReceived.emit(text, self._tokenUsage)
+            try:
+                signalBus.balanceChanged.emit(int(billing.get("balanceAfter", 0) or 0))
+            except Exception:
+                pass
 
             # 保存历史(剪裁到 maxHistory * 2 条)
             self._history.append({"role": "user", "content": self._message})
@@ -252,11 +244,13 @@ class ChatService(QObject):
         message: str,
         prompt: Optional[str] = None,
         fileText: str = "",
+        featureCode: str = "ai_chat",
     ) -> None:
         self._thread.ask(
             message=message,
             prompt=prompt,
             fileText=fileText,
+            featureCode=featureCode,
         )
 
     def clearHistory(self) -> None:

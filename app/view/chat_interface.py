@@ -44,7 +44,7 @@ from qfluentwidgetspro.chat import (
 )
 
 from app.core.services import ChatService
-from app.core.utils import cfg, logger, qconfig
+from app.core.utils import logger, qconfig
 from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 
@@ -80,10 +80,7 @@ class _ChatHeader(QWidget):
 
     @staticmethod
     def _modelName() -> str:
-        apiKey = qconfig.get(cfg.AiApiKey) or ""
-        if not apiKey:
-            return "未配置 API Key(请到「设置 → AI 聊天」)"
-        return f"模型:{qconfig.get(cfg.AiModelChat)}"
+        return "Prismatica 平台模型 · 按真实 Token 计费"
 
 
 class ChatInterface(QWidget):
@@ -229,19 +226,6 @@ class ChatInterface(QWidget):
     def _sendMessage(self) -> None:
         text = self.messageTextEdit.toPlainText().strip()
         if not text or self.chatService.isRunning:
-            return
-
-        # API Key 校验
-        if not qconfig.get(cfg.AiApiKey):
-            InfoBar.error(
-                title="未配置 API Key",
-                content="请先在「设置 → AI 聊天」中填写 API Key 后再发送消息。",
-                orient=Qt.Orientation.Horizontal,
-                isClosable=True,
-                duration=4000,
-                position=InfoBarPosition.TOP,
-                parent=self.window(),
-            )
             return
 
         # 渲染用户气泡

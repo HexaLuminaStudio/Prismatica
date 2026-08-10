@@ -32,6 +32,11 @@ from qfluentwidgetspro import setLicense
 from app.core.utils import cfg, configureLogging, log, qconfig
 from app.core.utils.setting import MODE
 
+# Qt 6 默认启用逐显示器高 DPI；保留小数缩放，避免 125%/150% 被取整后尺寸跳变。
+QApplication.setHighDpiScaleFactorRoundingPolicy(
+    Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+)
+
 # 日志只允许在应用入口初始化一次，业务模块导入不会创建日志文件。
 configureLogging(MODE)
 

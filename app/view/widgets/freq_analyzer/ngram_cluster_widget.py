@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from app.core.utils import logger
+from app.core.services import beginPaidAnalysisExport
 
 # matplotlib 后端必须在导入 pyplot 前设置
 import matplotlib  # noqa: E402
@@ -738,10 +739,16 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
             return
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
+        transaction = beginPaidAnalysisExport(self, f"N-gram 聚簇图 {fmt.upper()}")
+        if transaction is None:
+            return
         try:
             self._figure.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"图片已保存至：{path}", self)
         except Exception as e:
+            transaction.refund()
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 
     # ------------------------------------------------------------------

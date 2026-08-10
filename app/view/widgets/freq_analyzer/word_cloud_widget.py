@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from app.core.services import beginPaidAnalysisExport
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -835,6 +836,9 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         if not path.lower().endswith(ext):
             path += ext
 
+        transaction = beginPaidAnalysisExport(self, f"词云图 {fmt.upper()}")
+        if transaction is None:
+            return
         try:
             # 直接调用 wordcloud 库的 to_file,矢量/位图质量最佳
             engine = WordCloudEngine()
@@ -857,8 +861,11 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                         bbox_inches="tight",
                         facecolor=self._lastFigure.get_facecolor(),
                     )
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"已保存:{path}", self, duration=2500)
         except Exception as e:
+            transaction.refund()
             logger.exception(f"[WordCloud] 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3500)
 

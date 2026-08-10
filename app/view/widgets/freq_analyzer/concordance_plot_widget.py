@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from app.core.utils import logger
+from app.core.services import beginPaidAnalysisExport
 
 # matplotlib 后端必须在导入 pyplot 前设置
 import matplotlib  # noqa: E402
@@ -349,10 +350,15 @@ class ConcordancePlotCanvas(QWidget):
         )
         if not filePath:
             return
+        charge = beginPaidAnalysisExport(self, f"导出 KWIC 分布图 {fmt.upper()}")
+        if charge is None:
+            return
         try:
             self._fig.savefig(filePath, dpi=150, bbox_inches="tight")
+            charge.commit()
             logger.info(f"[ConcordancePlot] 导出: {filePath}")
         except Exception as e:
+            charge.refund()
             logger.error(f"[ConcordancePlot] 导出失败: {e}")
 
     # ------------------------------------------------------------------

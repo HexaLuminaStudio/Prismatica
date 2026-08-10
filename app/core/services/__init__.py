@@ -19,6 +19,15 @@ from .cloud_insight_service import (
 from .cloud_resource import CloudResource, CloudResourceManifest, getCloudResource
 from .cloud_user import ensureBelowMaxDevices
 from .feature_gate import FeatureGate, GateResult, getFeatureGate
+from .paid_export import ANALYSIS_EXPORT_FEATURE, PaidExportTransaction, beginPaidAnalysisExport
+from .paid_metered import (
+    GLOBAL_DOWNLOAD_FEATURE,
+    HSK_DOWNLOAD_FEATURE,
+    HSK_ESSAY_EXPORT_FEATURE,
+    PaidMeteredTransaction,
+    beginPaidMeteredAction,
+)
+from .pricing_catalog import PricingCatalog, getPricingCatalog
 from .global_download import GlobalDownloadWorker, GlobalGetTotalWorker
 from .global_service import GlobalTokenRefreshThread
 from .hsk_corpus_service import HskCorpusService, hskCorpusService
@@ -66,5 +75,15 @@ __all__ = [
     "FeatureGate",
     "GateResult",
     "getFeatureGate",
+    "ANALYSIS_EXPORT_FEATURE",
+    "PaidExportTransaction",
+    "PaidMeteredTransaction",
+    "HSK_DOWNLOAD_FEATURE",
+    "GLOBAL_DOWNLOAD_FEATURE",
+    "HSK_ESSAY_EXPORT_FEATURE",
+    "PricingCatalog",
+    "beginPaidAnalysisExport",
+    "beginPaidMeteredAction",
+    "getPricingCatalog",
     "ensureBelowMaxDevices",
 ]

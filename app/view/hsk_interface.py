@@ -8,11 +8,17 @@ from qfluentwidgets import (
     InfoBar,
     InfoBarIcon,
     InfoBarPosition,
+    MessageBox,
     TeachingTip,
     TeachingTipTailPosition,
 )
 
-from app.core.services import batchApplyService
+from app.core.services import (
+    HSK_DOWNLOAD_FEATURE,
+    batchApplyService,
+    beginPaidMeteredAction,
+    getPricingCatalog,
+)
 from app.core.utils import logger, signalBus
 from app.view.widgets.download_workbench import DownloadMode, DownloadTaskWorkbench
 from app.view.widgets.hsk_search_widget import (
@@ -208,7 +214,31 @@ class HskInterface(QWidget):
             if dialog.exec():
                 from app.core.services import taskManager
 
-                taskId = taskManager.createTask(HSK_DOWNLOAD_TASK_TYPE, infoDict)
+                transaction = beginPaidMeteredAction(
+                    self.window(),
+                    HSK_DOWNLOAD_FEATURE,
+                    dialog.totalCount,
+                    f"下载 {dialog.totalCount:,} 条 HSK 语料",
+                    confirmedCost=dialog.quotedCost,
+                    showConfirmation=False,
+                )
+                if transaction is None:
+                    return
+                transaction.attachToTaskInfo(infoDict)
+                try:
+                    taskId = taskManager.createTask(HSK_DOWNLOAD_TASK_TYPE, infoDict)
+                except Exception as error:
+                    transaction.refund()
+                    logger.error(f"[HSK] 创建计费下载任务失败: {error}")
+                    InfoBar.error(
+                        "任务创建失败",
+                        "下载预占已退还，请稍后重试。",
+                        parent=self.window(),
+                        duration=3500,
+                        position=InfoBarPosition.TOP_RIGHT,
+                    )
+                    return
+                transaction.handOffToTaskManager()
                 logger.info(f"[HSK] 创建下载任务成功, taskId={taskId}")
                 InfoBar.success(
                     "任务已创建",
@@ -251,15 +281,53 @@ class HskInterface(QWidget):
         items = batchApplyService.getItems(HSK_DOWNLOAD_TASK_TYPE)
         from app.core.services import taskManager
 
+        catalog = getPricingCatalog()
+        costs = [catalog.meteredCost(HSK_DOWNLOAD_FEATURE, item.total) for item in items]
+        if any(cost is None for cost in costs):
+            try:
+                catalog.refreshBlocking()
+            except Exception as error:
+                MessageBox("价格加载失败", str(error), self.window()).exec()
+                return
+            costs = [catalog.meteredCost(HSK_DOWNLOAD_FEATURE, item.total) for item in items]
+        if any(cost is None for cost in costs):
+            MessageBox("暂不可下载", "管理员尚未发布 HSK 下载价格。", self.window()).exec()
+            return
+        totalCost = sum(int(cost or 0) for cost in costs)
+        confirm = MessageBox(
+            "确认提交批量下载",
+            f"将创建 {len(items)} 个 HSK 下载任务，合计预计预占 {totalCost} 点。\n"
+            "各任务成功后分别结算，失败或取消会分别退还。",
+            self.window(),
+        )
+        confirm.yesButton.setText(f"提交并预占 {totalCost} 点")
+        confirm.cancelButton.setText("取消")
+        if not confirm.exec():
+            return
+
         created = 0
         successfulIndexes = []
-        for index, item in enumerate(items):
+        for index, (item, quotedCost) in enumerate(zip(items, costs)):
+            transaction = beginPaidMeteredAction(
+                self.window(),
+                HSK_DOWNLOAD_FEATURE,
+                item.total,
+                f"下载 {item.total:,} 条 HSK 语料",
+                confirmedCost=int(quotedCost or 0),
+                showConfirmation=False,
+            )
+            if transaction is None:
+                break
+            taskInfo = item.toInfoDict()
+            transaction.attachToTaskInfo(taskInfo)
             try:
-                taskId = taskManager.createTask(item.taskType, item.toInfoDict())
+                taskId = taskManager.createTask(item.taskType, taskInfo)
+                transaction.handOffToTaskManager()
                 created += 1
                 successfulIndexes.append(index)
                 logger.info(f"[HSK] 批量创建任务 {taskId}: {item.summary()[:40]}")
             except Exception as exc:
+                transaction.refund()
                 logger.error(f"[HSK] createTask 失败: {exc}")
         for index in reversed(successfulIndexes):
             batchApplyService.removeItem(index, HSK_DOWNLOAD_TASK_TYPE)

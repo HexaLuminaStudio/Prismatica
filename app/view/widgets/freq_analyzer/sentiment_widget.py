@@ -29,6 +29,7 @@ from typing import Dict, List, Optional
 
 import matplotlib
 import numpy as np
+from app.core.services import beginPaidAnalysisExport
 
 # matplotlib 后端必须在 from matplotlib import pyplot 之前显式指定
 # P0-A3 fix 2026-07-18:严格 import 顺序 + force=True
@@ -853,6 +854,9 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         if not path.lower().endswith(ext):
             path += ext
 
+        transaction = beginPaidAnalysisExport(self, f"情感分析报告 {kind.upper()}")
+        if transaction is None:
+            return
         try:
             if kind == "txt":
                 self._exportReportTxt(path)
@@ -865,6 +869,8 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             else:
                 raise ValueError(f"未知导出格式:{kind}")
 
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             InfoBar.success(
                 title="导出成功",
                 content=f"已保存:{path}",
@@ -875,6 +881,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 parent=self,
             )
         except Exception as e:
+            transaction.refund()
             logger.exception(f"[SentimentWidget] {kind} 导出失败: {e}")
             InfoBar.error(
                 title="导出失败",

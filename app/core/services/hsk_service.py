@@ -8,6 +8,8 @@ import json
 import requests
 from PySide6.QtCore import QThread, Signal
 
+from app.core.services.cloud_api import CloudApiError
+from app.core.services.official_corpus import requestOfficialCorpusToken
 from app.core.utils import log
 
 
@@ -17,9 +19,16 @@ class HskTokenRefreshThread(QThread):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, username=None, password=None):
+    def __init__(self, username=None, password=None, useOfficial=None):
         super().__init__()
         from app.core.utils.config import qconfig, Config
+
+        if useOfficial is None:
+            useOfficial = (
+                username is None
+                and password is None
+                and qconfig.get(Config.HSKUseOfficialAccount)
+            )
 
         if username is None:
             username = qconfig.get(Config.HSKLoginUsername)
@@ -28,8 +37,20 @@ class HskTokenRefreshThread(QThread):
 
         self.username = username
         self.password = password
+        self.useOfficial = bool(useOfficial)
 
     def run(self):
+        if self.useOfficial:
+            try:
+                log.info("[HskTokenRefresh] 开始通过 Prismatica 官方账号刷新 Token")
+                self.finished.emit(requestOfficialCorpusToken("hsk"))
+            except CloudApiError as error:
+                log.warning(
+                    f"[HskTokenRefresh] 官方账号刷新失败: code={error.code}"
+                )
+                self.error.emit(error.message)
+            return
+
         if not self.username or not self.password:
             log.warning("[HskTokenRefresh] 缺少登录账号或密码,取消刷新")
             self.error.emit("请先在设置中配置HSK登录账号密码")

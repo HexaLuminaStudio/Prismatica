@@ -653,8 +653,18 @@ class _BillRow(_SurfaceCard):
         titleLabel.setObjectName("accountStrongLabel")
         text.addWidget(titleLabel)
         description = str(data.get("description") or data.get("actionType") or "账户账单")
+        tokenParts = []
+        if data.get("inputTokens") is not None:
+            tokenParts.append(f"输入 {int(data.get('inputTokens') or 0):,} Token")
+        if data.get("outputTokens") is not None:
+            tokenParts.append(f"输出 {int(data.get('outputTokens') or 0):,} Token")
+        version = str(data.get("pricingVersion") or "")
+        details = [description, *tokenParts]
+        if version:
+            details.append(f"价格版本 {version}")
+        details.append(_dateTime(data.get("createdAt")))
         metaLabel = _ElidedLabel(
-            f"{description} · {_dateTime(data.get('createdAt'))}", self
+            " · ".join(details), self
         )
         metaLabel.setObjectName("accountCaptionLabel")
         text.addWidget(metaLabel)
@@ -667,7 +677,7 @@ class _BillRow(_SurfaceCard):
         tone = "success" if status == "settled" else "warning" if status == "pending" else "muted"
         layout.addWidget(_StatusChip(statusText, tone, self))
         cost = int(data.get("realCost", data.get("estimatedCost", 0)) or 0)
-        amount = QLabel(f"-{abs(cost):,} 积分")
+        amount = QLabel(f"-{abs(cost):,} 点")
         amount.setObjectName("accountBillAmount")
         layout.addWidget(amount)
 

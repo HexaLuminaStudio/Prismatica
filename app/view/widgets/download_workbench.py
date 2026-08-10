@@ -44,6 +44,7 @@ from app.core.services import (
     GetTotalWorker,
     GlobalGetTotalWorker,
     batchApplyService,
+    getPricingCatalog,
 )
 from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 
@@ -282,6 +283,7 @@ class DownloadTaskWorkbench(QWidget):
         self._initUi(title, subtitle, pageIcon, modes)
         self._connectSignals()
         batchApplyService.itemsChanged.connect(self._onBatchItemsChanged)
+        getPricingCatalog().catalogChanged.connect(self._onPricingCatalogChanged)
         self._onBatchItemsChanged(batchApplyService.getCount())
         self._applyTheme()
         qconfig.themeChangedFinished.connect(self._applyTheme)
@@ -729,6 +731,9 @@ class DownloadTaskWorkbench(QWidget):
     def _onBatchItemsChanged(self, _count: int) -> None:
         self._renderBatchItems()
 
+    def _onPricingCatalogChanged(self, _catalog: Dict[str, Any]) -> None:
+        self._renderBatchItems()
+
     def _renderBatchItems(self) -> None:
         if self._batchRows is None:
             return
@@ -746,7 +751,13 @@ class DownloadTaskWorkbench(QWidget):
             )
 
         count = len(items)
-        self.batchDownloadButton.setText(f"提交批量任务 ({count})")
+        featureCode = "hsk_download" if self._downloadType == "Hsk" else "global_download"
+        costs = [getPricingCatalog().meteredCost(featureCode, item.total) for item in items]
+        if count > 0 and all(cost is not None for cost in costs):
+            totalCost = sum(int(cost or 0) for cost in costs)
+            self.batchDownloadButton.setText(f"提交批量任务 ({count} 项 · {totalCost} 点)")
+        else:
+            self.batchDownloadButton.setText(f"提交批量任务 ({count})")
         self.batchDownloadButton.setEnabled(count > 0)
         if self._batchCountLabel is not None:
             self._batchCountLabel.setText(str(count))
@@ -775,8 +786,14 @@ class DownloadTaskWorkbench(QWidget):
         summaryLabel = BodyLabel(item.summary(), row)
         summaryLabel.setWordWrap(True)
         textLayout.addWidget(summaryLabel)
+        featureCode = "hsk_download" if self._downloadType == "Hsk" else "global_download"
+        cost = getPricingCatalog().meteredCost(featureCode, item.total)
         totalText = (
-            f"预计 {item.total:,} 条" if item.total > 0 else "数量未确认"
+            f"预计 {item.total:,} 条 · {cost} 点"
+            if item.total > 0 and cost is not None
+            else f"预计 {item.total:,} 条 · 价格同步中"
+            if item.total > 0
+            else "数量未确认"
         )
         totalLabel = CaptionLabel(totalText, row)
         totalLabel.setObjectName("downloadMutedText")
@@ -953,6 +970,12 @@ class DownloadTaskWorkbench(QWidget):
         try:
             batchApplyService.itemsChanged.disconnect(
                 self._onBatchItemsChanged
+            )
+        except Exception:
+            pass
+        try:
+            getPricingCatalog().catalogChanged.disconnect(
+                self._onPricingCatalogChanged
             )
         except Exception:
             pass

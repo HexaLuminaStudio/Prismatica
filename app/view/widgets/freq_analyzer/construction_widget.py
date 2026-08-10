@@ -79,6 +79,7 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
+from app.core.services import beginPaidAnalysisExport
 
 
 # ---------------------------------------------------------------------------
@@ -1104,6 +1105,9 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
+        charge = beginPaidAnalysisExport(self, "导出构式 Slot 填充词表")
+        if charge is None:
+            return
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as fp:
                 writer = csv.writer(fp)
@@ -1136,8 +1140,10 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             e.isSignificant,
                         ]
                     )
-            _showInfoBar("success", "导出成功", path, self)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", path, self)
         except Exception as e:
+            charge.refund()
             logger.exception(f"[ConstructionWidget] 导出 Slot 表失败: {e}")
             _showInfoBar("error", "导出失败", str(e)[:80], self)
 
@@ -1152,6 +1158,9 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "CSV files (*.csv)",
         )
         if not path:
+            return
+        charge = beginPaidAnalysisExport(self, "导出构式内部贴合表")
+        if charge is None:
             return
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as fp:
@@ -1185,8 +1194,10 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             e.isSignificant,
                         ]
                     )
-            _showInfoBar("success", "导出成功", path, self)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", path, self)
         except Exception as e:
+            charge.refund()
             logger.exception(f"[ConstructionWidget] 导出内部表失败: {e}")
             _showInfoBar("error", "导出失败", str(e)[:80], self)
 
@@ -1201,6 +1212,9 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "CSV files (*.csv)",
         )
         if not path:
+            return
+        charge = beginPaidAnalysisExport(self, "导出构式跨距搭配表")
+        if charge is None:
             return
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as fp:
@@ -1236,7 +1250,9 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             e.isSignificant,
                         ]
                     )
-            _showInfoBar("success", "导出成功", path, self)
+            if charge.commit():
+                _showInfoBar("success", "导出成功", path, self)
         except Exception as e:
+            charge.refund()
             logger.exception(f"[ConstructionWidget] 导出搭配表失败: {e}")
             _showInfoBar("error", "导出失败", str(e)[:80], self)

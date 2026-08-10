@@ -19,6 +19,7 @@ from .widgets.titlebar_widget import CustomTitleBar
 from .widgets.prismatica_navigation import PrismaticaNavigationBar
 from .widgets.prismatica_theme import pageBackgroundColor, shellPalette
 from .widgets.page_transition import switchPageInstantly
+from .widgets.window_geometry import fitWindowToAvailableScreen
 from .hsk_interface import HskInterface
 from .hsk_corpus_interface import HskCorpusInterface
 from .global_interface import GlobalInterface
@@ -33,6 +34,9 @@ from .widgets.account.login_dialog import LoginInterface
 
 
 class MainWindow(MSFluentWindow):
+
+    _PREFERRED_SIZE = QSize(1300, 870)
+    _BASE_MINIMUM_SIZE = QSize(720, 480)
 
     def __init__(self, progressCallback=None, startHidden: bool = False):
         """主窗口构造。
@@ -50,6 +54,8 @@ class MainWindow(MSFluentWindow):
         """
         self._progressCallback = progressCallback
         self._startHidden = bool(startHidden)
+        self._screenChangeConnected = False
+        self._observedScreen = None
         self._startupShown = False  # 是否已通过 _showAfterStartup() 显示过
         # 项目管理页「锁定态」:AI 报告生成期间锁住页面交互,
         # 此时不允许通过导航栏离开项目管理页,也不允许直接关闭主窗口。
@@ -338,14 +344,12 @@ class MainWindow(MSFluentWindow):
                 return
             result = dialog.getResult()
             name = result["name"]
-            template = result["template"]
             description = result["description"]
             # 进入「创建中」状态
             self._setProjectCreatingState(True, name)
             # 异步创建(磁盘 I/O 在子线程,不阻塞 UI)
             projectManager.createProjectAsync(
                 name=name,
-                template=template,
                 description=description,
                 tags=result.get("tags", []),
                 onSuccess=self._onMainProjectCreated,
@@ -576,9 +580,11 @@ class MainWindow(MSFluentWindow):
             logger.warning(f"[MainWindow] 更新任务导航角标失败: {exc}")
 
     def initWindow(self):
-        self.resize(1300, 870)
-        self.setMinimumWidth(900)
-        self.setMinimumHeight(700)
+        fitWindowToAvailableScreen(
+            self,
+            self._PREFERRED_SIZE,
+            self._BASE_MINIMUM_SIZE,
+        )
         self.setWindowIcon(QIcon(":app/images/logo.png"))
         self.setWindowTitle("棱溯客户端")
 
@@ -587,14 +593,67 @@ class MainWindow(MSFluentWindow):
         self.splashScreen.setIconSize(QSize(106, 106))
         self.splashScreen.raise_()
 
-        desktop = QApplication.primaryScreen().availableGeometry()
-        w, h = desktop.width(), desktop.height()
-        self.move(w // 2 - self.width() // 2, h // 2 - self.height() // 2)
-
         if not self._startHidden:
             # 兼容旧调用方:照常 show
             self.show()
             QApplication.processEvents()
+
+    def showEvent(self, event) -> None:
+        """显示时绑定屏幕变化，并再次校准高 DPI 下的逻辑窗口尺寸。"""
+        super().showEvent(event)
+        fitWindowToAvailableScreen(
+            self,
+            self._PREFERRED_SIZE,
+            self._BASE_MINIMUM_SIZE,
+            keepCurrentSize=True,
+        )
+        windowHandle = self.windowHandle()
+        if windowHandle is not None and not self._screenChangeConnected:
+            windowHandle.screenChanged.connect(self._onScreenChanged)
+            self._screenChangeConnected = True
+        if windowHandle is not None:
+            self._bindScreenSignals(windowHandle.screen())
+
+    def _bindScreenSignals(self, screen) -> None:
+        """监听当前显示器的工作区和 DPI 变化。"""
+        if screen is self._observedScreen:
+            return
+        if self._observedScreen is not None:
+            for signal in (
+                self._observedScreen.availableGeometryChanged,
+                self._observedScreen.logicalDotsPerInchChanged,
+            ):
+                try:
+                    signal.disconnect(self._onScreenMetricsChanged)
+                except (RuntimeError, TypeError):
+                    pass
+        self._observedScreen = screen
+        if screen is not None:
+            screen.availableGeometryChanged.connect(self._onScreenMetricsChanged)
+            screen.logicalDotsPerInchChanged.connect(self._onScreenMetricsChanged)
+
+    def _onScreenMetricsChanged(self, *_args) -> None:
+        """分辨率、任务栏工作区或系统缩放变化后重新适配。"""
+        fitWindowToAvailableScreen(
+            self,
+            self._PREFERRED_SIZE,
+            self._BASE_MINIMUM_SIZE,
+            screen=self._observedScreen,
+            keepCurrentSize=True,
+            centerWindow=False,
+        )
+
+    def _onScreenChanged(self, screen) -> None:
+        """窗口移到不同 DPI 的显示器后，重新限制尺寸与位置。"""
+        self._bindScreenSignals(screen)
+        fitWindowToAvailableScreen(
+            self,
+            self._PREFERRED_SIZE,
+            self._BASE_MINIMUM_SIZE,
+            screen=screen,
+            keepCurrentSize=True,
+            centerWindow=False,
+        )
 
     def _showAfterStartup(self) -> None:
         """启动彻底完成后由外部调用:显示主窗口。

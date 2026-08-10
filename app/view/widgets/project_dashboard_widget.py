@@ -336,11 +336,12 @@ class ProjectDashboardWidget(QWidget):
         titleRow = QHBoxLayout()
         self.projectNameLabel = QLabel("项目详情")
         self.projectNameLabel.setObjectName("dashboardProjectTitle")
+        self.projectNameLabel.setWordWrap(True)
         self.projectNameLabel.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
         )
-        self.projectNameLabel.setMinimumWidth(240)
-        self.projectNameLabel.setMaximumWidth(480)
+        self.projectNameLabel.setMinimumWidth(0)
+        self.projectNameLabel.setMaximumWidth(16777215)
         titleRow.addWidget(self.projectNameLabel)
         self.projectStatusLabel = QLabel("进行中")
         self.projectStatusLabel.setObjectName("dashboardStatusChip")
@@ -568,6 +569,11 @@ class ProjectDashboardWidget(QWidget):
         visible.sort(key=lambda r: r.createdAt or "", reverse=True)
         if not visible:
             empty = BodyLabel("该分类暂无资源\n可前往分析模块生成研究成果", self.centerPanel)
+            empty.setWordWrap(True)
+            empty.setMinimumWidth(0)
+            empty.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+            )
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setObjectName("dashboardEmptyText")
             self.resourceLayout.addWidget(empty)
@@ -589,6 +595,11 @@ class ProjectDashboardWidget(QWidget):
         self.insightCountLabel.setText(str(len(insights)))
         if not insights:
             empty = BodyLabel("还没有 AI 解读\n生成首份研究报告，沉淀项目结论", self.rightPanel)
+            empty.setWordWrap(True)
+            empty.setMinimumWidth(0)
+            empty.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+            )
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setObjectName("dashboardEmptyText")
             self.insightLayout.addWidget(empty)

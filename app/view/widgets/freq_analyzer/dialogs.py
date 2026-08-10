@@ -37,6 +37,8 @@ from qfluentwidgets import (
 )
 from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 
+from app.core.services import beginPaidAnalysisExport
+
 from .ui_helpers import (
     _makeAlignedItem,
     _makeDialogHeader,
@@ -125,8 +127,17 @@ class ZipfDialog(MessageBoxBase):
             return
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
-        self._figure.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
-        _showInfoBar("success", "导出成功", f"图片已保存至：{path}", self)
+        transaction = beginPaidAnalysisExport(self, f"Zipf 曲线 {fmt.upper()}")
+        if transaction is None:
+            return
+        try:
+            self._figure.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
+            _showInfoBar("success", "导出成功", f"图片已保存至：{path}", self)
+        except Exception as e:
+            transaction.refund()
+            _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 
 
 class NgramDialog(MessageBoxBase):
@@ -223,10 +234,16 @@ class NgramDialog(MessageBoxBase):
             return
         if not path.endswith(".csv"):
             path += ".csv"
+        transaction = beginPaidAnalysisExport(self, f"{self.label} 频率表 CSV")
+        if transaction is None:
+            return
         try:
             self.df.to_csv(path, index=False, encoding="utf-8-sig")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"已保存：{path}", self)
         except Exception as e:
+            transaction.refund()
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
 
 

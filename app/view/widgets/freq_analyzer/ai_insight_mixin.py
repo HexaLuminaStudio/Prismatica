@@ -153,9 +153,7 @@ class AiInsightMixin:
         self._aiInsightService = AiInsightService(self)
         self._aiInsightView = AiInsightDrawerView(self)
         self._aiInsightView.setPanelTitle(self._AI_INSIGHT_PANEL_NAME)
-        self._aiInsightView.setModelName(
-            qconfig.get(cfg.AiModelChat) or "deepseek-chat"
-        )
+        self._aiInsightView.setModelName("Prismatica 平台模型")
         self._aiInsightView.regenerateRequested.connect(self._openAiInsight)
         self._aiInsightView.closeRequested.connect(self._collapseAiInsight)
         self._aiInsightView.styleChanged.connect(self._onAiInsightStyleChanged)

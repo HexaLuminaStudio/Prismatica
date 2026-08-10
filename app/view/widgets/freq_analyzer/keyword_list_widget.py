@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from app.core.services import beginPaidAnalysisExport
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -2067,6 +2068,9 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             return
         if not path.endswith(".csv"):
             path += ".csv"
+        transaction = beginPaidAnalysisExport(self, "主题词表 CSV")
+        if transaction is None:
+            return
         try:
             # 用 utf-8-sig 让 Excel 正确识别中文
             with open(path, "w", encoding="utf-8-sig", newline="") as f:
@@ -2118,8 +2122,11 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                             "是" if bool(row["IsKey"]) else "否",
                         ]
                     )
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"已保存到 {path}", self)
         except Exception as e:
+            transaction.refund()
             logger.exception(f"[KeywordListWidget] 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self)
 

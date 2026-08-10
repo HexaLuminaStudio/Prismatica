@@ -66,6 +66,12 @@ class Config(QConfig):
     GlobalLoginPassword = ConfigItem(
         "CorpusDownload", "GlobalLoginPassword", os.getenv("GLOBAL_LOGIN_PASSWORD", "")
     )
+    HSKUseOfficialAccount = ConfigItem(
+        "CorpusDownload", "HSKUseOfficialAccount", False, BoolValidator()
+    )
+    GlobalUseOfficialAccount = ConfigItem(
+        "CorpusDownload", "GlobalUseOfficialAccount", False, BoolValidator()
+    )
 
     MicaEnabled = ConfigItem("MainWindow", "MicaEnabled", isWin11(), BoolValidator())
     # 是否首次启动(用于决定是否弹出启动期引导窗口)
@@ -88,15 +94,9 @@ class Config(QConfig):
     )
 
     # ============================================================
-    # AI 聊天设置(参考 qfluentwidgetspro chat demo)
-    # ApiKey / BaseUrl / Model 默认支持 DeepSeek,用户可在设置页切换
-    # Chat 模型改为自由输入,支持任意 OpenAI 兼容服务的模型 ID
+    # AI 聊天偏好。供应商 API Key、Base URL 与模型仅在云端后端配置，
+    # 客户端不再保存或读取用户密钥。
     # ============================================================
-    AiApiKey = ConfigItem("AiChat", "AiApiKey", os.getenv("AI_API_KEY", ""))
-    AiBaseUrl = ConfigItem(
-        "AiChat", "AiBaseUrl", os.getenv("AI_BASE_URL", "https://api.deepseek.com")
-    )
-    AiModelChat = ConfigItem("AiChat", "AiModelChat", "deepseek-chat")
     # 系统提示词文件路径。运行时会读取该文件作为 system prompt;
     # 为空或读取失败则使用默认提示词。早期版本该字段存的是提示词正文,
     # 兼容策略:如果是多行文本则视为旧数据,运行时同样当作 prompt 直接使用。
@@ -114,8 +114,7 @@ class Config(QConfig):
 
     # ============================================================
     # AI 解读（PRD-001 REQ-AI-001）专属配置
-    # - 与 AI 聊天共用 AiApiKey / AiBaseUrl / AiModelChat（同一套 LLM）
-    # - 仅 AiInsightStyle（Prompt 风格）是解读独有
+    # 仅 AiInsightStyle（Prompt 风格）是解读独有；模型由云端统一配置。
     # ============================================================
     AiInsightStyle = OptionsConfigItem(
         "AiInsight",

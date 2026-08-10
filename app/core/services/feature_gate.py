@@ -138,10 +138,12 @@ class FeatureGate(QObject):
         billId = preauthResp.get("billId")
         if not billId:
             return GateResult(ok=False, reason="offline", message="预占失败:无 billId")
+        # estimate 与 preauth 之间可能恰逢价格发布；以真正锁定的预占金额为准。
+        actualCost = int(preauthResp.get("estimatedCost", actualCost) or actualCost)
 
         # 3) 通知 UI 余额变了
         try:
-            signalBus.balanceChanged.emit(int(preview.get("balanceAfter", 0)))
+            signalBus.balanceChanged.emit(int(preauthResp.get("balanceAfter", 0)))
         except Exception:
             pass
 

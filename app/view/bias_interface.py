@@ -8,6 +8,7 @@ import io
 
 import numpy as np
 import pandas as pd
+from app.core.services import beginPaidAnalysisExport
 from app.core.services.association_rule_service import mineAssociationRules
 from app.core.utils import logger
 from PySide6.QtCore import Qt, QThread, Signal, QSize
@@ -662,19 +663,28 @@ class ChartDialog(MessageBoxBase):
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
 
-        self._currentFigure.savefig(
-            path, dpi=300, bbox_inches="tight", facecolor="white"
-        )
-        logger.info(f"[Bias] 图表已导出: {path}")
-        InfoBar.success(
-            "导出成功",
-            f"图表已保存至：{path}",
-            Qt.Orientation.Horizontal,
-            True,
-            2500,
-            InfoBarPosition.TOP_RIGHT,
-            self,
-        )
+        transaction = beginPaidAnalysisExport(self, f"偏误统计图 {fmt.upper()}")
+        if transaction is None:
+            return
+        try:
+            self._currentFigure.savefig(
+                path, dpi=300, bbox_inches="tight", facecolor="white"
+            )
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
+            logger.info(f"[Bias] 图表已导出: {path}")
+            InfoBar.success(
+                "导出成功",
+                f"图表已保存至：{path}",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+        except Exception as error:
+            transaction.refund()
+            InfoBar.error("导出失败", str(error), Qt.Orientation.Horizontal, True, 3000, InfoBarPosition.TOP_RIGHT, self)
 
     def _copyImage(self):
         buf = io.BytesIO()
@@ -1138,19 +1148,28 @@ class HeatmapDialog(MessageBoxBase):
             return
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
-        self._currentFigure.savefig(
-            path, dpi=300, bbox_inches="tight", facecolor="white"
-        )
-        logger.info(f"[Bias] 热力图已导出: {path}")
-        InfoBar.success(
-            "导出成功",
-            f"热力图已保存至：{path}",
-            Qt.Orientation.Horizontal,
-            True,
-            2500,
-            InfoBarPosition.TOP_RIGHT,
-            self,
-        )
+        transaction = beginPaidAnalysisExport(self, f"偏误热力图 {fmt.upper()}")
+        if transaction is None:
+            return
+        try:
+            self._currentFigure.savefig(
+                path, dpi=300, bbox_inches="tight", facecolor="white"
+            )
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
+            logger.info(f"[Bias] 热力图已导出: {path}")
+            InfoBar.success(
+                "导出成功",
+                f"热力图已保存至：{path}",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+        except Exception as error:
+            transaction.refund()
+            InfoBar.error("导出失败", str(error), Qt.Orientation.Horizontal, True, 3000, InfoBarPosition.TOP_RIGHT, self)
 
     def _copyImage(self):
         if not self._currentFigure:
@@ -1848,6 +1867,9 @@ class AssociationRulesDialog(MessageBoxBase):
         if not path.endswith(".csv"):
             path += ".csv"
 
+        transaction = beginPaidAnalysisExport(self, "偏误关联规则 CSV")
+        if transaction is None:
+            return
         try:
             exportDf = self.rulesDf.copy()
             exportDf["antecedents"] = exportDf["antecedents"].apply(
@@ -1857,6 +1879,8 @@ class AssociationRulesDialog(MessageBoxBase):
                 lambda s: ", ".join(sorted(list(s))) if s is not None else ""
             )
             exportDf.to_csv(path, index=False, encoding="utf-8-sig")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             InfoBar.success(
                 "导出成功",
                 f"规则已保存至：{path}",
@@ -1867,6 +1891,7 @@ class AssociationRulesDialog(MessageBoxBase):
                 self,
             )
         except Exception as e:
+            transaction.refund()
             InfoBar.error(
                 "导出失败",
                 str(e),
@@ -1893,16 +1918,25 @@ class AssociationRulesDialog(MessageBoxBase):
             return
         if not path.endswith(".png"):
             path += ".png"
-        currentFig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
-        InfoBar.success(
-            "导出成功",
-            f"图片已保存至：{path}",
-            Qt.Orientation.Horizontal,
-            True,
-            2500,
-            InfoBarPosition.TOP_RIGHT,
-            self,
-        )
+        transaction = beginPaidAnalysisExport(self, "偏误关联规则图 PNG")
+        if transaction is None:
+            return
+        try:
+            currentFig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
+            InfoBar.success(
+                "导出成功",
+                f"图片已保存至：{path}",
+                Qt.Orientation.Horizontal,
+                True,
+                2500,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+        except Exception as error:
+            transaction.refund()
+            InfoBar.error("导出失败", str(error), Qt.Orientation.Horizontal, True, 3000, InfoBarPosition.TOP_RIGHT, self)
 
 
 class MatchingWorker(QThread):
@@ -3430,8 +3464,13 @@ class BiasInterface(QWidget):
             columns=["文件", "行号", "句子", "偏误类型", "标记内容", "等级", "国籍"],
         )
 
+        transaction = beginPaidAnalysisExport(self, "偏误分析结果 Excel")
+        if transaction is None:
+            return
         try:
             dfExport.to_excel(filePath, index=False, engine="openpyxl")
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             InfoBar.success(
                 "导出成功",
                 f"结果已保存至：{filePath}",
@@ -3442,6 +3481,7 @@ class BiasInterface(QWidget):
                 self,
             )
         except Exception as e:
+            transaction.refund()
             InfoBar.error(
                 "导出失败",
                 str(e),

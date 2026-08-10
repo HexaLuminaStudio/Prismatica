@@ -26,7 +26,7 @@
     - BodyLabel 多行文本通过连续 addWidget 实现段落,避免 \\n 不生效的问题
 """
 
-from PySide6.QtCore import Qt, QEventLoop, QObject, Signal
+from PySide6.QtCore import QEventLoop, QObject, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QCloseEvent, QFont
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 
@@ -40,12 +40,14 @@ from qfluentwidgets import (
     PasswordLineEdit,
     PrimaryPushButton,
     PushButton,
+    ScrollArea,
     TransparentPushButton,
     setFont,
 )
 from PySide6.QtWidgets import QSizePolicy
 
 from app.core.utils import cfg, logger, qconfig
+from app.view.widgets.window_geometry import fitWindowToAvailableScreen
 
 
 # ----------------------------------------------------------------------
@@ -59,7 +61,7 @@ _LINK_COLOR = QColor(0, 120, 212)
 # ----------------------------------------------------------------------
 # 通用页面基类
 # ----------------------------------------------------------------------
-class _BaseGuidePage(QWidget):
+class _BaseGuidePage(ScrollArea):
     """引导窗口单页基类
 
     布局:
@@ -77,6 +79,12 @@ class _BaseGuidePage(QWidget):
         parent=None,
     ):
         super().__init__(parent=parent)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet("background: transparent; border: none;")
+        self._contentWidget = QWidget(self)
+        self._contentWidget.setStyleSheet("background: transparent;")
+        self.setWidget(self._contentWidget)
 
         # ---- 左侧图标 ----
         self.icon = ImageLabel(iconPath)
@@ -114,20 +122,16 @@ class _BaseGuidePage(QWidget):
                 self.contentLayout.addWidget(lineLabel)
 
         # ---- 顶层水平布局 ----
-        self._hBoxLayout = QHBoxLayout(self)
+        self._hBoxLayout = QHBoxLayout(self._contentWidget)
         self._hBoxLayout.setContentsMargins(48, 0, 48, 0)
         self._hBoxLayout.setSpacing(24)
         self._hBoxLayout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self._hBoxLayout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignVCenter)
         self._hBoxLayout.addLayout(self.contentLayout, 1)
 
-        # 2026-07-27 修复引导窗口初始宽度被压窄:
-        # page 本身若不设最小宽度,ProGuideWindow 内部的 stackedWidget
-        # 在 addPage 后会按"全部页面 sizeHint 的最大值"取最小尺寸。
-        # 但因为 contentLayout 默认是 Preferred,某页内容较少的页面
-        # 会把外层拉窄。强制 page 最小宽度,保证所有页面统一宽。
-        self.setMinimumWidth(720)
-        # 强制 Expanding,禁止被 stackedWidget 收缩
+        # 页面允许随窗口压缩；高度不足时由 ScrollArea 提供纵向滚动。
+        self.setMinimumWidth(0)
+        # 保持 Expanding，宽屏时仍充分使用可用内容区。
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
 
@@ -324,6 +328,7 @@ class _TokenGuideBase(_BaseGuidePage):
         usernameConfigKey: str,
         passwordConfigKey: str,
         tokenConfigKey: str,
+        useOfficialConfigKey: str,
         parent=None,
     ):
         super().__init__(
@@ -337,6 +342,8 @@ class _TokenGuideBase(_BaseGuidePage):
         self._usernameConfigKey = usernameConfigKey
         self._passwordConfigKey = passwordConfigKey
         self._tokenConfigKey = tokenConfigKey
+        self._useOfficialConfigKey = useOfficialConfigKey
+        self._activeRefreshMode = "custom"
 
         # 是否已通过验证(初始值由 _hasExistingToken() 决定)
         self._validated = self._hasExistingToken()
@@ -362,14 +369,24 @@ class _TokenGuideBase(_BaseGuidePage):
         self._addFormRow(formLayout, "密码", self.tokenPasswordEdit)
         self.contentLayout.addLayout(formLayout)
 
-        # ---- 按钮行(仅「获取 Token」)----
-        self.refreshButton = PushButton("获取 Token")
-        self.refreshButton.setFixedWidth(120)
+        # ---- 按钮行:推荐官方账号 + 自定义账号 ----
+        self.officialAccountButton = PrimaryPushButton("使用官方账号")
+        self.officialAccountButton.setMinimumWidth(128)
+        self.officialAccountButton.setAccessibleName("使用 Prismatica 官方账号")
+        self.officialAccountButton.setAccessibleDescription(
+            "由 Prismatica 云端代登录语料平台并保存 Token，客户端不会获取官方密码"
+        )
+        self.officialAccountButton.clicked.connect(self._onOfficialAccountClicked)
+
+        self.refreshButton = PushButton("使用此账号")
+        self.refreshButton.setMinimumWidth(112)
+        self.refreshButton.setAccessibleName("验证并使用自己填写的账号")
         self.refreshButton.clicked.connect(self._onRefreshClicked)
 
         buttonRow = QHBoxLayout()
         buttonRow.setContentsMargins(0, 0, 0, 0)
         buttonRow.setSpacing(12)
+        buttonRow.addWidget(self.officialAccountButton)
         buttonRow.addWidget(self.refreshButton)
         buttonRow.addStretch(1)
         self.contentLayout.addLayout(buttonRow)
@@ -380,7 +397,8 @@ class _TokenGuideBase(_BaseGuidePage):
         self.contentLayout.addWidget(self.statusLabel)
 
         noticeLabel = CaptionLabel(
-            "说明:密码仅在本地用于请求官方 Token,不发送到任何第三方服务器。"
+            "使用自己的账号时，密码仅由本机发送给对应语料平台；"
+            "使用官方账号时，客户端不会获取或保存官方密码。"
         )
         noticeLabel.setTextColor(_TEXT_COLOR_LIGHT, _TEXT_COLOR_DARK)
         noticeLabel.setWordWrap(True)
@@ -388,10 +406,18 @@ class _TokenGuideBase(_BaseGuidePage):
 
         # 启动时立即把状态写好(否则进入页面后状态栏空白)
         if self._validated:
-            self._setStatus("已检测到已保存的 Token,可直接进入下一步。", success=True)
+            accountLabel = (
+                "官方账号"
+                if qconfig.get(getattr(cfg, self._useOfficialConfigKey))
+                else "自己的账号"
+            )
+            self._setStatus(
+                f"已检测到通过{accountLabel}保存的 Token，可直接进入下一步。",
+                success=True,
+            )
         else:
             self._setStatus(
-                "尚未配置 Token,请填写账号密码后点击「获取 Token」进行验证。",
+                "尚未配置 Token。推荐直接使用官方账号，也可以填写自己的账号。",
                 neutral=True,
             )
 
@@ -423,6 +449,39 @@ class _TokenGuideBase(_BaseGuidePage):
         """子类必须重写:返回带 finished(token)/error(str) 信号的对象"""
         raise NotImplementedError
 
+    def _createOfficialRefreshThread(self):
+        """子类必须重写:返回使用云端官方账号的刷新线程。"""
+        raise NotImplementedError
+
+    def _setFormBusy(self, isBusy: bool):
+        self.officialAccountButton.setEnabled(not isBusy)
+        self.refreshButton.setEnabled(not isBusy)
+        self.tokenUsernameEdit.setEnabled(not isBusy)
+        self.tokenPasswordEdit.setEnabled(not isBusy)
+        self.officialAccountButton.setText(
+            "连接中..."
+            if isBusy and self._activeRefreshMode == "official"
+            else "使用官方账号"
+        )
+        self.refreshButton.setText(
+            "验证中..."
+            if isBusy and self._activeRefreshMode == "custom"
+            else "使用此账号"
+        )
+
+    def _startRefresh(self, refreshThread, mode: str):
+        self._activeRefreshMode = mode
+        self._setFormBusy(True)
+        self._refreshThread = refreshThread
+        self._refreshThread.finished.connect(self._onTokenRefreshed)
+        self._refreshThread.error.connect(self._onRefreshError)
+        self._refreshThread.start()
+
+    def _onOfficialAccountClicked(self):
+        logger.info(f"[Guide] 用户选择官方账号 ({self._tokenConfigKey})")
+        self._setStatus("正在连接 Prismatica 官方账号，请稍候...", warn=True)
+        self._startRefresh(self._createOfficialRefreshThread(), "official")
+
     def _onRefreshClicked(self):
         username = self.tokenUsernameEdit.text().strip()
         password = self.tokenPasswordEdit.text().strip()
@@ -433,35 +492,38 @@ class _TokenGuideBase(_BaseGuidePage):
 
         logger.info(f"[Guide] 用户点击获取 Token ({self._usernameConfigKey})")
         self._setStatus("正在请求 Token,请稍候...", warn=True)
-        self.refreshButton.setEnabled(False)
-        self.refreshButton.setText("获取中...")
-
-        self._refreshThread = self._createRefreshThread(username, password)
-        self._refreshThread.finished.connect(self._onTokenRefreshed)
-        self._refreshThread.error.connect(self._onRefreshError)
-        self._refreshThread.start()
+        self._startRefresh(self._createRefreshThread(username, password), "custom")
 
     def _onTokenRefreshed(self, token: str):
-        self.refreshButton.setEnabled(True)
-        self.refreshButton.setText("获取 Token")
-        qconfig.set(
-            getattr(cfg, self._usernameConfigKey), self.tokenUsernameEdit.text().strip()
-        )
-        qconfig.set(
-            getattr(cfg, self._passwordConfigKey), self.tokenPasswordEdit.text().strip()
-        )
+        self._setFormBusy(False)
+        isOfficial = self._activeRefreshMode == "official"
+        if not isOfficial:
+            qconfig.set(
+                getattr(cfg, self._usernameConfigKey),
+                self.tokenUsernameEdit.text().strip(),
+            )
+            qconfig.set(
+                getattr(cfg, self._passwordConfigKey),
+                self.tokenPasswordEdit.text().strip(),
+            )
         qconfig.set(getattr(cfg, self._tokenConfigKey), token)
+        qconfig.set(getattr(cfg, self._useOfficialConfigKey), isOfficial)
         # 标记为已通过,触发 GuideWindow 重新评估「下一步」按钮
         self._validated = True
-        self._setStatus("Token 已保存,可进入下一步", success=True)
-        logger.info(f"[Guide] {self._usernameConfigKey} Token 引导配置成功")
+        accountLabel = "官方账号" if isOfficial else "自己的账号"
+        self._setStatus(
+            f"已使用{accountLabel}并保存 Token，可进入下一步。",
+            success=True,
+        )
+        logger.info(
+            f"[Guide] {self._tokenConfigKey} Token 引导配置成功 mode={self._activeRefreshMode}"
+        )
 
         # 通知外部:验证状态变化
         self.validationChanged.emit()
 
     def _onRefreshError(self, error: str):
-        self.refreshButton.setEnabled(True)
-        self.refreshButton.setText("获取 Token")
+        self._setFormBusy(False)
         # 验证失败时保持 _validated=False,确保「下一步」被禁用
         self._validated = False
         self._setStatus(f"获取失败:{error}", error=True)
@@ -501,14 +563,15 @@ class HskTokenGuideInterface(_TokenGuideBase):
             iconPath=":/app/icons/Hsk.svg",
             title="HSK 令牌配置",
             introLines=[
-                "输入 HSK 官方账号密码后点击「获取 Token」即可自动登录并保存;",
-                "也可直接跳过,后续在「设置 → 下载功能设置」中补配。",
+                "推荐使用 Prismatica 提供的官方账号，一键获取并保存 HSK Token。",
+                "也可以填写自己的 HSK 账号；后续可在设置中重新配置。",
             ],
             usernamePlaceholder="请输入 HSK 账号(邮箱)",
             passwordPlaceholder="请输入 HSK 密码",
             usernameConfigKey="HSKLoginUsername",
             passwordConfigKey="HSKLoginPassword",
             tokenConfigKey="HSKLoginToken",
+            useOfficialConfigKey="HSKUseOfficialAccount",
             parent=parent,
         )
 
@@ -516,6 +579,11 @@ class HskTokenGuideInterface(_TokenGuideBase):
         from app.core.services import HskTokenRefreshThread
 
         return HskTokenRefreshThread(username, password)
+
+    def _createOfficialRefreshThread(self):
+        from app.core.services import HskTokenRefreshThread
+
+        return HskTokenRefreshThread(useOfficial=True)
 
 
 # ----------------------------------------------------------------------
@@ -529,14 +597,15 @@ class GlobalTokenGuideInterface(_TokenGuideBase):
             iconPath=":/app/icons/Global.svg",
             title="Global 令牌配置",
             introLines=[
-                "输入 Global 官方 UserID 与密码后点击「获取 Token」即可自动登录并保存;",
-                "也可直接跳过,后续在「设置 → 下载功能设置」中补配。",
+                "推荐使用 Prismatica 提供的官方账号，一键获取并保存 Global Token。",
+                "也可以填写自己的 Global 账号；后续可在设置中重新配置。",
             ],
             usernamePlaceholder="请输入 Global UserID",
             passwordPlaceholder="请输入 Global Password",
             usernameConfigKey="GlobalLoginUsername",
             passwordConfigKey="GlobalLoginPassword",
             tokenConfigKey="GlobalLoginToken",
+            useOfficialConfigKey="GlobalUseOfficialAccount",
             parent=parent,
         )
 
@@ -545,56 +614,29 @@ class GlobalTokenGuideInterface(_TokenGuideBase):
 
         return GlobalTokenRefreshThread(username, password)
 
+    def _createOfficialRefreshThread(self):
+        from app.core.services import GlobalTokenRefreshThread
+
+        return GlobalTokenRefreshThread(useOfficial=True)
+
 
 # ----------------------------------------------------------------------
 # 页面 6:AI 聊天配置
 # ----------------------------------------------------------------------
 class AiChatGuideInterface(_BaseGuidePage):
-    """AI 聊天配置页
-
-    让用户在首次启动时一次性配置 AI 聊天所需的全部参数,
-    与设置页的「AI 聊天设置」保持一致的行为:
-        - API Key(密码框)
-        - API Base URL(默认 DeepSeek,支持任意 OpenAI 兼容服务)
-        - Chat 模型 ID(自由输入,默认 deepseek-chat)
-        - 多轮上下文轮数(下拉 5 / 10 / 20 / 50,默认 10)
-        - 系统提示词文件(可选)
-
-    任何字段都可留空跳过,后续在「设置 → AI 聊天设置」随时修改。
-    留空时不会阻断引导流程,AI 聊天页在未配置 API Key 时会在发送时给出友好提示。
-    """
+    """平台 AI 说明与多轮上下文偏好页。"""
 
     def __init__(self, parent=None):
         super().__init__(
             iconPath=":/app/icons/Robot.svg",
-            title="AI 聊天配置",
+            title="平台 AI",
             bodyLines=[
-                "配置 Prismatica 内置 AI 助手的访问参数。",
-                "默认对接 DeepSeek(OpenAI 兼容协议),也可填入任何兼容服务",
-                "(如 OpenAI / 通义千问 / 月之暗面等)。",
-                "全部字段均可留空跳过,后续在「设置 → AI 聊天设置」中补配。",
+                "Prismatica 统一提供 AI 模型和服务端 API Key，客户端无需配置密钥。",
+                "每次请求按供应商返回的真实输入、输出 Token 分别计费。",
+                "发送前会按当前价格预占，完成后按请求开始时锁定的价格结算。",
             ],
             parent=parent,
         )
-
-        # ---- API Key(密码框)----
-        self.apiKeyEdit = PasswordLineEdit()
-        self.apiKeyEdit.setPlaceholderText("如 DeepSeek / OpenAI / Qwen 的 API Key")
-        self.apiKeyEdit.setText(qconfig.get(cfg.AiApiKey) or "")
-
-        # ---- API Base URL ----
-        self.baseUrlEdit = LineEdit()
-        self.baseUrlEdit.setPlaceholderText("https://api.deepseek.com")
-        self.baseUrlEdit.setText(
-            qconfig.get(cfg.AiBaseUrl) or "https://api.deepseek.com"
-        )
-
-        # ---- Chat 模型 ID(自由输入)----
-        self.chatModelEdit = LineEdit()
-        self.chatModelEdit.setPlaceholderText(
-            "如 deepseek-chat / gpt-4o / qwen-max / deepseek-reasoner …"
-        )
-        self.chatModelEdit.setText(qconfig.get(cfg.AiModelChat) or "deepseek-chat")
 
         # ---- 多轮上下文轮数(下拉)----
         self.maxHistoryCombo = ComboBox()
@@ -606,9 +648,6 @@ class AiChatGuideInterface(_BaseGuidePage):
         formLayout = QVBoxLayout()
         formLayout.setContentsMargins(0, 0, 0, 0)
         formLayout.setSpacing(8)
-        self._addFormRow(formLayout, "API Key", self.apiKeyEdit)
-        self._addFormRow(formLayout, "Base URL", self.baseUrlEdit)
-        self._addFormRow(formLayout, "Chat 模型", self.chatModelEdit)
         self._addFormRow(formLayout, "历史轮数", self.maxHistoryCombo)
         self.contentLayout.addLayout(formLayout)
 
@@ -622,10 +661,10 @@ class AiChatGuideInterface(_BaseGuidePage):
         actionRow.setContentsMargins(0, 0, 0, 0)
         actionRow.setSpacing(8)
 
-        self.saveButton = PrimaryPushButton("保存配置")
+        self.saveButton = PrimaryPushButton("保存偏好")
         self.saveButton.clicked.connect(self._onSaveClicked)
 
-        self.skipButton = TransparentPushButton("暂时跳过")
+        self.skipButton = TransparentPushButton("使用默认值")
         self.skipButton.clicked.connect(self._onSkipClicked)
 
         actionRow.addWidget(self.saveButton)
@@ -635,9 +674,8 @@ class AiChatGuideInterface(_BaseGuidePage):
 
         # ---- 安全说明 ----
         noticeLabel = CaptionLabel(
-            "说明:API Key 仅保存在本地 config.json,用于调用对应大模型服务;"
-            "不会上传到任何第三方服务器。点击「暂时跳过」可在后续任何时候"
-            "前往「设置 → AI 聊天设置」补配。"
+            "供应商密钥只保存在 Prismatica 云端环境变量中，不会下发到客户端；"
+            "用户账单会记录价格版本、输入 Token、输出 Token 与实际扣费。"
         )
         noticeLabel.setTextColor(_TEXT_COLOR_LIGHT, _TEXT_COLOR_DARK)
         noticeLabel.setWordWrap(True)
@@ -662,16 +700,11 @@ class AiChatGuideInterface(_BaseGuidePage):
     # 跳过 / 保存 行为
     # ------------------------------------------------------------------
     def _onSkipClicked(self) -> None:
-        """用户点击「暂时跳过」:
-        - 清空所有字段(避免误把半填内容写入 cfg)
-        - 在状态栏给出明确反馈
-        """
-        logger.info("[Guide] 用户主动跳过 AI 聊天配置")
-        self.apiKeyEdit.clear()
-        self.baseUrlEdit.clear()
-        self.chatModelEdit.clear()
+        """恢复默认历史轮数。"""
+        self.maxHistoryCombo.setCurrentText("10")
+        logger.info("[Guide] 平台 AI 使用默认历史轮数")
         self._setStatus(
-            "已跳过 AI 聊天配置。后续可在「设置 → AI 聊天设置」中随时补配。",
+            "已恢复默认历史轮数。",
             success=True,
         )
 
@@ -696,89 +729,16 @@ class AiChatGuideInterface(_BaseGuidePage):
         return True
 
     def _validateInput(self, *, showSuccess: bool) -> bool:
-        """实际校验逻辑
-
-        规则(宽松,不阻断):
-            - 全部留空:视为跳过,允许继续
-            - 填写了 API Key,则 Base URL 与 Chat 模型必须非空
-            - 单独填 Base URL 或模型(无 Key)允许,但在状态栏提示"无效"
-
-        Returns:
-            True  - 通过(可继续)
-            False - 校验失败(已在状态栏展示原因)
-        """
-        apiKey = self.apiKeyEdit.text().strip()
-        baseUrl = self.baseUrlEdit.text().strip()
-        chatModel = self.chatModelEdit.text().strip()
-
-        # 全部留空:跳过
-        if not apiKey and not baseUrl and not chatModel:
-            if showSuccess:
-                self._setStatus("已跳过 AI 聊天配置。", neutral=True)
-            return True
-
-        # 必填联动校验:有 Key 就要有 URL 和 模型
-        if apiKey and not baseUrl:
-            self._setStatus(
-                "已填写 API Key,但 Base URL 为空,请补全或清空 API Key。",
-                error=True,
-            )
-            return False
-
-        if apiKey and not chatModel:
-            self._setStatus(
-                "已填写 API Key,但 Chat 模型为空,请补全或清空 API Key。",
-                error=True,
-            )
-            return False
-
-        # 仅填 Base URL / 模型(无 Key):提示但不阻断
-        if not apiKey and (baseUrl or chatModel):
-            self._setStatus(
-                "提示:未填写 API Key,已填的 Base URL / 模型将不会保存。",
-                warn=True,
-            )
-            return True
-
-        # 完整填写:成功
+        """历史轮数始终来自受限下拉选项。"""
         if showSuccess:
-            self._setStatus("AI 聊天配置已就绪。", success=True)
+            self._setStatus("平台 AI 偏好已就绪。", success=True)
         return True
 
     def save(self) -> None:
-        """页面数据保存:写入 cfg(由 GuideWindow 在用户点「完成」时统一调用)
-
-        设计:
-            - **留空字段不覆盖**已有值,避免误删用户之前的配置
-            - 只有完整的(apiKey + baseUrl + chatModel 三者齐全)才落盘三者
-            - 仅有部分字段时,丢弃这些字段(避免出现"有 Key 但无 URL"的不一致状态)
-            - **历史轮数总是保存**(有默认值 10)
-        """
-        apiKey = self.apiKeyEdit.text().strip()
-        baseUrl = self.baseUrlEdit.text().strip()
-        chatModel = self.chatModelEdit.text().strip()
+        """只保存客户端多轮上下文偏好。"""
         maxHistory = int(self.maxHistoryCombo.currentText())
-
-        # 仅当 API Key + Base URL + 模型 三者都非空时,才落盘 AI 字段
-        if apiKey and baseUrl and chatModel:
-            qconfig.set(cfg.AiApiKey, apiKey)
-            qconfig.set(cfg.AiBaseUrl, baseUrl)
-            qconfig.set(cfg.AiModelChat, chatModel)
-            logger.info(
-                f"[Guide] AI 聊天配置已完整保存 "
-                f"(apiKey=***{apiKey[-4:]}, baseUrl={baseUrl}, "
-                f"chatModel={chatModel})"
-            )
-        else:
-            logger.info(
-                "[Guide] AI 聊天配置不完整或被跳过,保持 cfg 原值不变 "
-                f"(apiKey={'已填' if apiKey else '空'}, "
-                f"baseUrl={'已填' if baseUrl else '空'}, "
-                f"chatModel={'已填' if chatModel else '空'})"
-            )
-
-        # 历史轮数总是保存(下拉框必有值)
         qconfig.set(cfg.AiMaxHistory, maxHistory)
+        logger.info(f"[Guide] 平台 AI 历史轮数已保存: {maxHistory}")
 
     def _setHint(self) -> None:
         """页面初始提示,明确告知用户此页可跳过"""
@@ -865,7 +825,7 @@ class GuideWindow(QObject):
     rejected = Signal()
 
     # 紧凑窗口尺寸:跟随 ProGuideWindow 默认,但显式设一个合理范围
-    _WINDOW_MIN_SIZE = (760, 520)
+    _WINDOW_MIN_SIZE = (640, 420)
     _WINDOW_DEFAULT_SIZE = (860, 540)
 
     def __init__(self):
@@ -885,21 +845,20 @@ class GuideWindow(QObject):
             def __init__(self):
                 super().__init__()
                 # 紧凑尺寸:不让窗口过大或过小
-                self.setMinimumSize(*GuideWindow._WINDOW_MIN_SIZE)
-                self.resize(*GuideWindow._WINDOW_DEFAULT_SIZE)
+                fitWindowToAvailableScreen(
+                    self,
+                    QSize(*GuideWindow._WINDOW_DEFAULT_SIZE),
+                    QSize(*GuideWindow._WINDOW_MIN_SIZE),
+                )
                 self.previousButton.setText("上一步")
                 self.nextButton.setText("下一步")
                 self.launchButton.setText("完成")
 
-                # 2026-07-27 修复引导窗口初始宽度被压窄:
-                # ProGuideWindow 内部有 stackedWidget 装载各 page,
-                # 默认 sizePolicy 允许它在内容变化时压缩整体宽度,
-                # 表现出来就是「刚启动时窗口很窄,拖动后才恢复」。
-                # 强制设最小宽度 + Expanding policy,锁定窗口宽度。
+                # stackedWidget 允许在小屏压缩，页面自身负责纵向滚动。
                 sw = getattr(self, "stackedWidget", None)
                 if sw is not None:
                     try:
-                        sw.setMinimumWidth(GuideWindow._WINDOW_DEFAULT_SIZE[0])
+                        sw.setMinimumWidth(0)
                         sw.setSizePolicy(
                             QSizePolicy.Policy.Expanding,
                             QSizePolicy.Policy.Expanding,
@@ -908,25 +867,17 @@ class GuideWindow(QObject):
                         pass
 
             def showEvent(self, event):
-                """窗口首次显示时再强制校准一次宽度。
-
-                2026-07-27 修复:
-                setMinimumSize + setSizePolicy 在某些 ProGuideWindow
-                内部布局链下,首次 exec() 仍可能出现宽度被压成图标宽。
-                在 showEvent 里再次 resize 到默认尺寸,作为最终兜底。
-                """
+                """窗口首次显示时按当前屏幕工作区再次校准尺寸。"""
                 super().showEvent(event)
                 try:
                     # 先让 Qt 完成一次完整 layout pass
                     self.layout().activate() if self.layout() else None
-                    # 再 resize 到默认尺寸,覆盖可能存在的窄 geometry
-                    targetW, targetH = GuideWindow._WINDOW_DEFAULT_SIZE
-                    if self.width() < targetW or self.height() < targetH:
-                        self.resize(targetW, targetH)
-                        # 再触发一次 processEvents 让新尺寸生效
-                        from PySide6.QtWidgets import QApplication
-
-                        QApplication.processEvents()
+                    fitWindowToAvailableScreen(
+                        self,
+                        QSize(*GuideWindow._WINDOW_DEFAULT_SIZE),
+                        QSize(*GuideWindow._WINDOW_MIN_SIZE),
+                        keepCurrentSize=True,
+                    )
                 except Exception:
                     pass
 

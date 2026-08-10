@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -180,7 +181,7 @@ class DownloadCard(CardWidget):
         self.errorLabel = QLabel("", self.errorFrame)
         self.errorLabel.setObjectName("errorText")
         self.errorLabel.setWordWrap(True)
-        self.errorLabel.setMaximumHeight(40)
+        self.errorLabel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         errorLayout.addWidget(errorTitle)
         errorLayout.addWidget(self.errorLabel)
         self.errorFrame.hide()

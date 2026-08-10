@@ -5,9 +5,10 @@
 """
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
-from app.core.utils import logger
+from app.core.utils import logger, signalBus
 from PySide6.QtCore import QObject, Signal
 
 from app.core.api.task_control import taskControl
@@ -38,6 +39,9 @@ class TaskManager(QObject):
         self.maxConcurrentTasks = maxConcurrentTasks
         self.pendingQueue: List[str] = []  # 待处理任务队列
         self.isRunning = True
+        self._billingExecutor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="download-billing"
+        )
 
         # 恢复数据库中未完成的任务
         self.restorePendingTasks()
@@ -207,6 +211,7 @@ class TaskManager(QObject):
             if taskId in self.pendingQueue:
                 self.pendingQueue.remove(taskId)
                 taskControl.cancelTask(taskId)
+                self._queueBillingFinalization(taskId, succeeded=False)
                 self.taskCancelled.emit(taskId)
                 logger.info(f"[TaskManager] 取消队列中的任务: {taskId}")
                 return True
@@ -226,6 +231,7 @@ class TaskManager(QObject):
         # 阶段 3:更新数据库并通知(锁内做轻量操作)
         with self.lock:
             taskControl.cancelTask(taskId)
+            self._queueBillingFinalization(taskId, succeeded=False)
             self.taskCancelled.emit(taskId)
             logger.info(f"[TaskManager] 停止任务: {taskId}")
             self.processQueue()
@@ -502,6 +508,7 @@ class TaskManager(QObject):
             for taskId in self.pendingQueue.copy():
                 self.pendingQueue.remove(taskId)
                 taskControl.cancelTask(taskId)
+                self._queueBillingFinalization(taskId, succeeded=False)
                 self.taskCancelled.emit(taskId)
 
             # 从 workers 字典中摘出所有 worker(用 pop 避免迭代时修改)
@@ -519,6 +526,10 @@ class TaskManager(QObject):
 
         # 阶段 3:锁内做轻量收尾
         with self.lock:
+            for taskId, _worker in workersToStop:
+                taskControl.cancelTask(taskId)
+                self._queueBillingFinalization(taskId, succeeded=False)
+                self.taskCancelled.emit(taskId)
             logger.info(f"[TaskManager] 停止所有任务，共停止: {stoppedCount} 个")
         return stoppedCount
 
@@ -547,6 +558,7 @@ class TaskManager(QObject):
                     del self.workers[taskId]
 
             logger.info(f"[TaskManager] 已关闭，共停止 {stoppedCount} 个任务")
+            self._billingExecutor.shutdown(wait=False)
 
     # 内部回调方法
     def onTaskProgress(self, taskId: str, progressInfo: Dict[str, Any]):
@@ -554,6 +566,39 @@ class TaskManager(QObject):
         progress = progressInfo.get("progress", 0)
         taskControl.updateProgress(taskId, progress)
         self.taskProgress.emit(taskId, progressInfo)
+
+    def _queueBillingFinalization(self, taskId: str, succeeded: bool) -> None:
+        """后台结算或退还下载任务，避免计费网络请求阻塞 Qt 主线程。"""
+        task = taskControl.queryTask(taskId)
+        billing = dict(((task or {}).get("info") or {}).get("_billing") or {})
+        billId = str(billing.get("billId") or "")
+        if not billId or billing.get("billingMode") != "metered":
+            return
+
+        def _finalize() -> None:
+            from app.core.services.cloud_billing import getCloudBilling
+
+            for attempt in range(2):
+                try:
+                    if succeeded:
+                        result = getCloudBilling().commitMetered(billId)
+                    else:
+                        result = getCloudBilling().refund(billId)
+                    signalBus.balanceChanged.emit(
+                        int(result.get("balanceAfter", 0) or 0)
+                    )
+                    logger.info(
+                        f"[TaskManager] 下载计费已{'结算' if succeeded else '退还'}: "
+                        f"taskId={taskId}, billId={billId}"
+                    )
+                    return
+                except Exception as error:
+                    logger.warning(
+                        f"[TaskManager] 下载计费同步失败 attempt={attempt + 1}: "
+                        f"taskId={taskId}, billId={billId}, error={error}"
+                    )
+
+        self._billingExecutor.submit(_finalize)
 
     def onTaskFinished(
         self, taskId: str, success: bool, message: str, filePath: str = ""
@@ -583,10 +628,12 @@ class TaskManager(QObject):
                 taskControl.finishTask(
                     taskId, {"message": message, "filePath": filePath}
                 )
+                self._queueBillingFinalization(taskId, succeeded=True)
                 self.taskCompleted.emit(taskId, filePath or "")
                 logger.info(f"[TaskManager] 任务完成: {taskId}, filePath={filePath}")
             else:
                 taskControl.failTask(taskId, message)
+                self._queueBillingFinalization(taskId, succeeded=False)
                 self.taskFailed.emit(taskId, message)
                 logger.error(f"[TaskManager] 任务失败: {taskId}, {message}")
 
@@ -610,6 +657,7 @@ class TaskManager(QObject):
         # 阶段 3:锁内做数据库与信号通知
         with self.lock:
             taskControl.failTask(taskId, error)
+            self._queueBillingFinalization(taskId, succeeded=False)
             self.taskFailed.emit(taskId, error)
             logger.error(f"[TaskManager] 任务失败: {taskId}, 错误: {error}")
 

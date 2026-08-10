@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtWidgets import QAbstractButton, QDialog, QHBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -12,21 +12,12 @@ from qfluentwidgets import (
     LineEdit,
     MessageBoxBase,
     PlainTextEdit,
-    SegmentedWidget,
     StrongBodyLabel,
     SubtitleLabel,
     TitleLabel,
 )
 
 from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
-
-
-_TEMPLATES = [
-    ("blank", "空白", FluentIcon.DOCUMENT),
-    ("teaching", "教学研究", FluentIcon.EDUCATION),
-    ("academic", "学术研究", FluentIcon.LIBRARY),
-    ("custom", "自定义", FluentIcon.SETTING),
-]
 
 
 class _BaseProjectDialog(MessageBoxBase):
@@ -50,7 +41,6 @@ class NewProjectDialog(_BaseProjectDialog):
     """设计稿对应的新建项目 MessageBox。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        self._templateKey = "teaching"
         super().__init__(parent, title="新建项目")
 
     def _buildUi(self) -> None:
@@ -78,22 +68,6 @@ class NewProjectDialog(_BaseProjectDialog):
         view.addLayout(nameMeta)
 
         view.addSpacing(6)
-        view.addWidget(StrongBodyLabel("来源模板", parent))
-        self.templatePicker = SegmentedWidget(parent)
-        for key, label, icon in _TEMPLATES:
-            self.templatePicker.addItem(
-                key,
-                label,
-                icon=icon,
-                onClick=lambda _checked=False, route=key: self._setTemplate(route),
-            )
-        self.templatePicker.setCurrentItem(self._templateKey)
-        self.templatePicker.setMinimumHeight(40)
-        for item in self.templatePicker.findChildren(QAbstractButton):
-            normalizeButton(item, height=36)
-        view.addWidget(self.templatePicker)
-
-        view.addSpacing(6)
         view.addWidget(StrongBodyLabel("描述（可选）", parent))
         self.descEdit = PlainTextEdit(parent)
         self.descEdit.setPlaceholderText("简要描述项目目标、语料来源与分析方向")
@@ -116,9 +90,6 @@ class NewProjectDialog(_BaseProjectDialog):
         normalizeButton(self.cancelButton, height=PRIMARY_HEIGHT, minimumWidth=96)
         self.nameEdit.textChanged.connect(self._onNameChanged)
         self._onNameChanged("")
-
-    def _setTemplate(self, key: str) -> None:
-        self._templateKey = key
 
     def _onNameChanged(self, text: str) -> None:
         length = len(text.strip())
@@ -146,11 +117,9 @@ class NewProjectDialog(_BaseProjectDialog):
         return tags
 
     def getResult(self) -> dict:
-        templateMap = {key: label for key, label, _icon in _TEMPLATES}
         return {
             "name": self.nameEdit.text().strip(),
             "description": self.descEdit.toPlainText().strip(),
-            "template": templateMap.get(self._templateKey, "教学研究"),
             "tags": self._tags(),
         }
 

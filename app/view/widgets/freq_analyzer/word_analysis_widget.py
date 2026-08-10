@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib
+from app.core.services import beginPaidAnalysisExport
 
 matplotlib.use("Agg", force=True)  # 后台线程用 Agg 渲染
 import matplotlib.pyplot as plt
@@ -1028,6 +1029,9 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
+        transaction = beginPaidAnalysisExport(self, "高频词表 CSV")
+        if transaction is None:
+            return
         try:
             with open(path, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
@@ -1043,7 +1047,10 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             f"{entry.cumPct * 100:.4f}",
                         ]
                     )
+            if not transaction.commit():
+                raise RuntimeError("导出文件已生成，但计费结算失败；本次费用已释放")
             _showInfoBar("success", "导出成功", f"已保存到 {path}", self)
         except Exception as e:
+            transaction.refund()
             logger.exception(f"[WordAnalysisWidget] 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self)

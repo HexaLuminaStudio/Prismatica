@@ -86,7 +86,7 @@ class _ProjectCard(QFrame):
         self.project = project
         self.setObjectName("projectCard")
         self.setMinimumHeight(222)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self._buildUi()
 
     def _buildUi(self) -> None:
@@ -118,7 +118,9 @@ class _ProjectCard(QFrame):
         )
         description.setObjectName("projectCardDescription")
         description.setWordWrap(True)
-        description.setMaximumHeight(44)
+        description.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+        )
         layout.addWidget(description)
 
         tags = QHBoxLayout()
@@ -207,12 +209,16 @@ class _EmptyProjectState(QFrame):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("projectEmptyState")
+        self.setMinimumWidth(0)
         self.setMaximumWidth(520)
-        self.setMinimumHeight(350)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(48, 38, 48, 38)
-        layout.setSpacing(12)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumHeight(0)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.emptyLayout = QVBoxLayout(self)
+        self.emptyLayout.setContentsMargins(48, 38, 48, 38)
+        self.emptyLayout.setSpacing(12)
+        self.emptyLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         iconHost = QFrame(self)
         iconHost.setObjectName("projectEmptyIcon")
@@ -220,29 +226,47 @@ class _EmptyProjectState(QFrame):
         iconLayout = QVBoxLayout(iconHost)
         iconLayout.setContentsMargins(20, 20, 20, 20)
         iconLayout.addWidget(IconWidget(FluentIcon.FOLDER, iconHost))
-        layout.addWidget(iconHost, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.emptyLayout.addWidget(iconHost, alignment=Qt.AlignmentFlag.AlignHCenter)
         title = TitleLabel("还没有任何项目", self)
-        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self._prepareWrappedLabel(title, centered=True)
+        self.emptyLayout.addWidget(title)
         description = BodyLabel(
             "项目用于组织语料、分析结果和 AI 解读，所有研究数据都保存在本地。",
             self,
         )
-        description.setWordWrap(True)
-        description.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(description)
+        self._prepareWrappedLabel(description, centered=True)
+        self.emptyLayout.addWidget(description)
         bullets = BodyLabel(
             "• 自动归档词频、网络、KWIC 等分析结果\n"
             "• 一键生成并归档 AI 研究报告\n"
             "• 本地保存，登录后可使用跨设备能力",
             self,
         )
-        bullets.setWordWrap(True)
-        layout.addWidget(bullets)
+        self._prepareWrappedLabel(bullets)
+        self.emptyLayout.addWidget(bullets)
         button = PrimaryPushButton(FluentIcon.ADD, "创建第一个项目", self)
         button.setObjectName("projectEmptyCreateButton")
         normalizeButton(button, height=PRIMARY_HEIGHT, minimumWidth=154)
         button.clicked.connect(self.createRequested)
-        layout.addWidget(button, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.emptyLayout.addWidget(button, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+    @staticmethod
+    def _prepareWrappedLabel(label: QLabel, centered: bool = False) -> None:
+        label.setWordWrap(True)
+        label.setMinimumWidth(0)
+        label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+        )
+        label.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+            if centered
+            else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        sideMargin = 24 if self.width() < 420 else 48
+        self.emptyLayout.setContentsMargins(sideMargin, 38, sideMargin, 38)
 
 
 class ProjectManagerWidget(QWidget):
@@ -360,7 +384,7 @@ class ProjectManagerWidget(QWidget):
         self.cardGrid.setVerticalSpacing(14)
         self.contentLayout.addWidget(self.cardGridHost)
         self.emptyHost = QWidget(self.contentHost)
-        self.emptyHost.setMinimumHeight(500)
+        self.emptyHost.setMinimumHeight(360)
         emptyLayout = QVBoxLayout(self.emptyHost)
         emptyLayout.setContentsMargins(0, 0, 0, 0)
         emptyLayout.addStretch(1)
@@ -543,7 +567,6 @@ class ProjectManagerWidget(QWidget):
             self._setCreatingState(True, result["name"])
             projectManager.createProjectAsync(
                 name=result["name"],
-                template=result["template"],
                 description=result["description"],
                 tags=result.get("tags", []),
                 onSuccess=self._onProjectCreated,

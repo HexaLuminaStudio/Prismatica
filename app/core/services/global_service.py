@@ -9,6 +9,8 @@ import json
 import requests
 from PySide6.QtCore import QThread, Signal
 
+from app.core.services.cloud_api import CloudApiError
+from app.core.services.official_corpus import requestOfficialCorpusToken
 from app.core.utils import log
 
 
@@ -18,9 +20,16 @@ class GlobalTokenRefreshThread(QThread):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, userId=None, password=None):
+    def __init__(self, userId=None, password=None, useOfficial=None):
         super().__init__()
         from app.core.utils.config import qconfig, Config
+
+        if useOfficial is None:
+            useOfficial = (
+                userId is None
+                and password is None
+                and qconfig.get(Config.GlobalUseOfficialAccount)
+            )
 
         if userId is None:
             userId = qconfig.get(Config.GlobalLoginUsername)
@@ -29,6 +38,7 @@ class GlobalTokenRefreshThread(QThread):
 
         self.userId = userId
         self.password = password
+        self.useOfficial = bool(useOfficial)
 
     @staticmethod
     def md5(text):
@@ -38,6 +48,17 @@ class GlobalTokenRefreshThread(QThread):
         return hashlib.md5(text.encode("utf-8")).hexdigest()
 
     def run(self):
+        if self.useOfficial:
+            try:
+                log.info("[GlobalTokenRefresh] 开始通过 Prismatica 官方账号刷新 Token")
+                self.finished.emit(requestOfficialCorpusToken("global"))
+            except CloudApiError as error:
+                log.warning(
+                    f"[GlobalTokenRefresh] 官方账号刷新失败: code={error.code}"
+                )
+                self.error.emit(error.message)
+            return
+
         if not self.userId or not self.password:
             log.warning("[GlobalTokenRefresh] 缺少登录账号或密码,取消刷新")
             self.error.emit("请先在设置中配置Global登录账号密码")

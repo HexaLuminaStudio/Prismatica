@@ -60,6 +60,8 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
+from app.core.services import HSK_ESSAY_EXPORT_FEATURE, getPricingCatalog
+
 
 class HskCorpusExportOptionsDialog(MessageBoxBase):
     """一体化导出配置对话框。"""
@@ -90,6 +92,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         self._previewNoTitle = 0
         self._previewMissingInLocal = 0
         self._previewTotal = len(self.zwhaoList)
+        self.quotedCost: int | None = None
 
         # 控件
         self._dirEdit: Optional[QLineEdit] = None
@@ -101,10 +104,13 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         self._mergeNameEdit: Optional[QLineEdit] = None
         self._previewLabel: Optional[BodyLabel] = None
         self._warningLabel: Optional[CaptionLabel] = None
+        self._priceLabel: Optional[BodyLabel] = None
 
         self._buildUi()
+        getPricingCatalog().catalogChanged.connect(self._onCatalogChanged)
         self._computePreview()
         self._updatePreviewLabel()
+        self._updatePriceLabel()
 
         # 文案
         self.yesButton.setText("开始导出")
@@ -221,6 +227,10 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         self._warningLabel.setStyleSheet("color: #d83a3a;")
         self._warningLabel.setVisible(False)
         self.viewLayout.addWidget(self._warningLabel)
+
+        self._priceLabel = BodyLabel("", self.widget)
+        self._priceLabel.setWordWrap(True)
+        self.viewLayout.addWidget(self._priceLabel)
 
     # ------------------------------------------------------------------
     # 辅助
@@ -366,6 +376,38 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
                 )
                 self._warningLabel.setVisible(True)
 
+    def _onCatalogChanged(self, _catalog: Dict[str, Any]) -> None:
+        self._updatePriceLabel()
+
+    def _updatePriceLabel(self) -> None:
+        if self._priceLabel is None:
+            return
+        willExport = self._previewWithTitle + self._previewNoTitle
+        if willExport <= 0:
+            self.quotedCost = None
+            self._priceLabel.setText("当前没有可计费的作文")
+            self.yesButton.setEnabled(False)
+            return
+        catalog = getPricingCatalog()
+        cost = catalog.meteredCost(HSK_ESSAY_EXPORT_FEATURE, willExport)
+        if cost is None:
+            self.quotedCost = None
+            self._priceLabel.setText("预计费用：价格同步中...")
+            self.yesButton.setEnabled(False)
+            catalog.refreshAsync()
+            return
+        rule = catalog.rule(HSK_ESSAY_EXPORT_FEATURE)
+        unitSize = int(rule.get("unitSize", 100) or 100)
+        perUnitCost = int(rule.get("perUnitCost", 0) or 0)
+        self.quotedCost = int(cost)
+        self._priceLabel.setText(
+            f"预计费用：{cost} 点 · 每 {unitSize:,} 篇 {perUnitCost} 点，"
+            "不足一档按一档计；开始后锁定当前价格"
+        )
+        self._priceLabel.setStyleSheet("color: #007C70; font-weight: 600;")
+        self.yesButton.setText(f"开始导出（{cost} 点）")
+        self.yesButton.setEnabled(True)
+
     # ------------------------------------------------------------------
     # 校验 / 接受
     # ------------------------------------------------------------------
@@ -376,6 +418,8 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         if not self.zwhaoList:
             return False
         if not self._outputDir:
+            return False
+        if self.quotedCost is None:
             return False
         outPath = Path(self._outputDir)
         # 目录可写校验:尝试创建
@@ -399,5 +443,14 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
             "previewWithTitle": self._previewWithTitle,
             "previewNoTitle": self._previewNoTitle,
             "previewMissingInLocal": self._previewMissingInLocal,
+            "billedEssayCount": self._previewWithTitle + self._previewNoTitle,
+            "quotedCost": self.quotedCost,
         }
         super().accept()
+
+    def closeEvent(self, event) -> None:
+        try:
+            getPricingCatalog().catalogChanged.disconnect(self._onCatalogChanged)
+        except Exception:
+            pass
+        super().closeEvent(event)
