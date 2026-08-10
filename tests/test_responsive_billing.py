@@ -5,6 +5,7 @@ import threading
 import time
 
 from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from app.core.services import paid_export as paidExportModule
 from app.core.services import paid_metered as paidMeteredModule
@@ -71,8 +72,18 @@ def testRunResponsiveCallKeepsQtEventLoopAlive(qtbot) -> None:
     mainThreadId = threading.get_ident()
     timerThreadIds: list[int] = []
     workerThreadIds: list[int] = []
+    cursorStates = []
+    buttonClicks: list[bool] = []
+    button = QPushButton("等待期间仍可操作")
+    qtbot.addWidget(button)
+    button.clicked.connect(lambda: buttonClicks.append(True))
 
-    QTimer.singleShot(10, lambda: timerThreadIds.append(threading.get_ident()))
+    def interactDuringWait() -> None:
+        timerThreadIds.append(threading.get_ident())
+        cursorStates.append(QApplication.overrideCursor())
+        button.click()
+
+    QTimer.singleShot(10, interactDuringWait)
 
     def operation() -> str:
         workerThreadIds.append(threading.get_ident())
@@ -82,6 +93,8 @@ def testRunResponsiveCallKeepsQtEventLoopAlive(qtbot) -> None:
     assert runResponsiveCall(operation) == "完成"
     assert timerThreadIds == [mainThreadId]
     assert workerThreadIds and workerThreadIds[0] != mainThreadId
+    assert cursorStates == [None]
+    assert buttonClicks == [True]
 
 
 def testPaidMeteredHidesConfirmationBeforePreauth(qtbot, monkeypatch) -> None:

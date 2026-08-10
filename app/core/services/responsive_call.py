@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Generic, TypeVar, cast
 
-from PySide6.QtCore import QCoreApplication, QEventLoop, QThread, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QEventLoop, QThread
 
 T = TypeVar("T")
 
@@ -30,7 +29,7 @@ def runResponsiveCall(operation: Callable[[], T]) -> T:
     """在 Qt 主线程调用时把阻塞工作移到后台，并同步返回其结果。
 
     调用方仍可沿用原有顺序式事务代码；等待期间 Qt 会继续处理绘制、
-    信号和定时器事件。为避免重复预占，短暂屏蔽新的用户输入。
+    鼠标、键盘、信号和定时器事件，也不会强制显示系统忙碌光标。
     非 Qt 环境或已经位于工作线程时直接执行，避免嵌套线程。
     """
     application = QCoreApplication.instance()
@@ -41,17 +40,9 @@ def runResponsiveCall(operation: Callable[[], T]) -> T:
     eventLoop = QEventLoop()
     worker.finished.connect(eventLoop.quit)
 
-    qtApplication = QApplication.instance()
-    if qtApplication is not None:
-        qtApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-
     worker.start()
-    try:
-        eventLoop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
-        worker.wait()
-    finally:
-        if qtApplication is not None:
-            qtApplication.restoreOverrideCursor()
+    eventLoop.exec(QEventLoop.ProcessEventsFlag.AllEvents)
+    worker.wait()
 
     if worker.error is not None:
         raise worker.error
