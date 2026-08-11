@@ -35,7 +35,6 @@ from qfluentwidgets import (
     PushButton,
     ScrollArea,
     StrongBodyLabel,
-    SubtitleLabel,
     TitleLabel,
     isDarkTheme,
     qconfig,
@@ -43,6 +42,7 @@ from qfluentwidgets import (
 
 from app.core.services import CloudApiError, getCloudAccount, getCloudAuth
 from app.core.utils import logger, signalBus
+from app.core.utils.application_lifecycle import isApplicationShuttingDown
 from app.view.widgets.prismatica_theme import pageBackgroundColor
 
 
@@ -85,15 +85,30 @@ class _AccountTask(QRunnable):
 
     @Slot()
     def run(self) -> None:
+        if isApplicationShuttingDown():
+            return
         try:
             result = self._operation()
         except CloudApiError as exc:
-            self.signals.failed.emit(exc.message)
+            self._emitSafely(self.signals.failed, exc.message)
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[AccountInterface] 后台请求失败: {exc}")
-            self.signals.failed.emit("无法连接到账户服务，请稍后重试")
+            self._emitSafely(
+                self.signals.failed,
+                "无法连接到账户服务，请稍后重试",
+            )
         else:
-            self.signals.succeeded.emit(result)
+            self._emitSafely(self.signals.succeeded, result)
+
+    @staticmethod
+    def _emitSafely(signal, *args) -> None:
+        """退出过程中接收对象可能已销毁，此时直接丢弃任务结果。"""
+        if isApplicationShuttingDown():
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            logger.debug("[AccountInterface] 应用退出中，已丢弃后台任务结果")
 
 
 def _runAccountTask(operation, onSuccess, onFailure) -> None:

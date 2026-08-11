@@ -5,9 +5,10 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 
 from app.core.utils import logger
+from app.core.utils.application_lifecycle import isApplicationShuttingDown
 
 from .cloud_api import getCloudApi
 from .responsive_call import runResponsiveCall
@@ -26,6 +27,7 @@ class PricingCatalog(QObject):
         super().__init__(parent)
         self._catalog: Dict[str, Any] = {}
         self._refreshing = False
+        self._shuttingDown = False
         self._consecutiveFailures = 0
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing-catalog")
         self._loadedFromWorker.connect(self._applyCatalog)
@@ -33,6 +35,9 @@ class PricingCatalog(QObject):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.refreshAsync)
+        application = QCoreApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self.shutdown)
         self.refreshAsync()
 
     @property
@@ -85,7 +90,7 @@ class PricingCatalog(QObject):
         return dict(self._catalog)
 
     def refreshAsync(self) -> None:
-        if self._refreshing:
+        if self._refreshing or self._shuttingDown or isApplicationShuttingDown():
             return
         self._timer.stop()
         self._refreshing = True
@@ -97,6 +102,8 @@ class PricingCatalog(QObject):
         )
 
         def _done(completed) -> None:
+            if self._shuttingDown or isApplicationShuttingDown():
+                return
             try:
                 data = completed.result() or {}
                 self._loadedFromWorker.emit(data if isinstance(data, dict) else {})
@@ -106,6 +113,8 @@ class PricingCatalog(QObject):
         future.add_done_callback(_done)
 
     def _applyCatalog(self, data: Dict[str, Any]) -> None:
+        if self._shuttingDown or isApplicationShuttingDown():
+            return
         self._refreshing = False
         wasRecovering = self._consecutiveFailures > 0
         self._consecutiveFailures = 0
@@ -118,6 +127,8 @@ class PricingCatalog(QObject):
             self.catalogChanged.emit(dict(self._catalog))
 
     def _onFailed(self, message: str) -> None:
+        if self._shuttingDown or isApplicationShuttingDown():
+            return
         self._refreshing = False
         self._consecutiveFailures += 1
         backoffLevel = min(self._consecutiveFailures - 1, 4)
@@ -137,6 +148,14 @@ class PricingCatalog(QObject):
                 f"下次重试等待 {retryDelayMs // 1000} 秒: {message}"
             )
         self.refreshFailed.emit(message)
+
+    def shutdown(self) -> None:
+        """停止定时刷新；运行中的请求完成后不再向 Qt 对象发信号。"""
+        if self._shuttingDown:
+            return
+        self._shuttingDown = True
+        self._timer.stop()
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 _singleton: PricingCatalog | None = None

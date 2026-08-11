@@ -26,6 +26,7 @@ from PySide6.QtCore import QCoreApplication, QObject, QRunnable, QThreadPool, QT
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
+from app.core.utils.application_lifecycle import isApplicationShuttingDown
 
 
 class CleanSignals(QObject):
@@ -72,16 +73,27 @@ class CleanWorker(QRunnable):
     def cancel(self):
         self._cancel = True
 
+    @staticmethod
+    def _emitSafely(signal, *args) -> None:
+        if isApplicationShuttingDown():
+            return
+        try:
+            signal.emit(*args)
+        except RuntimeError:
+            logger.debug("[CleanWorker] 应用退出中，已丢弃后台任务信号")
+
     def run(self):
         try:
+            if isApplicationShuttingDown():
+                return
             start = time.time()
-            self.signals.started.emit()
-            self.signals.progress.emit(5, "读取语料...")
+            self._emitSafely(self.signals.started)
+            self._emitSafely(self.signals.progress, 5, "读取语料...")
 
             if not self._enabled:
                 # 关闭清洗:不需要重洗,直接完成(Coordinator 会清缓存 + 切换规则)
-                self.signals.progress.emit(100, "已停用清洗")
-                self.signals.finished.emit(time.time() - start, 0)
+                self._emitSafely(self.signals.progress, 100, "已停用清洗")
+                self._emitSafely(self.signals.finished, time.time() - start, 0)
                 return
 
             # 读取所有原文
@@ -92,8 +104,8 @@ class CleanWorker(QRunnable):
                 rows = cur.fetchall()
 
             if not rows:
-                self.signals.progress.emit(100, "语料为空")
-                self.signals.finished.emit(time.time() - start, 0)
+                self._emitSafely(self.signals.progress, 100, "语料为空")
+                self._emitSafely(self.signals.finished, time.time() - start, 0)
                 return
 
             # 创建独立 cleaner(避免与主线程共享)
@@ -121,7 +133,7 @@ class CleanWorker(QRunnable):
             for i, row in enumerate(rows):
                 if self._cancel:
                     logger.warning("[CleanWorker] 任务被取消")
-                    self.signals.cancelled.emit()
+                    self._emitSafely(self.signals.cancelled)
                     return
                 fileName = row["file_name"]
                 raw = row["raw_text"]
@@ -130,12 +142,16 @@ class CleanWorker(QRunnable):
                 totalChars += len(cleaned)
                 if (i + 1) % chunkEmitAt == 0 or (i + 1) == total:
                     pct = int(5 + (i + 1) / total * 80)
-                    self.signals.progress.emit(pct, f"清洗中 ({i + 1}/{total})...")
+                    self._emitSafely(
+                        self.signals.progress,
+                        pct,
+                        f"清洗中 ({i + 1}/{total})...",
+                    )
 
             # 批量写回新 cache
-            self.signals.progress.emit(90, "写入缓存...")
+            self._emitSafely(self.signals.progress, 90, "写入缓存...")
             if self._cancel:
-                self.signals.cancelled.emit()
+                self._emitSafely(self.signals.cancelled)
                 return
             with self._store._lock:
                 self._store._conn.executemany(
@@ -155,7 +171,7 @@ class CleanWorker(QRunnable):
             if doPosOnClean and posTagFn is not None:
                 import json as _json
 
-                self.signals.progress.emit(92, "词性标注中...")
+                self._emitSafely(self.signals.progress, 92, "词性标注中...")
                 try:
                     cleanedTexts = [text for _, _, text in toCache]
                     fileNames = [name for name, _, _ in toCache]
@@ -165,7 +181,7 @@ class CleanWorker(QRunnable):
                     taggedBatch = None
 
                 if taggedBatch:
-                    self.signals.progress.emit(95, "写入 POS 缓存...")
+                    self._emitSafely(self.signals.progress, 95, "写入 POS 缓存...")
                     try:
                         with self._store._lock:
                             self._store._conn.executemany(
@@ -204,16 +220,23 @@ class CleanWorker(QRunnable):
                     logger.warning(f"[CleanWorker] 清理 pos_cache 失败: {e}")
 
             elapsed = time.time() - start
-            self.signals.progress.emit(100, f"清洗完成: {totalChars:,} 字符")
+            self._emitSafely(
+                self.signals.progress,
+                100,
+                f"清洗完成: {totalChars:,} 字符",
+            )
             logger.info(
                 f"[CleanWorker] 完成: 文件={total} 字符={totalChars:,} 耗时={elapsed:.2f}s"
             )
-            self.signals.finished.emit(elapsed, totalChars)
+            self._emitSafely(self.signals.finished, elapsed, totalChars)
         except Exception as e:
             import traceback
 
             logger.exception(f"[CleanWorker] 失败: {e}")
-            self.signals.failed.emit(f"{e}\n{traceback.format_exc()}")
+            self._emitSafely(
+                self.signals.failed,
+                f"{e}\n{traceback.format_exc()}",
+            )
 
 
 class CleanCoordinator(QObject):

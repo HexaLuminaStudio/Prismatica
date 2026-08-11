@@ -4,10 +4,10 @@
 负责设备指纹采集、加密存储和自动登录功能
 """
 
-import hashlib
 import platform
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 
@@ -19,6 +19,7 @@ from .encryption import AESCipherGCM, deriveKey, hash256
 _IS_WINDOWS = sys.platform.startswith("win")
 # Windows: 隐藏子进程控制台窗口,防止 GUI 进程启动 wmic 时弹出 conhost 终端
 _CREATE_NO_WINDOW = 0x08000000
+_deviceIdentifierLock = threading.RLock()
 
 
 def _runHidden(cmd, timeout=5):
@@ -54,7 +55,7 @@ class DeviceIdentifier:
         """
         初始化设备标识管理器
 
-        :param storagePath: 设备标识存储路径，默认使用 %APPDATA%\Prismatica\device.bin
+        :param storagePath: 设备标识存储路径，默认使用 %APPDATA%\\Prismatica\\device.bin
         """
         self.storagePath = storagePath
         self.deviceId = None
@@ -396,20 +397,21 @@ class DeviceIdentifier:
 
         :return: 重置是否成功
         """
-        try:
-            storagePath = self._getAppDataPath()
-            if storagePath.exists():
-                storagePath.unlink()
+        with _deviceIdentifierLock:
+            try:
+                storagePath = self._getAppDataPath()
+                if storagePath.exists():
+                    storagePath.unlink()
 
-            self.deviceId = None
-            self.deviceFeatures = {}
-            self._cipher = None
+                self.deviceId = None
+                self.deviceFeatures = {}
+                self._cipher = None
 
-            logger.info("[DeviceID] 本地设备标识已重置")
-            return True
-        except Exception:
-            logger.exception("[DeviceID] 重置本地设备标识失败")
-            return False
+                logger.info("[DeviceID] 本地设备标识已重置")
+                return True
+            except Exception:
+                logger.exception("[DeviceID] 重置本地设备标识失败")
+                return False
 
 
 # 创建全局单例
@@ -423,9 +425,10 @@ def getDeviceIdentifier() -> DeviceIdentifier:
     :return: DeviceIdentifier实例
     """
     global _deviceIdentifier
-    if _deviceIdentifier is None:
-        _deviceIdentifier = DeviceIdentifier()
-    return _deviceIdentifier
+    with _deviceIdentifierLock:
+        if _deviceIdentifier is None:
+            _deviceIdentifier = DeviceIdentifier()
+        return _deviceIdentifier
 
 
 def generateOrLoadDeviceId() -> str:
@@ -439,21 +442,28 @@ def generateOrLoadDeviceId() -> str:
         P1-fix 2026-07-18:让异常透传,而不是返回空字符串或旧 ID,
         上层 UI 可以捕获并展示明确的失败原因,客服侧可定位。
     """
-    device = getDeviceIdentifier()
+    with _deviceIdentifierLock:
+        device = getDeviceIdentifier()
 
-    # 尝试加载现有标识
-    if device.load():
-        return device.deviceId
+        # 进程内已经完成加载或生成时直接复用。硬件指纹不会在一次运行期间
+        # 自发变化；需要重新采集时由 reset() 显式清除缓存和持久化文件。
+        if device.deviceId and device.deviceFeatures:
+            return device.deviceId
 
-    # 生成新标识。collectDeviceFeatures() 会在特征数不足时抛 RuntimeError,
-    # 此处直接透传给调用方。
-    device.collectDeviceFeatures()
-    deviceId = device.generateDeviceId()
-    saved = device.save()
-    if not saved:
-        logger.error("[DeviceID] 新设备标识已生成,但持久化失败")
+        # 尝试加载现有标识
+        if device.load():
+            return device.deviceId
 
-    return deviceId
+        # 生成新标识。collectDeviceFeatures() 会在特征数不足时抛 RuntimeError,
+        # 此处直接透传给调用方。
+        if not device.deviceFeatures:
+            device.collectDeviceFeatures()
+        deviceId = device.generateDeviceId()
+        saved = device.save()
+        if not saved:
+            logger.error("[DeviceID] 新设备标识已生成,但持久化失败")
+
+        return deviceId
 
 
 if __name__ == "__main__":

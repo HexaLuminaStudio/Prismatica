@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 
+import pytest
 from PySide6.QtCore import QObject, Signal
 from qfluentwidgets import PrimaryPushButton
 
 from app.core.services import cloud_api as cloudApiModule
-from app.core.services.cloud_auth import CloudLoginWorker
+from app.core.services.cloud_auth import CloudAuth, CloudLoginWorker
 from app.core.services import pricing_catalog as pricingCatalogModule
+from app.view import account_interface as accountInterfaceModule
 from app.view.widgets.account import login_dialog as loginDialogModule
+from app.view.widgets.freq_analyzer import clean_coordinator as cleanCoordinatorModule
 
 
 class _Response:
@@ -70,6 +74,228 @@ def testCloudApiAllowsExplicitSystemProxyOptIn(monkeypatch) -> None:
     assert cloudApiModule.CloudApi()._httpClient().trust_env is True
 
 
+def testCloudApiMovesMainThreadRequestToWorker(qtbot, monkeypatch) -> None:
+    mainThreadId = threading.get_ident()
+    requestThreadIds = []
+    requestTimeouts = []
+
+    class _ThreadRecordingClient(_HttpClient):
+        def request(self, **kwargs):
+            requestThreadIds.append(threading.get_ident())
+            requestTimeouts.append(kwargs["timeout"])
+            return super().request(**kwargs)
+
+    fakeCfg = SimpleNamespace(
+        cloudBaseUrl=SimpleNamespace(value="http://cloud.test"),
+        cloudUseSystemProxy=SimpleNamespace(value=False),
+    )
+    monkeypatch.setattr(cloudApiModule, "cfg", fakeCfg)
+    monkeypatch.setattr(cloudApiModule.requests, "Session", _ThreadRecordingClient)
+    api = cloudApiModule.CloudApi()
+    monkeypatch.setattr(api, "_headers", lambda **_kwargs: {})
+
+    assert api.get("/healthz", withAuth=False) == {"reachable": True}
+    assert requestThreadIds and requestThreadIds[0] != mainThreadId
+    assert requestTimeouts == [cloudApiModule.DEFAULT_REQUEST_TIMEOUT]
+
+
+def testCloudApiDiscardsConnectionPoolAfterTimeout(qtbot, monkeypatch) -> None:
+    clients = []
+
+    class _TimeoutClient(_HttpClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        def request(self, **kwargs):
+            raise cloudApiModule.Timeout("模拟 VPN 切换超时")
+
+        def close(self) -> None:
+            self.closed = True
+
+    def createClient():
+        client = _TimeoutClient()
+        clients.append(client)
+        return client
+
+    fakeCfg = SimpleNamespace(
+        cloudBaseUrl=SimpleNamespace(value="http://cloud.test"),
+        cloudUseSystemProxy=SimpleNamespace(value=False),
+    )
+    monkeypatch.setattr(cloudApiModule, "cfg", fakeCfg)
+    monkeypatch.setattr(cloudApiModule.requests, "Session", createClient)
+    api = cloudApiModule.CloudApi()
+    monkeypatch.setattr(api, "_headers", lambda **_kwargs: {})
+
+    with pytest.raises(cloudApiModule.CloudApiError, match="NETWORK_ERROR"):
+        api.get("/healthz", withAuth=False)
+    assert clients and clients[0].closed is True
+
+
+def testRefreshUsesSingleFlightForConcurrent401(monkeypatch) -> None:
+    auth = CloudAuth()
+    oldSession = cloudApiModule.CloudSession(
+        accessToken="old-access",
+        refreshToken="refresh-token",
+        userId=1,
+    )
+
+    class _RefreshApi:
+        def __init__(self) -> None:
+            self.session = oldSession
+            self.calls = 0
+
+        def getSession(self):
+            return self.session
+
+        def post(self, *_args, **_kwargs):
+            self.calls += 1
+            time.sleep(0.05)
+            return {"tokens": {}, "user": {}}
+
+    api = _RefreshApi()
+    auth._api = api
+
+    def applyResponse(_data) -> None:
+        api.session = cloudApiModule.CloudSession(
+            accessToken="new-access",
+            refreshToken="new-refresh",
+            userId=1,
+        )
+
+    monkeypatch.setattr(auth, "_applyLoginResponse", applyResponse)
+    results = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(auth._refreshAccessToken("old-access"))
+        )
+        for _ in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == [True, True, True]
+    assert api.calls == 1
+
+
+def testRefreshNetworkFailureUsesBackoff(monkeypatch) -> None:
+    auth = CloudAuth()
+
+    class _FailingApi:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.session = cloudApiModule.CloudSession(
+                accessToken="access",
+                refreshToken="refresh",
+                userId=1,
+            )
+
+        def getSession(self):
+            return self.session
+
+        def post(self, *_args, **_kwargs):
+            self.calls += 1
+            raise cloudApiModule.CloudApiError("NETWORK_ERROR", "模拟超时")
+
+    api = _FailingApi()
+    auth._api = api
+
+    assert auth._refreshAccessToken("access") is False
+    assert auth._refreshAccessToken("access") is False
+    assert api.calls == 1
+    assert auth._refreshFailureCount == 1
+
+
+def testBootstrapRefreshesExpiredSessionInBackground(monkeypatch) -> None:
+    auth = CloudAuth()
+    auth._api.setSession(
+        cloudApiModule.CloudSession(
+            accessToken="expired",
+            refreshToken="refresh",
+            userId=1,
+            expiresAt=int(time.time()) - 1,
+        )
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    monkeypatch.setattr(auth, "_loadSession", lambda: True)
+
+    def refresh(_failedAccessToken: str = "") -> bool:
+        started.set()
+        release.wait(1.0)
+        return True
+
+    monkeypatch.setattr(auth, "_refreshAccessToken", refresh)
+
+    assert auth.bootstrap() is True
+    assert started.wait(0.5)
+    assert auth._bootstrapRefreshThread is not None
+    assert auth._bootstrapRefreshThread.is_alive()
+    release.set()
+    auth._bootstrapRefreshThread.join(1.0)
+
+
+def testBootstrapKeepsStillValidAccessTokenWithoutNetwork(monkeypatch) -> None:
+    auth = CloudAuth()
+    auth._api.setSession(
+        cloudApiModule.CloudSession(
+            accessToken="valid",
+            refreshToken="refresh",
+            userId=1,
+            expiresAt=int(time.time()) + 1800,
+        )
+    )
+    monkeypatch.setattr(auth, "_loadSession", lambda: True)
+    monkeypatch.setattr(
+        auth,
+        "_refreshAccessToken",
+        lambda *_args: pytest.fail("有效 access token 不应在启动时刷新"),
+    )
+
+    assert auth.bootstrap() is True
+    assert auth._bootstrapRefreshThread is None
+
+
+def testAccountTaskDropsResultWhenShutdownBegins(monkeypatch) -> None:
+    shuttingDown = False
+    delivered = []
+
+    monkeypatch.setattr(
+        accountInterfaceModule,
+        "isApplicationShuttingDown",
+        lambda: shuttingDown,
+    )
+
+    def operation():
+        nonlocal shuttingDown
+        shuttingDown = True
+        return {"done": True}
+
+    task = accountInterfaceModule._AccountTask(operation)
+    task.signals.succeeded.connect(delivered.append)
+    task.run()
+
+    assert delivered == []
+
+
+def testCleanWorkerDoesNotStartDuringShutdown(monkeypatch) -> None:
+    started = []
+    monkeypatch.setattr(
+        cleanCoordinatorModule,
+        "isApplicationShuttingDown",
+        lambda: True,
+    )
+    worker = cleanCoordinatorModule.CleanWorker(None, None, True, "rule-hash")
+    worker.signals.started.connect(lambda: started.append(True))
+
+    worker.run()
+
+    assert started == []
+
+
 def testPricingCatalogUsesBoundedExponentialBackoff(qtbot, monkeypatch) -> None:
     monkeypatch.setattr(
         pricingCatalogModule.PricingCatalog,
@@ -89,8 +315,7 @@ def testPricingCatalogUsesBoundedExponentialBackoff(qtbot, monkeypatch) -> None:
         assert catalog._consecutiveFailures == 0
         assert catalog._timer.interval() == 30_000
     finally:
-        catalog._timer.stop()
-        catalog._executor.shutdown(wait=True)
+        catalog.shutdown()
 
 
 def testCloudLoginWorkerRunsServiceOffMainThread(qtbot) -> None:

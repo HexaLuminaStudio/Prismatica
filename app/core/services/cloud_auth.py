@@ -5,21 +5,25 @@ from __future__ import annotations
 import json
 import platform
 import sys
+import threading
 import time
-import uuid
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
 from app.core.utils import logger, signalBus
 from app.core.utils.encryption import AESCipherGCM, deriveKey, hash256
 
-from .cloud_api import CloudApi, CloudApiError, CloudSession, getCloudApi
+from .cloud_api import CloudApiError, CloudSession, getCloudApi
 
 SESSION_FILE_NAME = "cloud_session.enc"
 SESSION_FILE_VERSION = 1
+REFRESH_CONNECT_TIMEOUT = 3.05
+REFRESH_READ_TIMEOUT = 5.0
+REFRESH_RETRY_BASE_SEC = 5.0
+REFRESH_RETRY_MAX_SEC = 60.0
 
 
 class CloudAuth:
@@ -35,7 +39,10 @@ class CloudAuth:
         # 注入 refresh 回调
         self._api.setRefreshCallback(self._refreshAccessToken)
         self._sessionFile: Optional[Path] = None
-        self._lastRefreshAt: float = 0.0
+        self._refreshLock = threading.Lock()
+        self._lastRefreshFailureAt = 0.0
+        self._refreshFailureCount = 0
+        self._bootstrapRefreshThread: threading.Thread | None = None
 
     def _deviceId(self) -> str:
         return self._api._deviceId()
@@ -67,11 +74,10 @@ class CloudAuth:
     def _encryptionKey(self) -> bytes | None:
         """从设备特征派生加密密钥(失败则不加密,只留本地可读)。"""
         try:
-            from app.core.utils.device_id import getDeviceIdentifier
+            from app.core.utils.device_id import generateOrLoadDeviceId, getDeviceIdentifier
 
+            generateOrLoadDeviceId()
             device = getDeviceIdentifier()
-            if not device.deviceFeatures:
-                device.collectDeviceFeatures()
             combined = "|".join(
                 f"{k}:{v}" for k, v in sorted(device.deviceFeatures.items())
             )
@@ -242,30 +248,72 @@ class CloudAuth:
         except Exception:
             pass
 
-    def _refreshAccessToken(self) -> bool:
-        """CloudApi 在 401 时调用的回调:用 refresh_token 换新 token。"""
-        now = time.time()
-        if now - self._lastRefreshAt < 2.0:
-            # 防止 refresh 死循环
-            return False
-        self._lastRefreshAt = now
+    def _refreshRetryDelay(self) -> float:
+        if self._refreshFailureCount <= 0:
+            return 0.0
+        return min(
+            REFRESH_RETRY_BASE_SEC * (2 ** (self._refreshFailureCount - 1)),
+            REFRESH_RETRY_MAX_SEC,
+        )
 
-        sess = self._api.getSession()
-        if not sess.refreshToken:
-            return False
-        try:
-            data = self._api.post(
-                "/v1/auth/refresh",
-                body={"refreshToken": sess.refreshToken},
-                withAuth=False,
-            )
-        except CloudApiError as exc:
-            logger.warning(f"[CloudAuth] refresh 失败: {exc}")
-            if exc.code in ("REFRESH_INVALID", "REFRESH_EXPIRED", "TOKEN_REVOKED"):
-                self._clearSession()
-            return False
-        self._applyLoginResponse(data)
-        return True
+    def _refreshAccessToken(self, failedAccessToken: str = "") -> bool:
+        """单飞刷新 access token，并对连续网络失败执行有界指数退避。"""
+        with self._refreshLock:
+            sess = self._api.getSession()
+            if failedAccessToken and sess.accessToken and sess.accessToken != failedAccessToken:
+                # 等锁期间已有请求完成刷新，直接复用新 token。
+                return True
+            if not sess.refreshToken:
+                return False
+
+            now = time.monotonic()
+            retryDelay = self._refreshRetryDelay()
+            retryRemaining = retryDelay - (now - self._lastRefreshFailureAt)
+            if retryRemaining > 0:
+                logger.debug(
+                    f"[CloudAuth] refresh 暂停重试，约 {retryRemaining:.1f} 秒后恢复"
+                )
+                return False
+
+            try:
+                data = self._api.post(
+                    "/v1/auth/refresh",
+                    body={"refreshToken": sess.refreshToken},
+                    withAuth=False,
+                    timeout=(REFRESH_CONNECT_TIMEOUT, REFRESH_READ_TIMEOUT),
+                )
+            except CloudApiError as exc:
+                if exc.code in ("REFRESH_INVALID", "REFRESH_EXPIRED", "TOKEN_REVOKED"):
+                    logger.warning(f"[CloudAuth] refresh token 已失效: {exc}")
+                    self._clearSession()
+                    try:
+                        signalBus.sessionChanged.emit(False)
+                    except Exception:
+                        pass
+                    self._refreshFailureCount = 0
+                    self._lastRefreshFailureAt = 0.0
+                    return False
+
+                self._refreshFailureCount += 1
+                self._lastRefreshFailureAt = time.monotonic()
+                nextDelay = self._refreshRetryDelay()
+                if self._refreshFailureCount == 1:
+                    logger.warning(
+                        f"[CloudAuth] refresh 失败，将在 {nextDelay:.0f} 秒后重试: {exc}"
+                    )
+                else:
+                    logger.debug(
+                        f"[CloudAuth] refresh 连续失败 {self._refreshFailureCount} 次，"
+                        f"下次重试等待 {nextDelay:.0f} 秒: {exc}"
+                    )
+                return False
+
+            self._applyLoginResponse(data)
+            if self._refreshFailureCount:
+                logger.info("[CloudAuth] refresh 连接已恢复")
+            self._refreshFailureCount = 0
+            self._lastRefreshFailureAt = 0.0
+            return True
 
     def isAccessTokenNearExpiry(self, leadSec: int = 300) -> bool:
         sess = self._api.getSession()
@@ -310,13 +358,22 @@ class CloudAuth:
     def bootstrap(self) -> bool:
         """程序启动时尝试恢复上次的会话;不抛错。"""
         if self._loadSession() and self._api.getSession().refreshToken:
-            # 后台异步 refresh(不阻塞启动)
-            try:
-                self._refreshAccessToken()
-            except Exception:
-                logger.exception("[CloudAuth] 启动期 refresh 失败")
+            if self.isAccessTokenNearExpiry():
+                self._bootstrapRefreshThread = threading.Thread(
+                    target=self._refreshOnBootstrap,
+                    name="cloud-auth-bootstrap",
+                    daemon=True,
+                )
+                self._bootstrapRefreshThread.start()
             return True
         return False
+
+    def _refreshOnBootstrap(self) -> None:
+        """在后台刷新启动期恢复的临近过期会话。"""
+        try:
+            self._refreshAccessToken()
+        except Exception:
+            logger.exception("[CloudAuth] 启动期 refresh 失败")
 
 
 class CloudLoginWorker(QThread):

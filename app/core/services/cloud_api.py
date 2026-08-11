@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import socket
 import threading
-import time
 import uuid
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
@@ -35,10 +34,16 @@ from requests.exceptions import ConnectionError, RequestException, Timeout
 
 from app.core.utils import cfg, logger
 
+from .responsive_call import runResponsiveCall
+
 try:
     CLIENT_VERSION = version("prismatica")
 except PackageNotFoundError:
     CLIENT_VERSION = "dev"
+
+DEFAULT_CONNECT_TIMEOUT = 3.05
+DEFAULT_READ_TIMEOUT = 10.0
+DEFAULT_REQUEST_TIMEOUT = (DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_TIMEOUT)
 
 
 @dataclass
@@ -128,6 +133,16 @@ class CloudApi:
         client.trust_env = bool(cfg.cloudUseSystemProxy.value)
         return client
 
+    def _discardHttpClient(self) -> None:
+        """丢弃当前线程的连接池，避免 VPN/网络切换后复用失效连接。"""
+        client = getattr(self._httpClients, "client", None)
+        if client is None:
+            return
+        try:
+            client.close()
+        finally:
+            del self._httpClients.client
+
     def _deviceId(self) -> str:
         # device_id 在项目根目录的 device.bin 中持久化
         try:
@@ -192,15 +207,32 @@ class CloudApi:
         body: Dict[str, Any] | None = None,
         withAuth: bool = True,
         idempotencyKey: str | None = None,
-        timeout: float = 15.0,
+        timeout: float | tuple[float, float] = DEFAULT_REQUEST_TIMEOUT,
     ) -> Any:
-        url = f"{self._baseUrl()}{path}"
-        headers = self._headers(
-            withAuth=withAuth,
-            idempotencyKey=idempotencyKey,
+        """发送云端请求；从 Qt 主线程调用时自动转入后台线程。"""
+        return runResponsiveCall(
+            lambda: self._requestBlocking(
+                method,
+                path,
+                body=body,
+                withAuth=withAuth,
+                idempotencyKey=idempotencyKey,
+                timeout=timeout,
+            )
         )
+
+    def _requestOnce(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Dict[str, str],
+        body: Dict[str, Any] | None,
+        timeout: float | tuple[float, float],
+    ):
+        """执行一次 HTTP 请求，并在网络异常时清理当前线程连接池。"""
         try:
-            resp = self._httpClient().request(
+            return self._httpClient().request(
                 method=method,
                 url=url,
                 headers=headers,
@@ -208,22 +240,48 @@ class CloudApi:
                 timeout=timeout,
             )
         except (ConnectionError, Timeout, socket.gaierror) as exc:
+            self._discardHttpClient()
             raise CloudApiError("NETWORK_ERROR", f"网络异常: {exc}") from exc
         except RequestException as exc:
+            self._discardHttpClient()
             raise CloudApiError("NETWORK_ERROR", f"请求失败: {exc}") from exc
+
+    def _requestBlocking(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Dict[str, Any] | None,
+        withAuth: bool,
+        idempotencyKey: str | None,
+        timeout: float | tuple[float, float],
+    ) -> Any:
+        url = f"{self._baseUrl()}{path}"
+        headers = self._headers(
+            withAuth=withAuth,
+            idempotencyKey=idempotencyKey,
+        )
+        resp = self._requestOnce(
+            method,
+            url,
+            headers=headers,
+            body=body,
+            timeout=timeout,
+        )
 
         # 401 → 尝试 refresh 后重试一次
         if resp.status_code == 401 and withAuth and self._refreshCallback:
             logger.info("[CloudApi] 401,尝试 refresh access_token")
             try:
-                if self._refreshCallback():
+                failedAccessToken = headers.get("Authorization", "").removeprefix("Bearer ")
+                if self._refreshCallback(failedAccessToken):
                     # 用新 token 重试
                     headers["Authorization"] = f"Bearer {self._session.accessToken}"
-                    resp = self._httpClient().request(
-                        method=method,
-                        url=url,
+                    resp = self._requestOnce(
+                        method,
+                        url,
                         headers=headers,
-                        json=body,
+                        body=body,
                         timeout=timeout,
                     )
             except Exception as exc:

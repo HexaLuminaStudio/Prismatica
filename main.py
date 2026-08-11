@@ -24,12 +24,12 @@ warnings.filterwarnings(
     message=r".*QMouseEvent\.globalPos.*",
 )
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImageReader
+from PySide6.QtCore import QThreadPool, Qt
 from PySide6.QtWidgets import QApplication
 from qfluentwidgetspro import setLicense
 
 from app.core.utils import cfg, configureLogging, log, qconfig
+from app.core.utils.application_lifecycle import beginApplicationShutdown
 from app.core.utils.setting import MODE
 
 # Qt 6 默认启用逐显示器高 DPI；保留小数缩放，避免 125%/150% 被取整后尺寸跳变。
@@ -64,6 +64,18 @@ if _dpi_scale != "Auto":
 # create application
 app = QApplication(sys.argv)
 app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
+
+
+def _beginApplicationShutdown() -> None:
+    """阻止退出阶段继续投递后台 Qt 任务，并清除尚未开始的任务。"""
+    beginApplicationShutdown()
+    try:
+        QThreadPool.globalInstance().clear()
+    except RuntimeError:
+        pass
+
+
+app.aboutToQuit.connect(_beginApplicationShutdown)
 
 from app.view.widgets.splash_window import SplashWindow
 from app.core.services.splash_loader import SplashLoader
