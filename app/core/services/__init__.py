@@ -36,6 +36,7 @@ from .hsk_download import HSKDownloadWorker
 from .hsk_local_corpus_service import HskLocalCorpusService, hskLocalCorpusService
 from .hsk_service import HskTokenRefreshThread, GetTotalWorker
 from .project_manager import ProjectManager, projectManager
+from .system_info_service import SystemInfoService, systemInfoService
 from .task_manager import TaskManager, taskManager
 
 __all__ = [
@@ -52,6 +53,8 @@ __all__ = [
     "AiInsightService",
     "ProjectManager",
     "projectManager",
+    "SystemInfoService",
+    "systemInfoService",
     "HskCorpusService",
     "hskCorpusService",
     "BatchApplyService",

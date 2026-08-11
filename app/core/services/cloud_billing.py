@@ -35,9 +35,11 @@ class CloudBilling:
         *,
         taskId: str = "",
         description: str = "",
+        idempotencyKey: str | None = None,
     ) -> Dict[str, Any]:
-        # 自动生成 idempotency key(同一资源/动作/参数 → 同一 bill)
-        idemKey = str(uuid.uuid4())
+        # 调用方传入稳定 operation ID 时必须原样复用，确保 401 重试或响应丢失
+        # 不会创建第二笔预占；旧调用方仍由本层生成一次性键。
+        idemKey = idempotencyKey or str(uuid.uuid4())
         return (
             self._api.post(
                 "/v1/billing/preauth",

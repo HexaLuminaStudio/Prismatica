@@ -11,6 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
+from PySide6.QtCore import QThread, Signal
+
 from app.core.utils import logger, signalBus
 from app.core.utils.encryption import AESCipherGCM, deriveKey, hash256
 
@@ -317,6 +319,43 @@ class CloudAuth:
         return False
 
 
+class CloudLoginWorker(QThread):
+    """在后台线程执行云端登录，避免 HTTP 超时阻塞 Qt 主线程。"""
+
+    succeeded = Signal(object)
+    failed = Signal(object)
+
+    def __init__(
+        self,
+        email: str,
+        password: str,
+        rememberMe: bool,
+        *,
+        authService: CloudAuth | None = None,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._email = email
+        self._password = password
+        self._rememberMe = rememberMe
+        self._authService = authService or getCloudAuth()
+
+    def run(self) -> None:
+        try:
+            if self.isInterruptionRequested():
+                return
+            result = self._authService.login(
+                self._email,
+                self._password,
+                rememberMe=self._rememberMe,
+            )
+            self.succeeded.emit(result)
+        except Exception as error:
+            self.failed.emit(error)
+        finally:
+            self._password = ""
+
+
 _singleton: CloudAuth | None = None
 
 
@@ -329,6 +368,7 @@ def getCloudAuth() -> CloudAuth:
 
 __all__ = [
     "CloudAuth",
+    "CloudLoginWorker",
     "getCloudAuth",
     "CloudApiError",
 ]

@@ -85,6 +85,9 @@ class Config(QConfig):
     # 云端 API base URL(2026-08-05 PRD v2)
     # 默认指向雨云公网 FastAPI 后端,生产换 HTTPS + 域名后会同步更新
     cloudBaseUrl = ConfigItem("Cloud", "BaseUrl", "http://103.236.55.211:8000")
+    # 第一方云端请求默认不继承系统/环境代理，避免本机代理抖动影响登录与计费。
+    # 只有明确需要代理访问云端时才由配置开启。
+    cloudUseSystemProxy = ConfigItem("Cloud", "UseSystemProxy", False, BoolValidator())
     DpiScale = OptionsConfigItem(
         "MainWindow",
         "DpiScale",

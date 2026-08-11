@@ -13,6 +13,7 @@ from .cloud_api import getCloudApi
 from .responsive_call import runResponsiveCall
 
 PRICE_REFRESH_MS = 30_000
+PRICE_REFRESH_MAX_MS = 300_000
 
 
 class PricingCatalog(QObject):
@@ -25,13 +26,13 @@ class PricingCatalog(QObject):
         super().__init__(parent)
         self._catalog: Dict[str, Any] = {}
         self._refreshing = False
+        self._consecutiveFailures = 0
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pricing-catalog")
         self._loadedFromWorker.connect(self._applyCatalog)
         self._failedFromWorker.connect(self._onFailed)
         self._timer = QTimer(self)
-        self._timer.setInterval(PRICE_REFRESH_MS)
+        self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.refreshAsync)
-        self._timer.start()
         self.refreshAsync()
 
     @property
@@ -86,6 +87,7 @@ class PricingCatalog(QObject):
     def refreshAsync(self) -> None:
         if self._refreshing:
             return
+        self._timer.stop()
         self._refreshing = True
         future = self._executor.submit(
             getCloudApi().get,
@@ -105,14 +107,35 @@ class PricingCatalog(QObject):
 
     def _applyCatalog(self, data: Dict[str, Any]) -> None:
         self._refreshing = False
+        wasRecovering = self._consecutiveFailures > 0
+        self._consecutiveFailures = 0
         previousVersion = self.version
         self._catalog = dict(data)
+        self._timer.start(PRICE_REFRESH_MS)
+        if wasRecovering:
+            logger.info("[PricingCatalog] 云端价格目录连接已恢复")
         if self.version != previousVersion or not previousVersion:
             self.catalogChanged.emit(dict(self._catalog))
 
     def _onFailed(self, message: str) -> None:
         self._refreshing = False
-        logger.warning(f"[PricingCatalog] 刷新失败: {message}")
+        self._consecutiveFailures += 1
+        backoffLevel = min(self._consecutiveFailures - 1, 4)
+        retryDelayMs = min(
+            PRICE_REFRESH_MS * (2**backoffLevel),
+            PRICE_REFRESH_MAX_MS,
+        )
+        self._timer.start(retryDelayMs)
+        if self._consecutiveFailures == 1:
+            logger.warning(
+                f"[PricingCatalog] 刷新失败，将在 {retryDelayMs // 1000} 秒后重试: "
+                f"{message}"
+            )
+        else:
+            logger.debug(
+                f"[PricingCatalog] 连续刷新失败 {self._consecutiveFailures} 次，"
+                f"下次重试等待 {retryDelayMs // 1000} 秒: {message}"
+            )
         self.refreshFailed.emit(message)
 
 
@@ -126,4 +149,9 @@ def getPricingCatalog() -> PricingCatalog:
     return _singleton
 
 
-__all__ = ["PRICE_REFRESH_MS", "PricingCatalog", "getPricingCatalog"]
+__all__ = [
+    "PRICE_REFRESH_MAX_MS",
+    "PRICE_REFRESH_MS",
+    "PricingCatalog",
+    "getPricingCatalog",
+]

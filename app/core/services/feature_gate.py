@@ -78,10 +78,12 @@ class FeatureGate(QObject):
         resourceUsed: int = 0,
         taskId: str = "",
         description: str = "",
+        idempotencyKey: str | None = None,
     ) -> GateResult:
         """主入口:检查登录 + 余额 → preauth → 返回 settle / refund 闭包。"""
         auth = getCloudAuth()
         api = getCloudApi()
+        operationId = idempotencyKey or str(uuid.uuid4())
 
         if not auth._api.isLoggedIn():
             return GateResult(ok=False, reason="login_required", message="请先登录账号")
@@ -124,6 +126,7 @@ class FeatureGate(QObject):
                 resourceUsed,
                 taskId=taskId,
                 description=description or featureCode,
+                idempotencyKey=operationId,
             )
         except CloudApiError as exc:
             if exc.code == "INSUFFICIENT_BALANCE":
@@ -189,6 +192,7 @@ class FeatureGate(QObject):
                 "featureCode": featureCode,
                 "estimatedCost": actualCost,
                 "resourceUsed": resourceUsed,
+                "operationId": operationId,
             },
         )
 

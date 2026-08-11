@@ -21,8 +21,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import FluentIcon, PrimaryPushButton, PushButton, CheckBox
+from qfluentwidgetspro import IndeterminateProgressPushButton
 
 from app.core.services import CloudApiError, getCloudAuth
+from app.core.services.cloud_auth import CloudLoginWorker
 from app.core.utils import logger
 from app.view.resource import resource as _resource
 from app.view.widgets.prismatica_theme import ACCENT, shellPalette
@@ -213,6 +215,7 @@ class LoginInterface(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("accountAuthInterface")
+        self._loginWorker: CloudLoginWorker | None = None
         authFont = QFont("Microsoft YaHei UI", 10)
         authFont.setFamilies(
             ["Segoe UI Variable", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei"]
@@ -301,7 +304,7 @@ class LoginInterface(QWidget):
         layout.addLayout(options)
         layout.addSpacing(20)
 
-        self._loginBtn = PrimaryPushButton("登录")
+        self._loginBtn = IndeterminateProgressPushButton("登录")
         self._loginBtn.setFixedHeight(44)
         self._loginBtn.clicked.connect(self._onLogin)
         layout.addWidget(self._loginBtn)
@@ -478,7 +481,9 @@ class LoginInterface(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self._restoreActionButton(self._loginBtn, "登录")
+        self._setLoginBusy(
+            self._loginWorker is not None and self._loginWorker.isRunning()
+        )
         self._restoreActionButton(self._registerBtn, "创建账号并登录")
 
     def _currentStatus(self) -> _StatusBanner:
@@ -506,13 +511,17 @@ class LoginInterface(QWidget):
 
     def _refreshOfflineState(self) -> None:
         offline = not self._baseUrl
+        loginBusy = self._loginWorker is not None and self._loginWorker.isRunning()
         if offline:
             self._loginStatus.setText("未配置云端 API 地址，登录功能暂不可用")
+        self._loginBtn.setEnabled(not offline and not loginBusy)
+        self._registerBtn.setEnabled(not offline)
         for button in (self._loginBtn, self._registerBtn):
-            button.setEnabled(not offline)
             button.setToolTip("请先在设置中配置云端 API 地址" if offline else "")
 
     def _onLogin(self) -> None:
+        if self._loginWorker is not None and self._loginWorker.isRunning():
+            return
         email = self._loginEmailEdit.text().strip()
         password = self._loginPasswordEdit.text()
         if not _validateEmail(email):
@@ -521,33 +530,61 @@ class LoginInterface(QWidget):
         if not password:
             self._loginStatus.setText("请输入密码")
             return
-        self._loginBtn.setEnabled(False)
+        worker = CloudLoginWorker(
+            email,
+            password,
+            self._rememberCheck.isChecked(),
+            parent=self,
+        )
+        self._loginWorker = worker
         self._loginStatus.setText("")
-        self._loginBtn.setText("登录中…")
-        try:
-            getCloudAuth().login(email, password, rememberMe=self._rememberCheck.isChecked())
-        except CloudApiError as exc:
-            logger.warning(f"[LoginInterface] 登录失败: {exc}")
+        self._setLoginBusy(True)
+        worker.succeeded.connect(self._onLoginSucceeded)
+        worker.failed.connect(self._onLoginFailed)
+        worker.finished.connect(self._onLoginFinished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _onLoginSucceeded(self, _result: object) -> None:
+        self.loginSucceeded.emit()
+
+    def _onLoginFailed(self, error: object) -> None:
+        if isinstance(error, CloudApiError):
+            logger.warning(f"[LoginInterface] 登录失败: {error}")
             messages = {
                 "INVALID_CREDENTIALS": "邮箱或密码错误",
-                "NETWORK_ERROR": "网络异常，请检查连接",
+                "NETWORK_ERROR": "无法连接云端服务，请检查网络后重试",
                 "RATE_LIMITED": "请求过于频繁，请稍后再试",
             }
-            if exc.code == "ACCOUNT_LOCKED":
-                retry = (exc.details or {}).get("retryAfter")
+            if error.code == "ACCOUNT_LOCKED":
+                retry = (error.details or {}).get("retryAfter")
                 message = f"账号已锁定，{retry} 秒后可重试" if retry else "账号已锁定，请稍后再试"
             else:
-                message = messages.get(exc.code, f"登录失败：{exc.message}")
+                message = messages.get(error.code, f"登录失败：{error.message}")
             self._loginStatus.setText(message)
-            self._restoreActionButton(self._loginBtn, "登录")
             return
-        except Exception as exc:
-            logger.exception("[LoginInterface] 登录异常")
-            self._loginStatus.setText(f"登录失败：{exc}")
-            self._restoreActionButton(self._loginBtn, "登录")
-            return
-        self.loginSucceeded.emit()
-        self._restoreActionButton(self._loginBtn, "登录")
+        logger.error(f"[LoginInterface] 登录异常: {error}")
+        self._loginStatus.setText("登录遇到异常，请稍后重试")
+
+    def _onLoginFinished(self) -> None:
+        self._loginWorker = None
+        self._setLoginBusy(False)
+
+    def _setLoginBusy(self, busy: bool) -> None:
+        if busy:
+            self._loginBtn.load()
+            self._loginBtn.setText("正在连接云端…")
+        else:
+            self._loginBtn.normal()
+            self._loginBtn.setText("登录")
+        self._loginBtn.setEnabled(bool(self._baseUrl) and not busy)
+        for widget in (
+            self._loginEmailEdit,
+            self._loginPasswordEdit,
+            self._rememberCheck,
+            self._toRegisterBtn,
+        ):
+            widget.setEnabled(not busy)
 
     def _onRegister(self) -> None:
         email = self._regEmailEdit.text().strip()

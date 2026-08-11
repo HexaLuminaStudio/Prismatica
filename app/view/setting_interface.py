@@ -39,7 +39,11 @@ from qfluentwidgets import (
     isDarkTheme,
 )
 
-from app.core.services import HskTokenRefreshThread, GlobalTokenRefreshThread
+from app.core.services import (
+    GlobalTokenRefreshThread,
+    HskTokenRefreshThread,
+    systemInfoService,
+)
 from app.core.services.startup_database_service import StartupDatabaseService
 from app.core.utils import cfg, qconfig, logger, signalBus
 from app.view.widgets.prismatica_theme import pageBackgroundColor
@@ -1084,7 +1088,7 @@ class AboutSettingWidget(OverviewGroupCard):
         self.openBadge.setConfigured(True, "内测开放")
 
         # 获取系统信息
-        systemInfo = self._getSystemInfoItems()
+        systemInfo = systemInfoService.getItems()
         displayVersion = VERSION if str(VERSION).lower().startswith("v") else f"v{VERSION}"
 
         # 添加版本号组
@@ -1135,6 +1139,7 @@ class AboutSettingWidget(OverviewGroupCard):
         self.systemInfoGrid.setHorizontalSpacing(24)
         self.systemInfoGrid.setVerticalSpacing(4)
         self.systemInfoCells = []
+        self.systemInfoValueLabels = []
         for index, (key, value) in enumerate(infoItems):
             cell = QFrame(gridWidget)
             cell.setStyleSheet(
@@ -1150,13 +1155,17 @@ class AboutSettingWidget(OverviewGroupCard):
             valueLabel.setMinimumWidth(0)
             valueLabel.setWordWrap(True)
             valueLabel.setSizePolicy(
-                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            valueLabel.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             )
             valueLabel.setStyleSheet(f"color: {_TEXT}; border: none;")
-            cellLayout.addWidget(keyLabel)
-            cellLayout.addStretch(1)
-            cellLayout.addWidget(valueLabel)
+            valueLabel.setAccessibleName(f"{key}信息")
+            cellLayout.addWidget(keyLabel, 0)
+            cellLayout.addWidget(valueLabel, 1)
             self.systemInfoCells.append(cell)
+            self.systemInfoValueLabels.append(valueLabel)
             self.systemInfoGrid.addWidget(cell, index // 2, index % 2)
         sectionLayout.addWidget(gridWidget)
         return section
@@ -1251,46 +1260,6 @@ class AboutSettingWidget(OverviewGroupCard):
                 )
         except Exception as e:
             logger.exception(f"[Setting] 重新查看引导失败: {e}")
-
-    def _getSystemInfoItems(self):
-        """获取系统信息"""
-        import platform
-        import psutil
-
-        infoItems = [("系统", f"{platform.system()} {platform.release()}")]
-
-        # CPU信息
-        try:
-            cpuCount = psutil.cpu_count(logical=False)
-            cpuCountLogical = psutil.cpu_count(logical=True)
-            infoItems.append(("CPU", f"{cpuCount} 核 / {cpuCountLogical} 线程"))
-        except Exception:
-            infoItems.append(("CPU", platform.machine()))
-
-        # 内存信息
-        try:
-            mem = psutil.virtual_memory()
-            memGb = mem.total / (1024**3)
-            memUsedGb = mem.used / (1024**3)
-            infoItems.append(
-                ("内存", f"{memUsedGb:.1f} GB / {memGb:.1f} GB ({mem.percent}%)")
-            )
-        except Exception:
-            infoItems.append(("内存", "未知"))
-
-        # 磁盘信息
-        try:
-            disk = psutil.disk_usage("/")
-            diskGb = disk.total / (1024**3)
-            diskUsedGb = disk.used / (1024**3)
-            infoItems.append(
-                ("磁盘", f"{diskUsedGb:.0f} GB / {diskGb:.0f} GB ({disk.percent}%)")
-            )
-        except Exception:
-            infoItems.append(("磁盘", "未知"))
-
-        return infoItems
-
 
 class AgreementLabelWidget(QWidget):
     """用户协议组件"""

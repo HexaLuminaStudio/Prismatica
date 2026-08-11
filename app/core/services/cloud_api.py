@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -74,6 +75,7 @@ class CloudApi:
 
     def __init__(self) -> None:
         self._session = CloudSession()
+        self._httpClients = threading.local()
         # 用于刷新 access_token 的回调(由 cloud_auth 注入)
         self._refreshCallback = None
         # 用于触发 MAX_DEVICES_REACHED 弹窗的回调
@@ -116,6 +118,15 @@ class CloudApi:
         if not url:
             raise CloudApiError("NETWORK_ERROR", "未配置云端 API 地址(cfg.cloudBaseUrl)")
         return url
+
+    def _httpClient(self) -> requests.Session:
+        """返回当前线程独享的 HTTP 会话，并应用明确的代理策略。"""
+        client = getattr(self._httpClients, "client", None)
+        if client is None:
+            client = requests.Session()
+            self._httpClients.client = client
+        client.trust_env = bool(cfg.cloudUseSystemProxy.value)
+        return client
 
     def _deviceId(self) -> str:
         # device_id 在项目根目录的 device.bin 中持久化
@@ -189,7 +200,7 @@ class CloudApi:
             idempotencyKey=idempotencyKey,
         )
         try:
-            resp = requests.request(
+            resp = self._httpClient().request(
                 method=method,
                 url=url,
                 headers=headers,
@@ -208,7 +219,7 @@ class CloudApi:
                 if self._refreshCallback():
                     # 用新 token 重试
                     headers["Authorization"] = f"Bearer {self._session.accessToken}"
-                    resp = requests.request(
+                    resp = self._httpClient().request(
                         method=method,
                         url=url,
                         headers=headers,
