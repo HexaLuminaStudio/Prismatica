@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -141,6 +143,37 @@ class _SurfaceCard(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
 
+class _LeadingIconPrimaryPushButton(PrimaryPushButton):
+    """文案保持居中、图标固定在前导侧的主按钮。"""
+
+    ICON_INSET = 14
+
+    def _iconRect(self) -> QRectF:
+        iconWidth = self.iconSize().width()
+        iconHeight = self.iconSize().height()
+        iconX = self.ICON_INSET
+        if self.isRightToLeft():
+            iconX = self.width() - iconWidth - self.ICON_INSET
+        iconY = (self.height() - iconHeight) / 2
+        return QRectF(iconX, iconY, iconWidth, iconHeight)
+
+    def paintEvent(self, event) -> None:
+        QPushButton.paintEvent(self, event)
+        if self.icon().isNull():
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        if not self.isEnabled():
+            painter.setOpacity(0.3628)
+        elif self.isPressed:
+            painter.setOpacity(0.786)
+        self._drawIcon(self._icon, painter, self._iconRect())
+
+
 class _StatusChip(CaptionLabel):
     def __init__(
         self,
@@ -211,7 +244,9 @@ class _OverviewPage(QWidget):
         cardLayout.addLayout(billsRow)
         layout.addWidget(self._balanceCard)
 
-        self._redeemButton = PrimaryPushButton(FluentIcon.TAG, "兑换码", self)
+        self._redeemButton = _LeadingIconPrimaryPushButton(
+            FluentIcon.TAG, "兑换码", self
+        )
         self._redeemButton.setObjectName("accountRedeemButton")
         self._redeemButton.setMinimumHeight(40)
         self._redeemButton.clicked.connect(self._onRedeem)
@@ -934,6 +969,13 @@ class AccountInterface(ScrollArea):
         brandSoft = "rgba(0, 176, 156, 0.16)" if dark else "rgba(0, 176, 156, 0.09)"
         readableAccent = "#56D6C5" if dark else "#007368"
         readableDanger = "#FF7A7E" if dark else "#B3261E"
+        dangerBorder = "#B65A60" if dark else "#C97772"
+        dangerSurface = "#33282A" if dark else "#FFF7F6"
+        dangerHover = "#422A2D" if dark else "#FDEDEA"
+        dangerPressed = "#512D31" if dark else "#F9DED9"
+        dangerDisabledBorder = "#4A4A4A" if dark else "#D8D8D8"
+        dangerDisabledSurface = "#303030" if dark else "#F3F3F3"
+        dangerDisabledText = "#777777" if dark else "#9B9B9B"
         readableSuccess = "#72D572" if dark else "#107C10"
         readableWarning = "#F4D35E" if dark else "#725A00"
         self.setStyleSheet(
@@ -985,13 +1027,37 @@ class AccountInterface(ScrollArea):
             QLabel#accountEmptyState {{
                 color: {secondary}; padding: 42px 16px; background: {muted}; border-radius: 10px;
             }}
-            QPushButton#accountLogoutButton, QPushButton#accountDangerButton {{ color: {readableDanger}; }}
-            QPushButton#accountLogoutButton:hover, QPushButton#accountDangerButton:hover {{
-                background: rgba(209, 52, 56, 0.10);
-            }}
             QPushButton#accountLinkButton {{ color: {readableAccent}; border: none; background: transparent; }}
             QPushButton#accountLinkButton:hover {{ background: {brandSoft}; }}
             """
+        )
+        dangerButtonStyle = f"""
+            PushButton {{
+                color: {readableDanger}; background: {dangerSurface};
+                border: 1px solid {dangerBorder}; border-radius: 5px;
+                padding: 5px 12px 6px 12px;
+            }}
+            PushButton[hasIcon=true] {{
+                padding: 5px 12px 6px 36px;
+            }}
+            PushButton:hover {{
+                background: {dangerHover}; border-color: {readableDanger};
+            }}
+            PushButton:pressed {{
+                background: {dangerPressed}; border-color: {readableDanger};
+            }}
+            PushButton:disabled {{
+                color: {dangerDisabledText}; background: {dangerDisabledSurface};
+                border-color: {dangerDisabledBorder};
+            }}
+        """
+        self._logoutButton.setStyleSheet(dangerButtonStyle)
+        self._overview._deleteAccountButton.setStyleSheet(dangerButtonStyle)
+        self._logoutButton.setIcon(
+            FluentIcon.POWER_BUTTON.icon(color=QColor(readableDanger))
+        )
+        self._overview._deleteAccountButton.setIcon(
+            FluentIcon.REMOVE_FROM.icon(color=QColor(readableDanger))
         )
         self._avatarIcon.setStyleSheet(
             f"color: {readableAccent}; background: transparent;"
