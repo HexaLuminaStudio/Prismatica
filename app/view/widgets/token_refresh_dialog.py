@@ -14,7 +14,10 @@ from qfluentwidgets import (
     LineEdit,
     PasswordLineEdit,
     BodyLabel,
+    qconfig,
 )
+
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 class TokenRefreshDialog(MessageBoxBase):
@@ -34,18 +37,6 @@ class TokenRefreshDialog(MessageBoxBase):
         # 安全声明标签
         self.securityLabel = BodyLabel(self)
         self.securityLabel.setText(self.SECURITY_NOTICE)
-        self.securityLabel.setStyleSheet(
-            """
-            QLabel {
-                color: #666666;
-                font-size: 13px;
-                padding: 8px 12px;
-                background: #FFF9E6;
-                border-radius: 4px;
-                border: 1px solid #FFE58F;
-            }
-        """
-        )
         self.securityLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.securityLabel.setWordWrap(True)
 
@@ -69,14 +60,28 @@ class TokenRefreshDialog(MessageBoxBase):
         # 布局
         formLayout = QFormLayout()
         formLayout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        formLayout.addRow("用户名：", self.usernameEdit)
-        formLayout.addRow("密　码：", self.passwordEdit)
+        self.usernameLabel = BodyLabel("用户名：", self)
+        self.passwordLabel = BodyLabel("密　码：", self)
+        formLayout.addRow(self.usernameLabel, self.usernameEdit)
+        formLayout.addRow(self.passwordLabel, self.passwordEdit)
 
         self.viewLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignCenter)
         self.viewLayout.addSpacing(8)
         self.viewLayout.addWidget(self.securityLabel)
         self.viewLayout.addSpacing(12)
         self.viewLayout.addLayout(formLayout)
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.securityLabel.setStyleSheet(
+            f"QLabel {{ color: {palette.warningText.name()}; font-size: 13px; "
+            f"padding: 8px 12px; background: {palette.warningSurface.name()}; "
+            f"border-radius: 4px; border: 1px solid {palette.warningText.name()}; }}"
+        )
+        for label in (self.usernameLabel, self.passwordLabel):
+            label.setStyleSheet(f"color: {palette.text.name()};")
 
     def getCredentials(self):
         """获取输入的凭证"""

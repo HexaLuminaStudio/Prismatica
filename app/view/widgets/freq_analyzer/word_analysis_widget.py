@@ -79,6 +79,7 @@ from app.view.widgets.freq_analyzer.word_analysis_engine import (
     WordAnalysisEngine,
     WordMetrics,
 )
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -323,7 +324,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                     va="center",
                     transform=ax.transAxes,
                     fontsize=12,
-                    color="#888",
+                color=shellPalette().mutedText.name(),
                 )
             except Exception:
                 pass
@@ -534,7 +535,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 状态
         self.statusLabel = CaptionLabel("未加载语料库", paramCard)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         paramLayout.addWidget(self.statusLabel)
 
         root.addWidget(paramCard)
@@ -625,12 +626,12 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "横轴: 累计 Token 数;纵轴: 累计 Type 数。曲线越陡说明新词越多。",
             chartCard,
         )
-        chartHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(chartHint, "muted", "font-size: 11px;")
         chartLayout.addWidget(chartHint)
 
         # matplotlib canvas
         self._figure = Figure(figsize=(8, 4), dpi=100)
-        self._figure.patch.set_facecolor("#fafafa")
+        self._figure.patch.set_facecolor(shellPalette().surface.name())
         self._ax = self._figure.add_subplot(111)
         self._ax.set_xlabel("Tokens")
         self._ax.set_ylabel("Types")
@@ -646,7 +647,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             ha="center",
             va="center",
             transform=self._ax.transAxes,
-            color="#999",
+            color=shellPalette().mutedText.name(),
             fontsize=14,
         )
         self._canvas.draw()
@@ -662,7 +663,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 覆盖率提示
         self.coverageLabel = CaptionLabel("", self._highFreqTab)
-        self.coverageLabel.setStyleSheet("color: #1890ff; font-size: 11px;")
+        setThemeRole(self.coverageLabel, "accent", "font-size: 11px;")
         layout.addWidget(self.coverageLabel)
 
         # 表格
@@ -715,7 +716,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "展示总频率 Top-30 词语在各子库/文件中的分布(行:词语,列:文件)",
             self._distributionTab,
         )
-        self.distHint.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.distHint, "muted", "font-size: 11px;")
         layout.addWidget(self.distHint)
 
         self._distTable = TableWidget(self._distributionTab)
@@ -908,7 +909,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 ha="center",
                 va="center",
                 transform=self._ax.transAxes,
-                color="#999",
+                color=shellPalette().mutedText.name(),
             )
         else:
             xs = [pt.tokenCount for pt in m.typeTokenCurve]
@@ -985,7 +986,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 for c in range(6):
                     item = self._highFreqTable.item(r, c)
                     if item:
-                        item.setBackground(QColor("#fff7e6"))  # 浅橙
+                        item.setBackground(shellPalette().warningSurface)
 
     def _renderDistribution(self, m: WordMetrics):
         dist = getattr(m, "distribution", {})

@@ -13,8 +13,10 @@ from qfluentwidgets import (
     IconWidget,
     PrimaryPushButton,
     PushButton,
-    isDarkTheme,
+    qconfig,
 )
+
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 class TaskEmptyState(QFrame):
@@ -97,40 +99,36 @@ class TaskEmptyState(QFrame):
             layout.addWidget(shortcutLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self._applyStyle()
+        qconfig.themeChangedFinished.connect(self._applyStyle)
 
-    def _applyStyle(self) -> None:
-        dark = isDarkTheme()
-        card = "#2b2b2b" if dark else "#ffffff"
-        border = "#3b3b3b" if dark else "#e5e5e5"
-        foreground = "#f5f5f5" if dark else "#1f1f1f"
-        muted = "#b3b3b3" if dark else "#616161"
-        iconBackground = "#383838" if dark else "#f3f3f3"
+    def _applyStyle(self, *_args) -> None:
+        palette = shellPalette()
         self.setStyleSheet(
             f"""
             QFrame#taskEmptyCard {{
-                background: {card};
-                border: 1px solid {border};
+                background: {palette.surface.name()};
+                border: 1px solid {palette.border.name()};
                 border-radius: 10px;
             }}
             QFrame#emptyIconWrap {{
-                background: {iconBackground};
+                background: {palette.surfaceAlt.name()};
                 border: none;
                 border-radius: 36px;
             }}
             QLabel {{ background: transparent; border: none; }}
             QLabel#emptyTitle {{
-                color: {foreground};
+                color: {palette.text.name()};
                 font-size: 18px;
                 font-weight: 600;
             }}
             QLabel#emptyDescription {{
-                color: {muted};
+                color: {palette.mutedText.name()};
                 font-size: 13px;
                 line-height: 1.6;
             }}
             QLabel#shortcutHint {{
-                color: #00a894;
-                background: rgba(0, 176, 156, 0.09);
+                color: {palette.accentText.name()};
+                background: {palette.accentSurface.name()};
                 border-radius: 5px;
                 padding: 4px 9px;
                 font-size: 12px;

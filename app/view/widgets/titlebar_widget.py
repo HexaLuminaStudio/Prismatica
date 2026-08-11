@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QIcon, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout
 from qframelesswindow import TitleBar
 from qfluentwidgets import qconfig
@@ -86,6 +86,17 @@ class CustomTitleBar(TitleBar):
             f"QLabel#titleLabel {{ color: {palette.text.name()}; "
             "background: transparent; padding: 0; }}"
         )
+        hoverBackground = QColor(palette.text)
+        hoverBackground.setAlpha(22)
+        pressedBackground = QColor(palette.text)
+        pressedBackground.setAlpha(40)
+        for button in (self.minBtn, self.maxBtn, self.closeBtn):
+            button.setNormalColor(palette.text)
+        for button in (self.minBtn, self.maxBtn):
+            button.setHoverColor(palette.text)
+            button.setPressedColor(palette.text)
+            button.setHoverBackgroundColor(hoverBackground)
+            button.setPressedBackgroundColor(pressedBackground)
         self.update()
 
     def paintEvent(self, event) -> None:

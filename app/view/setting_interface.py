@@ -34,19 +34,22 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     ScrollArea,
+    SwitchButton,
     VerticalSeparator,
     HyperlinkButton,
-    isDarkTheme,
+    Theme,
+    setTheme,
 )
 
 from app.core.services import (
     GlobalTokenRefreshThread,
     HskTokenRefreshThread,
+    stopwordService,
     systemInfoService,
 )
 from app.core.services.startup_database_service import StartupDatabaseService
 from app.core.utils import cfg, qconfig, logger, signalBus
-from app.view.widgets.prismatica_theme import pageBackgroundColor
+from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 from app.view.widgets.resource_verification_dialog import (
     ResourceVerificationDialog,
 )
@@ -56,7 +59,6 @@ _ACCENT = "#00B09C"
 _ACCENT_SOFT = "#EAF8F6"
 _TEXT = "#1F1F1F"
 _MUTED = "#616161"
-_BORDER = "#E5E5E5"
 
 
 def _setChineseUiFont(widget: QWidget, size: int = 10, weight=QFont.Weight.Normal):
@@ -84,6 +86,17 @@ def _createTransparentActionWidget(parent: QWidget) -> QWidget:
         "QWidget#settingActionWidget { background: transparent; border: none; }"
     )
     return wrapper
+
+
+def _pathDisplayStyle(palette=None) -> str:
+    """保存路径与提示词文件共用的主题化文本区域样式。"""
+    palette = palette or shellPalette()
+    return (
+        f"color: {palette.mutedText.name()}; "
+        f"background: {palette.surfaceAlt.name()}; "
+        f"border: 1px solid {palette.border.name()}; "
+        "border-radius: 6px; padding: 7px 10px;"
+    )
 
 
 class SettingStatusBadge(QLabel):
@@ -172,8 +185,17 @@ class OverviewGroupCard(GroupHeaderCardWidget):
 
     def _applyCardStyle(self) -> None:
         """主题刷新后恢复卡片样式，并保持所有文字子控件透明。"""
-        cardColor = "#2B2B2B" if isDarkTheme() else "#FFFFFF"
-        borderColor = "#383838" if isDarkTheme() else _BORDER
+        palette = shellPalette()
+        cardColor = palette.surface.name()
+        borderColor = palette.border.name()
+        titleColor = palette.text.name()
+        summaryColor = palette.mutedText.name()
+        self.headerIconContainer.setStyleSheet(
+            f"background: {palette.accentSurface.name()}; border-radius: 6px;"
+        )
+        self.headerSummaryLabel.setStyleSheet(
+            f"color: {summaryColor}; background-color: transparent;"
+        )
         self.setStyleSheet(
             f"#overviewSettingCard {{ background: {cardColor}; "
             f"border: 1px solid {borderColor}; border-radius: 8px; }}"
@@ -182,8 +204,18 @@ class OverviewGroupCard(GroupHeaderCardWidget):
             "#overviewSettingCard > #view { background: transparent; }"
             "#overviewSettingCard FluentLabelBase { background-color: transparent; }"
             "#overviewSettingCard > #headerView > #headerLabel { "
-            "background-color: transparent; }"
+            f"color: {titleColor}; background-color: transparent; }}"
         )
+        for group in self.groupWidgets:
+            group.iconContainer.setStyleSheet(
+                f"background: {palette.accentSurface.name()}; border-radius: 8px;"
+            )
+            group.titleLabel.setStyleSheet(
+                f"color: {titleColor}; background-color: transparent;"
+            )
+            group.contentLabel.setStyleSheet(
+                f"color: {summaryColor}; background-color: transparent;"
+            )
 
     def setHeaderSummary(self, text: str) -> None:
         self.headerSummaryLabel.setText(text)
@@ -263,6 +295,7 @@ class OverviewGroupCard(GroupHeaderCardWidget):
         _setChineseUiFont(group.titleLabel, 10, QFont.Weight.DemiBold)
         _setChineseUiFont(group.contentLabel, 9)
         self._applyGroupLayout(group, self._isCompact)
+        self._applyCardStyle()
         return group
 
     def setCompactLayout(self, isCompact: bool) -> None:
@@ -319,7 +352,13 @@ class OverviewGroupCard(GroupHeaderCardWidget):
 
 
 class DisplaySettingWidget(OverviewGroupCard):
-    """界面缩放设置，默认跟随 Windows 的逐显示器 DPI。"""
+    """界面主题与缩放设置。"""
+
+    _THEME_OPTIONS = (
+        ("跟随系统（推荐）", Theme.AUTO),
+        ("明亮", Theme.LIGHT),
+        ("暗黑", Theme.DARK),
+    )
 
     _SCALE_OPTIONS = (
         ("跟随系统（推荐）", "Auto"),
@@ -331,7 +370,25 @@ class DisplaySettingWidget(OverviewGroupCard):
     )
 
     def __init__(self, parent=None):
-        super().__init__("显示与缩放", FluentIcon.LAYOUT, "Windows DPI", parent)
+        super().__init__(
+            "外观与缩放",
+            FluentIcon.PALETTE,
+            "主题 · Windows DPI",
+            parent,
+        )
+        self.themeModeComboBox = ComboBox(self)
+        for label, value in self._THEME_OPTIONS:
+            self.themeModeComboBox.addItem(label, userData=value)
+        self._syncThemeSelection()
+        self.themeModeComboBox.setFixedSize(172, 32)
+        self.themeModeComboBox.setAccessibleName("界面主题模式")
+        self.themeModeComboBox.setAccessibleDescription(
+            "选择明亮、暗黑或跟随 Windows 系统主题"
+        )
+        self.themeModeComboBox.currentIndexChanged.connect(
+            self._onThemeModeChanged
+        )
+
         self.dpiScaleComboBox = ComboBox(self)
         for label, value in self._SCALE_OPTIONS:
             self.dpiScaleComboBox.addItem(label, userData=value)
@@ -342,15 +399,39 @@ class DisplaySettingWidget(OverviewGroupCard):
         self.dpiScaleComboBox.currentIndexChanged.connect(self._onDpiScaleChanged)
 
         self.addGroup(
+            FluentIcon.BRIGHTNESS,
+            "界面主题",
+            "立即切换明暗外观；跟随系统会随 Windows 主题自动变化",
+            self.themeModeComboBox,
+        )
+        self.addGroup(
             FluentIcon.LAYOUT,
             "界面缩放",
             "自动模式会跟随 Windows，并在不同 DPI 的显示器之间平滑切换",
             self.dpiScaleComboBox,
         )
+        self.groupWidgets[0].setSeparatorVisible(True)
+        QWidget.setTabOrder(self.themeModeComboBox, self.dpiScaleComboBox)
         self.addInfoBanner(
             "小屏幕或高分屏建议使用“跟随系统”。修改缩放比例后需重启软件，"
             "主窗口仍会自动限制在当前屏幕的可用区域内。"
         )
+        qconfig.themeChangedFinished.connect(self._syncThemeSelection)
+
+    def _onThemeModeChanged(self, _index: int) -> None:
+        theme = self.themeModeComboBox.currentData()
+        if not isinstance(theme, Theme) or theme == qconfig.get(cfg.themeMode):
+            return
+        setTheme(theme, save=True)
+
+    def _syncThemeSelection(self, *_args) -> None:
+        currentTheme = qconfig.get(cfg.themeMode)
+        currentIndex = self.themeModeComboBox.findData(currentTheme)
+        if currentIndex < 0 or currentIndex == self.themeModeComboBox.currentIndex():
+            return
+        self.themeModeComboBox.blockSignals(True)
+        self.themeModeComboBox.setCurrentIndex(currentIndex)
+        self.themeModeComboBox.blockSignals(False)
 
     def _onDpiScaleChanged(self, _index: int) -> None:
         scale = self.dpiScaleComboBox.currentData()
@@ -365,6 +446,109 @@ class DisplaySettingWidget(OverviewGroupCard):
             position=InfoBarPosition.TOP,
             duration=5000,
             parent=self.window(),
+        )
+
+
+class AnalysisSettingWidget(OverviewGroupCard):
+    """所有分析页面共用的规则设置。"""
+
+    def __init__(self, parent=None):
+        super().__init__(
+            "分析设置",
+            FluentIcon.DICTIONARY,
+            "全局停用词规则",
+            parent,
+        )
+
+        self.stopwordSwitch = SwitchButton("", self)
+        self.stopwordSwitch.setOnText("已启用")
+        self.stopwordSwitch.setOffText("已停用")
+        self.stopwordSwitch.setChecked(stopwordService.isEnabled())
+        self.stopwordSwitch.setAccessibleName("启用全局停用词过滤")
+        self.stopwordSwitch.checkedChanged.connect(
+            self._onStopwordEnabledChanged
+        )
+
+        self.stopwordCountLabel = CaptionLabel(self)
+        self.stopwordCountLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.stopwordCountLabel.setMinimumWidth(68)
+        self.stopwordCountLabel.setFixedHeight(26)
+        self.manageStopwordsButton = PushButton("管理停用词", self)
+        self.manageStopwordsButton.setIcon(FluentIcon.DICTIONARY)
+        self.manageStopwordsButton.setFixedHeight(32)
+        self.manageStopwordsButton.setAccessibleName("打开全局停用词管理器")
+        self.manageStopwordsButton.clicked.connect(self._openStopwordManager)
+
+        filterIcon = getattr(FluentIcon, "FILTER", FluentIcon.SEARCH)
+        self.addGroup(
+            filterIcon,
+            "停用词过滤",
+            "统一应用于词频、关键词和共现网络分析；修改后对新任务生效",
+            self.stopwordSwitch,
+        )
+        self.addGroup(
+            FluentIcon.DICTIONARY,
+            "停用词词表",
+            "集中导入、编辑、恢复默认或导出当前词表",
+            self._buildStopwordAction(),
+        )
+
+        self._refreshStopwordSummary()
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _buildStopwordAction(self) -> QWidget:
+        wrapper = _createTransparentActionWidget(self)
+        layout = QHBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.stopwordCountLabel)
+        layout.addWidget(self.manageStopwordsButton)
+        return wrapper
+
+    def _onStopwordEnabledChanged(self, isChecked: bool) -> None:
+        stopwordService.setEnabled(isChecked)
+        self._refreshStopwordSummary()
+
+    def _openStopwordManager(self) -> None:
+        from app.view.widgets.freq_analyzer.dialogs import StopwordsDialog
+
+        result = StopwordsDialog.edit(
+            currentWords=stopwordService.words(),
+            parent=self.window(),
+        )
+        if result is None:
+            return
+        savedWords = stopwordService.saveWords(result)
+        self._refreshStopwordSummary()
+        stateHint = (
+            "已应用于后续分析任务"
+            if stopwordService.isEnabled()
+            else "当前过滤停用，可在上方启用"
+        )
+        InfoBar.success(
+            title="停用词已保存",
+            content=f"共 {len(savedWords)} 个，{stateHint}。",
+            parent=self.window(),
+            position=InfoBarPosition.TOP,
+            duration=2500,
+        )
+
+    def _refreshStopwordSummary(self) -> None:
+        wordCount = len(stopwordService.words())
+        stateText = "已启用" if stopwordService.isEnabled() else "已停用"
+        self.stopwordCountLabel.setText(f"{wordCount} 个")
+        self.setHeaderSummary(f"{stateText} · {wordCount} 个停用词")
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.stopwordCountLabel.setStyleSheet(
+            "QLabel {"
+            f" color: {palette.accentText.name()};"
+            f" background: {palette.accentSurface.name()};"
+            f" border: 1px solid {palette.border.name()};"
+            " border-radius: 10px; padding: 2px 8px;"
+            "}"
         )
 
 
@@ -392,10 +576,7 @@ class SoftwareSettingWidget(OverviewGroupCard):
         pathFont.setPointSize(9)
         self.downloadPathLabel.setFont(pathFont)
         self.downloadPathLabel.setWordWrap(True)
-        self.downloadPathLabel.setStyleSheet(
-            "color: #4B5563; background: #F7F8FA; border: 1px solid #E5E7EB; "
-            "border-radius: 6px; padding: 7px 10px;"
-        )
+        self.downloadPathLabel.setStyleSheet(_pathDisplayStyle())
 
         # 每页数量选择
         self.pageNumsComboBox = ComboBox(self)
@@ -462,6 +643,10 @@ class SoftwareSettingWidget(OverviewGroupCard):
             self.maxTriesComboBox,
         ):
             combo.setFixedSize(140, 32)
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _applyTheme(self, *_args) -> None:
+        self.downloadPathLabel.setStyleSheet(_pathDisplayStyle())
 
     @staticmethod
     def _fillNumericCombo(combo, values, current, labelTemplate):
@@ -815,7 +1000,6 @@ class AiChatSettingWidget(OverviewGroupCard):
         super().__init__("AI 聊天设置", FluentIcon.CHAT, "平台 AI · Token 计费", parent)
 
         self.platformAiLabel = CaptionLabel("由 Prismatica 云端安全提供，无需填写 API Key")
-        self.platformAiLabel.setStyleSheet(f"color: {_MUTED};")
 
         self.maxHistoryCombo = ComboBox()
         for n in (5, 10, 20, 50):
@@ -848,10 +1032,6 @@ class AiChatSettingWidget(OverviewGroupCard):
         )
         promptPathFont.setPointSize(9)
         self.systemPromptFileLabel.setFont(promptPathFont)
-        self.systemPromptFileLabel.setStyleSheet(
-            "color: #4B5563; background: #F7F8FA; border: 1px solid #E5E7EB; "
-            "border-radius: 6px; padding: 7px 10px;"
-        )
         self.systemPromptFileButton = PushButton("选择提示词")
         self.systemPromptFileButton.setIcon(FluentIcon.DOCUMENT)
         self.systemPromptFileButton.setFixedSize(152, 32)
@@ -863,7 +1043,6 @@ class AiChatSettingWidget(OverviewGroupCard):
 
         # ---- 状态展示 ----
         self.statusLabel = CaptionLabel("当前 LLM:")
-        self.statusLabel.setStyleSheet(f"color: {_MUTED};")
 
         # ---- 添加设置组 ----
         self.addGroup(
@@ -890,10 +1069,6 @@ class AiChatSettingWidget(OverviewGroupCard):
         # ---- 设计稿中的紧凑状态栏 ----
         self.statusFooter = QFrame(self.view)
         self.statusFooter.setObjectName("aiStatusFooter")
-        self.statusFooter.setStyleSheet(
-            "#aiStatusFooter { background: #F5F5F5; border-top: 1px solid #E5E5E5; "
-            "border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }"
-        )
         self.statusFooter.setMinimumHeight(44)
         self.statusFooter.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -906,23 +1081,13 @@ class AiChatSettingWidget(OverviewGroupCard):
         self.statusRowLayout.addWidget(statusIcon)
         self.statusRowLayout.addWidget(self.statusLabel)
         self.modelPill = QLabel(self.statusFooter)
-        self.modelPill.setStyleSheet(
-            "QLabel { color: #1F1F1F; background: white; border: 1px solid #E5E5E5; "
-            "border-radius: 10px; padding: 2px 8px; }"
-        )
         self.historyPrefixLabel = CaptionLabel("·  历史", self.statusFooter)
-        self.historyPrefixLabel.setStyleSheet(f"color: {_MUTED};")
         self.historyPill = QLabel(self.statusFooter)
-        self.historyPill.setStyleSheet(
-            "QLabel { color: #1F1F1F; background: white; border: 1px solid #E5E5E5; "
-            "border-radius: 10px; padding: 2px 8px; }"
-        )
         self.statusRowLayout.addWidget(self.modelPill)
         self.statusRowLayout.addWidget(self.historyPrefixLabel)
         self.statusRowLayout.addWidget(self.historyPill)
         self.statusRowLayout.addStretch(1)
         self.effectiveLabel = CaptionLabel("设置保存后立即生效", self.statusFooter)
-        self.effectiveLabel.setStyleSheet(f"color: {_MUTED};")
         self.statusRowLayout.addWidget(self.effectiveLabel)
         self.groupLayout.addWidget(self.statusFooter)
 
@@ -931,6 +1096,32 @@ class AiChatSettingWidget(OverviewGroupCard):
             sig.connect(self._refreshStatus)
 
         self._refreshStatus()
+        self._applyStatusTheme()
+        qconfig.themeChangedFinished.connect(self._applyStatusTheme)
+
+    def _applyStatusTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.systemPromptFileLabel.setStyleSheet(_pathDisplayStyle(palette))
+        self.statusFooter.setStyleSheet(
+            f"#aiStatusFooter {{ background: {palette.surfaceAlt.name()}; "
+            f"border-top: 1px solid {palette.border.name()}; "
+            "border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; }"
+        )
+        pillStyle = (
+            f"QLabel {{ color: {palette.text.name()}; "
+            f"background: {palette.surface.name()}; "
+            f"border: 1px solid {palette.border.name()}; "
+            "border-radius: 10px; padding: 2px 8px; }"
+        )
+        self.modelPill.setStyleSheet(pillStyle)
+        self.historyPill.setStyleSheet(pillStyle)
+        for label in (
+            self.platformAiLabel,
+            self.statusLabel,
+            self.historyPrefixLabel,
+            self.effectiveLabel,
+        ):
+            label.setStyleSheet(f"color: {palette.mutedText.name()};")
 
     def setCompactLayout(self, isCompact: bool) -> None:
         super().setCompactLayout(isCompact)
@@ -1139,6 +1330,7 @@ class AboutSettingWidget(OverviewGroupCard):
         self.systemInfoGrid.setHorizontalSpacing(24)
         self.systemInfoGrid.setVerticalSpacing(4)
         self.systemInfoCells = []
+        self.systemInfoKeyLabels = []
         self.systemInfoValueLabels = []
         for index, (key, value) in enumerate(infoItems):
             cell = QFrame(gridWidget)
@@ -1165,10 +1357,27 @@ class AboutSettingWidget(OverviewGroupCard):
             cellLayout.addWidget(keyLabel, 0)
             cellLayout.addWidget(valueLabel, 1)
             self.systemInfoCells.append(cell)
+            self.systemInfoKeyLabels.append(keyLabel)
             self.systemInfoValueLabels.append(valueLabel)
             self.systemInfoGrid.addWidget(cell, index // 2, index % 2)
         sectionLayout.addWidget(gridWidget)
+        self._applySystemInfoTheme()
+        qconfig.themeChangedFinished.connect(self._applySystemInfoTheme)
         return section
+
+    def _applySystemInfoTheme(self, *_args) -> None:
+        palette = shellPalette()
+        for cell in self.systemInfoCells:
+            cell.setStyleSheet(
+                "QFrame { border: none; "
+                f"border-bottom: 1px dashed {palette.border.name()}; }}"
+            )
+        for label in self.systemInfoKeyLabels:
+            label.setStyleSheet(
+                f"color: {palette.mutedText.name()}; border: none;"
+            )
+        for label in self.systemInfoValueLabels:
+            label.setStyleSheet(f"color: {palette.text.name()}; border: none;")
 
     def setCompactLayout(self, isCompact: bool) -> None:
         super().setCompactLayout(isCompact)
@@ -1326,16 +1535,18 @@ class SettingInterface(ScrollArea):
         heroLayout.setSpacing(0)
         heroLayout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        heroIconContainer = QWidget(self.heroWidget)
-        heroIconContainer.setFixedSize(56, 56)
-        heroIconContainer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        heroIconContainer.setStyleSheet(
+        self.heroIconContainer = QWidget(self.heroWidget)
+        self.heroIconContainer.setFixedSize(56, 56)
+        self.heroIconContainer.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True
+        )
+        self.heroIconContainer.setStyleSheet(
             f"background: {_ACCENT_SOFT}; border-radius: 28px;"
         )
-        heroIconLayout = QHBoxLayout(heroIconContainer)
+        heroIconLayout = QHBoxLayout(self.heroIconContainer)
         heroIconLayout.setContentsMargins(16, 16, 16, 16)
         self.iconLabel = IconWidget(
-            _accentIcon(FluentIcon.SETTING), heroIconContainer
+            _accentIcon(FluentIcon.SETTING), self.heroIconContainer
         )
         self.iconLabel.setFixedSize(24, 24)
         heroIconLayout.addWidget(self.iconLabel)
@@ -1353,7 +1564,9 @@ class SettingInterface(ScrollArea):
         _setChineseUiFont(self.subtitleLabel, 10)
         self.subtitleLabel.setStyleSheet(f"color: {_MUTED};")
         self.subtitleLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        heroLayout.addWidget(heroIconContainer, 0, Qt.AlignmentFlag.AlignHCenter)
+        heroLayout.addWidget(
+            self.heroIconContainer, 0, Qt.AlignmentFlag.AlignHCenter
+        )
         heroLayout.addSpacing(22)
         heroLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignHCenter)
         heroLayout.addSpacing(8)
@@ -1365,6 +1578,9 @@ class SettingInterface(ScrollArea):
 
         # 软件设置组件
         self.softwareSettingWidget = SoftwareSettingWidget(self.scrollWidget)
+
+        # 分析规则设置组件
+        self.analysisSettingWidget = AnalysisSettingWidget(self.scrollWidget)
 
         # AI 聊天设置组件
         self.aiChatSettingWidget = AiChatSettingWidget(self.scrollWidget)
@@ -1406,10 +1622,23 @@ class SettingInterface(ScrollArea):
         self.infoLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.infoLabel.setStyleSheet("color:gray;font-size:12px;")
 
-    def _applyPageTheme(self) -> None:
+    def _applyPageTheme(self, *_args) -> None:
         """让设置页画布与其他业务页面使用同一背景令牌。"""
+        palette = shellPalette()
         self.scrollWidget.setStyleSheet(
             f"background:{pageBackgroundColor().name()};border:none;"
+        )
+        self.heroIconContainer.setStyleSheet(
+            f"background: {palette.accentSurface.name()}; border-radius: 28px;"
+        )
+        self.titleLabel.setStyleSheet(
+            f"color: {palette.text.name()}; background: transparent;"
+        )
+        self.subtitleLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; background: transparent;"
+        )
+        self.infoLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 12px;"
         )
 
     def _initLayout(self):
@@ -1422,6 +1651,7 @@ class SettingInterface(ScrollArea):
 
         self.contentLayout.addWidget(self.heroWidget)
         self.contentLayout.addWidget(self.displaySettingWidget)
+        self.contentLayout.addWidget(self.analysisSettingWidget)
         self.contentLayout.addWidget(self.softwareSettingWidget)
         self.contentLayout.addWidget(self.aiChatSettingWidget)
         self.contentLayout.addWidget(self.aiInsightSettingWidget)
@@ -1443,6 +1673,7 @@ class SettingInterface(ScrollArea):
         showSummary = not isCompact
         for card in (
             self.displaySettingWidget,
+            self.analysisSettingWidget,
             self.softwareSettingWidget,
             self.aiChatSettingWidget,
             self.aiInsightSettingWidget,

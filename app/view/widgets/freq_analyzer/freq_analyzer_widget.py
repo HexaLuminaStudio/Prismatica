@@ -14,8 +14,9 @@ from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001�
 # AI 解读 Mixin（PRD-001 REQ-AI-001）— 全部分析子页面统一接入
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.view.widgets.prismatica_theme import setThemeRole
 from app.core.models.project import RESOURCE_TYPE_FREQ
-from app.core.services import beginPaidAnalysisExport
+from app.core.services import beginPaidAnalysisExport, stopwordService
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -59,10 +60,9 @@ from app.view.widgets.freq_analyzer.result_summary import (
 from app.view.widgets.freq_analyzer.dialogs import (
     AdvancedSettingsDialog,
     NgramDialog,
-    StopwordsDialog,
     ZipfDialog,
 )
-from app.view.widgets.freq_analyzer.freq_engine import CleanRule, defaultStopwords
+from app.view.widgets.freq_analyzer.freq_engine import CleanRule
 from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeAlignedItem,
     _makeSwitchButton,
@@ -101,8 +101,6 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.ngramN = 2  # 当前 N-gram 阶数（与 AdvancedSettingsDialog 共享）
         self.unigramMinFreq: int = 1  # 主词频最低频次（弹窗中设置）
         self.ngramMinFreq: int = 2  # N-gram 最低频次（弹窗中设置）
-        # 自定义停用词列表（由 StopwordsDialog 维护;None 表示使用 freq_engine 默认表）
-        self.stopwords: List[str] = defaultStopwords()
         self._worker = None
 
         # 从持久化文件恢复上次的高级设置
@@ -284,7 +282,7 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.advancedBtn.clicked.connect(self._showAdvancedSettings)
         # 状态指示：显示当前生效的频次筛选摘要
         self.advancedHint = CaptionLabel(self._advancedHintText(), self)
-        self.advancedHint.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.advancedHint, "muted", "font-size: 11px;")
 
         paramRow1.addWidget(minLabel)
         paramRow1.addWidget(self.minSpin)
@@ -301,21 +299,10 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.caseSwitch = _makeSwitchButton("区分大小写", self)
         self.caseSwitch.setChecked(False)
 
-        self.stopSwitch = _makeSwitchButton("过滤停用词", self)
-        self.stopSwitch.setChecked(False)
-
-        # 停用词管理按钮（导入 / 查看）
-        self.stopwordsViewBtn = PushButton("查看", self)
-        self.stopwordsViewBtn.setIcon(":app/icons/Dictionary.svg")
-        self.stopwordsViewBtn.setFixedWidth(90)
-        self.stopwordsViewBtn.clicked.connect(self._showStopwordsDialog)
-
         self.numberSwitch = _makeSwitchButton("排除纯数字", self)
         self.numberSwitch.setChecked(True)
 
         paramRow2.addWidget(self.caseSwitch)
-        paramRow2.addWidget(self.stopSwitch)
-        paramRow2.addWidget(self.stopwordsViewBtn)
         paramRow2.addWidget(self.numberSwitch)
         paramRow2.addStretch(1)
         paramLayout.addLayout(paramRow2)
@@ -376,7 +363,7 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 状态（L3：状态文案）
         self.statusLabel = CaptionLabel("加载文件后点击「开始分析」", self)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         paramLayout.addWidget(self.statusLabel)
 
         scrollLayout.addWidget(paramCard)
@@ -517,37 +504,6 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         except Exception as e:
             logger.error(f"[FreqAnalyzerWidget] 保存高级设置失败: {e}")
 
-    # ------------------------------------------------------------------
-    # 停用词弹窗（导入 / 查看 / 编辑 / 恢复默认 / 导出）
-    # ------------------------------------------------------------------
-    def _showStopwordsDialog(self) -> None:
-        """弹出停用词管理弹窗；用户点「保存」后才会真正修改 self.stopwords。
-
-        弹窗内可:
-            - 查看/编辑当前列表
-            - 从 TXT 导入(支持「追加」与「完全替换」两种模式)
-            - 恢复默认中英文停用词表
-            - 导出当前列表为 TXT
-        """
-        result = StopwordsDialog.edit(
-            currentWords=self.stopwords,
-            parent=self.window(),
-        )
-        if result is None:
-            # 用户取消,保留原值
-            return
-        # 保存:替换 widget 的 stopwords(若用户清空则使用空列表)
-        self.stopwords = list(result)
-        # 自动打开「过滤停用词」开关,让用户感知改动已生效
-        self.stopSwitch.setChecked(True)
-        _showInfoBar(
-            "success",
-            "停用词已更新",
-            f"当前停用词共 {len(self.stopwords)} 个;已自动启用「过滤停用词」开关",
-            self,
-            duration=2200,
-        )
-
     def _updateFileCount(self):
         # 已移除 CorpusStatusCard,此方法保留为空以避免外部调用崩溃
         pass
@@ -580,19 +536,21 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         # 延迟 import：避免与主文件 freq_analyzer_interface 循环依赖
         from app.view.freq_analyzer_interface import FreqWorkerThread
 
+        stopwordEnabled = stopwordService.isEnabled()
+        stopwords = set(stopwordService.words())
         self._worker = FreqWorkerThread(
             effective,
             minLength=self.minSpin.value(),
             maxLength=self.maxSpin.value(),
             caseSensitive=self.caseSwitch.isChecked(),
             excludeNumbers=self.numberSwitch.isChecked(),
-            useStopwords=self.stopSwitch.isChecked(),
+            useStopwords=stopwordEnabled,
             useJieba=True,
             ngramN=self.ngramN,
             ngramMinFreq=self.ngramMinFreq,
             cleanRule=rule,
             unigramMinFreq=self.unigramMinFreq,
-            stopwords=set(self.stopwords) if self.stopwords else None,
+            stopwords=stopwords,
             posTags=(
                 self._corpusStore.posTags
                 if (self._corpusStore is not None and self._corpusStore.posEnabled)
@@ -736,7 +694,7 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "minLength": self.minSpin.value(),
             "maxLength": self.maxSpin.value(),
             "caseSensitive": self.caseSwitch.isChecked(),
-            "useStopwords": self.stopSwitch.isChecked(),
+            "useStopwords": stopwordService.isEnabled(),
             # useJieba 在 _runAnalysis 里固定传 True(暂未暴露开关),这里同步写死
             "useJieba": True,
             "ngramN": self.ngramN,

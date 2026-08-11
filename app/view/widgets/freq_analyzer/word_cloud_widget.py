@@ -74,6 +74,7 @@ from app.view.widgets.freq_analyzer.word_cloud_engine import (
     _availableCjkFonts,
     _WORDCLOUD_AVAILABLE,
 )
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 from app.core.utils import logger
 
@@ -300,7 +301,7 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                     ha="center",
                     va="center",
                     transform=ax.transAxes,
-                    color="#999",
+                color=shellPalette().mutedText.name(),
                     fontsize=14,
                 )
             except Exception:
@@ -383,7 +384,7 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "支持矩形/圆形/椭圆形状、5 种配色方案、中英文字体自动混排。",
             self,
         )
-        hint.setStyleSheet("color: #888; font-size: 12px;")
+        setThemeRole(hint, "muted", "font-size: 12px;")
         hint.setWordWrap(True)
         outerLayout.addWidget(hint)
 
@@ -587,11 +588,11 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         layout.setContentsMargins(16, 8, 16, 8)
 
         self.statusLabel = CaptionLabel("就绪", card)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         layout.addWidget(self.statusLabel)
 
         self.summaryLabel = CaptionLabel("", card)
-        self.summaryLabel.setStyleSheet("color: #1890ff; font-size: 11px;")
+        setThemeRole(self.summaryLabel, "accent", "font-size: 11px;")
         layout.addStretch(1)
         layout.addWidget(self.summaryLabel)
 
@@ -621,7 +622,7 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             ha="center",
             va="center",
             transform=self._ax.transAxes,
-            color="#999",
+                color=shellPalette().mutedText.name(),
             fontsize=14,
         )
 

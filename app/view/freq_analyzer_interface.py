@@ -109,8 +109,6 @@ from app.view.widgets.freq_analyzer.freq_engine import (
     FrequencyAnalyzer,
     loadExcelColumn,
     loadTextFile,
-    DEFAULT_STOPWORDS_ZH,
-    DEFAULT_STOPWORDS_EN,
     CleanRule,
     TextCleaner,
 )
@@ -282,7 +280,7 @@ class FreqWorkerThread(QThread):
         self.ngramN = max(2, int(ngramN))  # N-gram 阶数，至少为 2
         self.ngramMinFreq = max(1, int(ngramMinFreq))  # 过滤最低频次
         self.unigramMinFreq = max(1, int(unigramMinFreq))  # 主词频最低频次
-        self.stopwords = set(stopwords) if stopwords else None  # None=默认
+        self.stopwords = set(stopwords) if stopwords is not None else None
         self.posTags = set(posTags) if posTags else None
         self.posEnabled = bool(posEnabled and posTags)
         self.tokenCache = tokenCache  # 分词缓存(加速重复分词)

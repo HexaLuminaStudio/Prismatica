@@ -17,7 +17,7 @@ from qfluentwidgets import (
     MessageBoxBase,
     StrongBodyLabel,
     SubtitleLabel,
-    isDarkTheme,
+    qconfig,
 )
 
 from app.core.api.database_download import DatabaseDownloadCancelled
@@ -29,6 +29,7 @@ from app.core.services.startup_database_service import (
 )
 from app.core.services.cloud_api import CloudApiError
 from app.core.utils import logger
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 def _formatBytes(byteCount: int) -> str:
@@ -53,18 +54,17 @@ class _ResourceStatusRow(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(12)
 
-        iconContainer = QWidget(self)
-        iconContainer.setFixedSize(36, 36)
-        iconContainer.setStyleSheet("background: #eaf8f6; border-radius: 8px;")
-        iconLayout = QHBoxLayout(iconContainer)
+        self.iconContainer = QWidget(self)
+        self.iconContainer.setFixedSize(36, 36)
+        iconLayout = QHBoxLayout(self.iconContainer)
         iconLayout.setContentsMargins(8, 8, 8, 8)
         iconWidget = IconWidget(
             FluentIcon.DOCUMENT.icon(color=QColor("#00b09c")),
-            iconContainer,
+            self.iconContainer,
         )
         iconWidget.setFixedSize(20, 20)
         iconLayout.addWidget(iconWidget)
-        layout.addWidget(iconContainer)
+        layout.addWidget(self.iconContainer)
 
         textLayout = QVBoxLayout()
         textLayout.setSpacing(3)
@@ -88,21 +88,43 @@ class _ResourceStatusRow(QFrame):
         layout.addLayout(stateLayout)
         self.setState("pending", "待校验", "等待开始")
         self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
 
-    def _applyTheme(self) -> None:
-        background = "#2b2b2b" if isDarkTheme() else "#f8fafb"
-        border = "#3d3d3d" if isDarkTheme() else "#e5e7eb"
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
         self.setStyleSheet(
-            f"QFrame#resourceStatusRow {{ background: {background}; "
-            f"border: 1px solid {border}; border-radius: 9px; }}"
+            f"QFrame#resourceStatusRow {{ background: {palette.surfaceAlt.name()}; "
+            f"border: 1px solid {palette.border.name()}; border-radius: 9px; }}"
         )
+        self.iconContainer.setStyleSheet(
+            f"background: {palette.accentSurface.name()}; border-radius: 8px;"
+        )
+        self.setState(self._state, self.stateLabel.text(), self.detailLabel.text())
 
     def setState(self, state: str, label: str, detail: str) -> None:
+        self._state = state
+        palette = shellPalette()
         palettes = {
-            "pending": ("#6b7280", "#f3f4f6", "#e5e7eb"),
-            "running": ("#087b70", "#eaf8f6", "#bfece5"),
-            "success": ("#107c10", "#eaf5ea", "#cde5cd"),
-            "error": ("#c42b1c", "#fdebea", "#f3c6c2"),
+            "pending": (
+                palette.mutedText.name(),
+                palette.surface.name(),
+                palette.border.name(),
+            ),
+            "running": (
+                palette.accentText.name(),
+                palette.accentSurface.name(),
+                palette.accentText.name(),
+            ),
+            "success": (
+                palette.successText.name(),
+                palette.successSurface.name(),
+                palette.successText.name(),
+            ),
+            "error": (
+                palette.dangerText.name(),
+                palette.dangerSurface.name(),
+                palette.dangerText.name(),
+            ),
         }
         foreground, background, border = palettes.get(state, palettes["pending"])
         self.stateLabel.setText(label)

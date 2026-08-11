@@ -59,7 +59,8 @@ from app.core.models.project import (
     Resource,
 )
 from app.core.services import projectManager
-from app.core.utils import logger
+from app.core.utils import logger, qconfig
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +356,7 @@ class ResourceDetailPanel(QWidget):
         headerRow = QHBoxLayout()
         headerRow.setSpacing(8)
         self.typeBadge = CaptionLabel("", self)
-        self.typeBadge.setStyleSheet("color: #00b09c; font-weight: bold;")
+        setThemeRole(self.typeBadge, "accent", "font-weight: bold;")
         headerRow.addWidget(self.typeBadge)
         headerRow.addStretch(1)
         self.statusBadge = CaptionLabel("", self)
@@ -367,14 +368,14 @@ class ResourceDetailPanel(QWidget):
         outer.addWidget(self.titleLabel)
 
         self.metaLabel = CaptionLabel("", self)
-        self.metaLabel.setStyleSheet("color: gray;")
+        setThemeRole(self.metaLabel, "muted")
         self.metaLabel.setWordWrap(True)
         outer.addWidget(self.metaLabel)
 
         # 分隔
         line = QLabel(self)
         line.setFrameShape(QLabel.HLine)
-        line.setStyleSheet("color: #dcdcdc;")
+        setThemeRole(line, "muted")
         outer.addWidget(line)
 
         # 摘要
@@ -382,7 +383,7 @@ class ResourceDetailPanel(QWidget):
         outer.addWidget(self.summaryTitle)
         self.summaryLabel = BodyLabel("", self)
         self.summaryLabel.setWordWrap(True)
-        self.summaryLabel.setStyleSheet("color: #444; line-height: 1.5;")
+        setThemeRole(self.summaryLabel, "text", "line-height: 1.5;")
         outer.addWidget(self.summaryLabel)
 
         # 参数
@@ -390,15 +391,17 @@ class ResourceDetailPanel(QWidget):
         outer.addWidget(self.paramsTitle)
         self.paramsLabel = BodyLabel("", self)
         self.paramsLabel.setWordWrap(True)
-        self.paramsLabel.setStyleSheet(
-            "color: #555; font-family: Consolas, monospace; font-size: 12px;"
+        setThemeRole(
+            self.paramsLabel,
+            "muted",
+            "font-family: Consolas, monospace; font-size: 12px;",
         )
         self.paramsLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
         outer.addWidget(self.paramsLabel)
 
         # 标签
         self.tagsLabel = CaptionLabel("", self)
-        self.tagsLabel.setStyleSheet("color: gray;")
+        setThemeRole(self.tagsLabel, "muted")
         outer.addWidget(self.tagsLabel)
 
         outer.addStretch(1)
@@ -524,13 +527,13 @@ class AiInsightsPanel(QWidget):
         layout.addLayout(aiHeader)
 
         self.aiHint = CaptionLabel("", self)
-        self.aiHint.setStyleSheet("color: gray; font-size: 11px;")
+        setThemeRole(self.aiHint, "muted", "font-size: 11px;")
         self.aiHint.setWordWrap(True)
         layout.addWidget(self.aiHint)
         self._updateAiHint()
 
         self.aiStatusLabel = CaptionLabel("", self)
-        self.aiStatusLabel.setStyleSheet("color: gray;")
+        setThemeRole(self.aiStatusLabel, "muted")
         layout.addWidget(self.aiStatusLabel)
 
         # 解读列表 + 内容预览(左右分栏)
@@ -549,7 +552,7 @@ class AiInsightsPanel(QWidget):
         insightLayout.setSpacing(4)
         insightToolbar = QHBoxLayout()
         self.insightMetaLabel = CaptionLabel("", insightContainer)
-        self.insightMetaLabel.setStyleSheet("color: gray;")
+        setThemeRole(self.insightMetaLabel, "muted")
         insightToolbar.addWidget(self.insightMetaLabel)
         insightToolbar.addStretch(1)
         self.copyInsightBtn = PushButton("📋 复制", insightContainer)
@@ -569,14 +572,20 @@ class AiInsightsPanel(QWidget):
         self.insightView.setWordWrap(True)
         self.insightView.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.insightView.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.insightView.setStyleSheet(
-            "color: #444; background: #fafafa; padding: 8px; "
-            "border: 1px solid #e5e7eb; border-radius: 4px;"
-        )
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
         self.insightView.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         insightLayout.addWidget(self.insightView, 1)
         aiArea.addWidget(insightContainer, 1)
         layout.addLayout(aiArea, 1)
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.insightView.setStyleSheet(
+            f"color: {palette.text.name()}; background: {palette.surfaceAlt.name()}; "
+            f"padding: 8px; border: 1px solid {palette.border.name()}; "
+            "border-radius: 4px;"
+        )
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -777,7 +786,7 @@ class AiInsightsPanel(QWidget):
         try:
             self._updateGenerateBtnState()
             self.aiStatusLabel.setText("⏳ AI 正在思考…")
-            self.aiStatusLabel.setStyleSheet("color: #d97706;")
+            setThemeRole(self.aiStatusLabel, "warning")
         except Exception as e:
             logger.warning(f"[AiInsightsPanel] _onReportStarted 回调异常: {e}")
 
@@ -795,7 +804,7 @@ class AiInsightsPanel(QWidget):
     def _onReportFinished(self, insightId: str, content: str) -> None:
         try:
             self.aiStatusLabel.setText("✓ 报告已归档")
-            self.aiStatusLabel.setStyleSheet("color: #16a34a;")
+            setThemeRole(self.aiStatusLabel, "success")
             self._currentInsightId = insightId
             self._renderInsightList()
             self._selectInsightInList(insightId)
@@ -808,7 +817,7 @@ class AiInsightsPanel(QWidget):
     def _onReportFailed(self, errorMsg: str) -> None:
         try:
             self.aiStatusLabel.setText(f"✗ 失败:{errorMsg}")
-            self.aiStatusLabel.setStyleSheet("color: #dc2626;")
+            setThemeRole(self.aiStatusLabel, "danger")
             self.insightView.setText(f"(生成失败)\n\n{errorMsg}")
             self._updateGenerateBtnState()
         except Exception as e:
@@ -823,7 +832,7 @@ class AiInsightsPanel(QWidget):
 
             QApplication.clipboard().setText(insight.content or "")
             self.aiStatusLabel.setText("📋 已复制到剪贴板")
-            self.aiStatusLabel.setStyleSheet("color: #16a34a;")
+            setThemeRole(self.aiStatusLabel, "success")
         except Exception as e:
             logger.warning(f"[AiInsightsPanel] _onCopyInsightClicked 失败: {e}")
 

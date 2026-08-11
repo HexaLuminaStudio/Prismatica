@@ -17,7 +17,12 @@ from app.core.utils.config import cfg, qconfig
 from app.core.services import taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .widgets.prismatica_navigation import PrismaticaNavigationBar
-from .widgets.prismatica_theme import pageBackgroundColor, shellPalette
+from .widgets.prismatica_theme import (
+    applyMatplotlibTheme,
+    applyThemeRoles,
+    pageBackgroundColor,
+    shellPalette,
+)
 from .widgets.page_transition import switchPageInstantly
 from .widgets.window_geometry import fitWindowToAvailableScreen
 from .hsk_interface import HskInterface
@@ -112,6 +117,7 @@ class MainWindow(MSFluentWindow):
 
         self._reportProgress(90, "加载导航菜单")
         self.initNavigation()
+        applyMatplotlibTheme(self)
         self._reportProgress(95, "准备完成")
 
     def _configurePrismaticaShell(self) -> None:
@@ -140,6 +146,8 @@ class MainWindow(MSFluentWindow):
             "background: transparent; border: none;"
             "}"
         )
+        applyMatplotlibTheme(self)
+        applyThemeRoles(self)
         self.update()
 
     def _installPrismaticaNavigation(self) -> None:

@@ -35,9 +35,17 @@ from qfluentwidgets import (
     SpinBox,
     StrongBodyLabel,
 )
-from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 
 from app.core.services import beginPaidAnalysisExport
+from app.core.services.stopword_service import (
+    defaultStopwords,
+    loadStopwordsFromFile,
+    parseStopwordsFromText,
+    saveStopwordsToFile,
+)
+from app.core.utils import qconfig
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
+from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 
 from .ui_helpers import (
     _makeAlignedItem,
@@ -45,12 +53,6 @@ from .ui_helpers import (
     _makeScrollArea,
     _setupDialogClose,
     _showInfoBar,
-)
-from .freq_engine import (
-    defaultStopwords,
-    loadStopwordsFromFile,
-    parseStopwordsFromText,
-    saveStopwordsToFile,
 )
 
 
@@ -201,7 +203,7 @@ class NgramDialog(MessageBoxBase):
         else:
             statusText = f"共 {len(ngramDf)} 个 {self.label}"
         statusLabel = CaptionLabel(statusText, self)
-        statusLabel.setStyleSheet("color: #666; font-size: 12px;")
+        setThemeRole(statusLabel, "muted", "font-size: 12px;")
 
         # 导出按钮 + 聚簇分析按钮
         exportLayout = QHBoxLayout()
@@ -282,7 +284,7 @@ class SelectColumnDialog(MessageBoxBase):
             f"共 {len(allColumns)} 列（其中 {len(commonColumns)} 列在所有文件中都有）",
             self,
         )
-        infoLabel.setStyleSheet("color: #666; font-size: 12px;")
+        setThemeRole(infoLabel, "muted", "font-size: 12px;")
 
         # 左侧：列名列表
         self.columnList = ProRoundTableWidget(self)
@@ -470,7 +472,7 @@ class CleanPreviewDialog(MessageBoxBase):
             f"（共移除 {max(0, len(original) - len(cleaned))} 字符）",
             self,
         )
-        diffLabel.setStyleSheet("color: #666; font-size: 12px;")
+        setThemeRole(diffLabel, "muted", "font-size: 12px;")
 
         # 布局
         self.viewLayout.setContentsMargins(15, 15, 15, 10)
@@ -544,7 +546,7 @@ class AdvancedSettingsDialog(MessageBoxBase):
         unigramHint = CaptionLabel(
             "仅显示出现次数 ≥ 该阈值的词；设为 1 不过滤（显示所有词）", self
         )
-        unigramHint.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(unigramHint, "muted", "font-size: 11px;")
 
         unigramRow = QHBoxLayout()
         unigramLabel = BodyLabel("主词频最低频次:", self)
@@ -561,7 +563,7 @@ class AdvancedSettingsDialog(MessageBoxBase):
         ngramHint = CaptionLabel(
             "Bigram / Trigram 等 N 元组频次的阶数与最低频次过滤", self
         )
-        ngramHint.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(ngramHint, "muted", "font-size: 11px;")
 
         ngramNRow = QHBoxLayout()
         ngramNLabel = BodyLabel("N-gram 阶数:", self)
@@ -651,7 +653,7 @@ class StopwordsDialog(MessageBoxBase):
         5. 导出当前列表到 TXT 文件
 
     弹窗行为:
-        - 点「保存」→ 返回新的停用词列表(已去重);外部用 setStopwords 替换
+        - 点「保存」→ 返回新的停用词列表(已去重);由设置页统一持久化
         - 点「取消」→ 返回 None,外部保留原值
         - 点关闭按钮 → 同「取消」
 
@@ -668,35 +670,38 @@ class StopwordsDialog(MessageBoxBase):
         super().__init__(parent)
         # 当前停用词 → 字符串列表
         self._initial: List[str] = (
-            list(currentWords) if currentWords else defaultStopwords()
+            list(currentWords) if currentWords is not None else defaultStopwords()
         )
 
         # 顶部标题
         _makeDialogHeader(self, ":app/icons/Dictionary.svg", "停用词管理", self.reject)
 
         # ----- 顶部摘要 + 操作按钮 -----
-        topRow = QHBoxLayout()
+        summaryRow = QHBoxLayout()
         self.summaryLabel = CaptionLabel(
             self._makeSummaryText(len(self._initial)), self
         )
-        self.summaryLabel.setStyleSheet("color: #666; font-size: 11px;")
-        topRow.addWidget(self.summaryLabel)
-        topRow.addStretch(1)
+        setThemeRole(self.summaryLabel, "muted", "font-size: 11px;")
+        summaryRow.addWidget(self.summaryLabel)
+        summaryRow.addStretch(1)
+
+        actionRow = QHBoxLayout()
+        actionRow.addStretch(1)
 
         importBtn = PushButton("导入 TXT…", self)
         importBtn.setIcon(FluentIcon.DOWNLOAD)
         importBtn.clicked.connect(self._onImportClicked)
-        topRow.addWidget(importBtn)
+        actionRow.addWidget(importBtn)
 
         exportBtn = PushButton("导出 TXT", self)
         exportBtn.setIcon(FluentIcon.SAVE)
         exportBtn.clicked.connect(self._onExportClicked)
-        topRow.addWidget(exportBtn)
+        actionRow.addWidget(exportBtn)
 
         resetBtn = PushButton("恢复默认", self)
         resetBtn.setIcon(FluentIcon.RETURN)
         resetBtn.clicked.connect(self._onResetClicked)
-        topRow.addWidget(resetBtn)
+        actionRow.addWidget(resetBtn)
 
         # ----- 导入模式选择 -----
         modeRow = QHBoxLayout()
@@ -715,41 +720,48 @@ class StopwordsDialog(MessageBoxBase):
             "每行一个停用词；以 # 开头的行视为注释。可直接编辑后点「保存」生效。",
             self,
         )
-        hintLabel.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(hintLabel, "muted", "font-size: 11px;")
         hintLabel.setWordWrap(True)
 
         self.editor = PlainTextEdit(self)
         self.editor.setPlainText("\n".join(self._initial))
-        self.editor.setStyleSheet(
-            "font-family: Consolas, 'Courier New', monospace; font-size: 12px;"
-        )
-        self.editor.setMinimumHeight(280)
+        self.editor.setMinimumHeight(260)
         # 实时同步统计
         self.editor.textChanged.connect(self._onTextChanged)
 
         # ----- 整体布局 -----
         self.viewLayout.setContentsMargins(20, 16, 20, 12)
         self.viewLayout.setSpacing(8)
-        self.viewLayout.addLayout(topRow)
+        self.viewLayout.addLayout(summaryRow)
+        self.viewLayout.addLayout(actionRow)
         self.viewLayout.addLayout(modeRow)
         self.viewLayout.addWidget(hintLabel)
         self.viewLayout.addWidget(self.editor, 1)
 
-        # 底部按钮: 取消 + 保存
-        okBtn = PushButton("保存", self)
-        okBtn.setFixedWidth(96)
-        okBtn.clicked.connect(self.accept)
-        cancelBtn = PushButton("取消", self)
-        cancelBtn.setFixedWidth(96)
-        cancelBtn.clicked.connect(self.reject)
+        # 使用 MessageBoxBase 原生按钮区，保留 Enter / Esc、焦点链与窄窗布局。
+        self.yesButton.setText("保存")
+        self.cancelButton.setText("取消")
+        parentWidth = parent.width() if parent is not None else 720
+        parentHeight = parent.height() if parent is not None else 640
+        targetWidth = max(420, min(720, parentWidth - 48))
+        targetHeight = max(460, min(620, parentHeight - 48))
+        self.widget.setMinimumSize(420, 460)
+        self.widget.resize(targetWidth, targetHeight)
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
 
-        self.buttonGroup.hide()
-        self.buttonLayout.addStretch(1)
-        self.buttonLayout.addWidget(cancelBtn)
-        self.buttonLayout.addSpacing(8)
-        self.buttonLayout.addWidget(okBtn)
-        self.widget.setFixedWidth(640)
-        self.widget.setFixedHeight(560)
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.editor.setStyleSheet(
+            "QPlainTextEdit {"
+            f" color: {palette.text.name()};"
+            f" background: {palette.surfaceAlt.name()};"
+            f" border: 1px solid {palette.border.name()};"
+            " border-radius: 6px; padding: 8px;"
+            " font-family: Consolas, 'Courier New', monospace;"
+            " font-size: 12px;"
+            "}"
+        )
 
     # ------------------------------------------------------------------
     # 摘要 / 状态

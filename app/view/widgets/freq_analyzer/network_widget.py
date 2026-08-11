@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 import numpy as np
-from app.core.services import beginPaidAnalysisExport
+from app.core.services import beginPaidAnalysisExport, stopwordService
 
 # matplotlib 后端必须在 from matplotlib import pyplot 之前显式指定
 # P0-A3 fix 2026-07-18:严格 import 顺序 + force=True
@@ -95,6 +95,7 @@ from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001�
 # AI 解读 Mixin（PRD-001 REQ-AI-001）
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 from app.core.models.project import RESOURCE_TYPE_NETWORK
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
@@ -230,7 +231,10 @@ class HoverAnnotation:
             xytext=(15, 15),
             textcoords="offset points",
             bbox=dict(boxstyle="round,pad=0.5", fc="#ffffe0", ec="#999", alpha=0.95),
-            arrowprops=dict(arrowstyle="->", color="#666"),
+                    arrowprops=dict(
+                        arrowstyle="->",
+                        color=shellPalette().mutedText.name(),
+                    ),
             fontsize=10,
             zorder=10,
         )
@@ -469,7 +473,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "⚠️ Frequency 模式受高频词偏置,建议学术分析使用 PMI/LogDice",
             card,
         )
-        self.biasHintLabel.setStyleSheet("color: #c97a00; font-size: 11px;")
+        setThemeRole(self.biasHintLabel, "warning", "font-size: 11px;")
         row25.addWidget(self.biasHintLabel, 1)
 
         layout.addLayout(row25)
@@ -486,11 +490,6 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self._aiInsightBtn.setIcon(FluentIcon.HEART)
         self.setupAiInsightButton(self._aiInsightBtn)
         row3.addWidget(self._aiInsightBtn)
-
-        self.stopwordsBtn = PushButton("停用词...", card)
-        self.stopwordsBtn.setIcon(FluentIcon.SETTING)
-        self.stopwordsBtn.clicked.connect(self._openStopwordsDialog)
-        row3.addWidget(self.stopwordsBtn)
 
         row3.addStretch(1)
 
@@ -544,7 +543,11 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.summaryLabel = self._resultSummary._detailLabel
 
         # Matplotlib Figure
-        self._figure = Figure(figsize=(8, 6), dpi=100, facecolor="#fafafa")
+        self._figure = Figure(
+            figsize=(8, 6),
+            dpi=100,
+            facecolor=shellPalette().surface.name(),
+        )
         self._canvas = FigureCanvas(self._figure)
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -556,7 +559,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 状态栏
         self.statusLabel = CaptionLabel("", card)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         layout.addWidget(self.statusLabel)
 
         # 初始化空图
@@ -606,17 +609,11 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self._worker.start()
 
     def _collectParams(self) -> NetworkBuildParams:
-        # 复用 FreqAnalyzerWidget 的停用词配置(如存在)
-        stopwords = None
-        try:
-            main = self.window()
-            for w in main.findChildren(QWidget):
-                if w.__class__.__name__ == "FreqAnalyzerWidget":
-                    if hasattr(w, "stopwords") and w.stopwords:
-                        stopwords = set(w.stopwords)
-                        break
-        except Exception:
-            stopwords = None
+        stopwords = (
+            set(stopwordService.words())
+            if stopwordService.isEnabled()
+            else set()
+        )
 
         return NetworkBuildParams(
             windowSize=self.windowSpin.value(),
@@ -777,7 +774,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 pos,
                 ax=self._ax,
                 width=edgeWidths,
-                edge_color="#bbbbbb",
+                edge_color=shellPalette().border.name(),
                 alpha=0.55,
             )
 
@@ -803,7 +800,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             ax=self._ax,
             font_size=9,
             font_family=cjkFonts,
-            font_color="#222",
+                font_color=shellPalette().text.name(),
         )
 
         self._ax.set_axis_off()
@@ -868,7 +865,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             ha="center",
             va="center",
             fontsize=14,
-            color="#999",
+                color=shellPalette().mutedText.name(),
             transform=self._ax.transAxes,
         )
         self._canvas.draw_idle()
@@ -982,48 +979,6 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             transaction.refund()
             logger.error(f"[NetworkWidget] {fmt} 导出失败: {e}")
             _showInfoBar("error", "导出失败", str(e), self, duration=3000)
-
-    # ------------------------------------------------------------------
-    # 行为:停用词对话框(复用主页面)
-    # ------------------------------------------------------------------
-    def _openStopwordsDialog(self):
-        """复用 FreqAnalyzerWidget 的 StopwordsDialog(静态便捷方法)"""
-        try:
-            main = self.window()
-            freq = None
-            for w in main.findChildren(QWidget):
-                if w.__class__.__name__ == "FreqAnalyzerWidget":
-                    freq = w
-                    break
-            if freq is None:
-                _showInfoBar(
-                    "warning",
-                    "提示",
-                    "未找到词频分析面板,请先加载该面板后再配置停用词",
-                    self,
-                    duration=2500,
-                )
-                return
-            from app.view.widgets.freq_analyzer.dialogs import StopwordsDialog
-
-            # StopwordsDialog 的 __init__ 参数是 currentWords(不是 currentStopwords),
-            # 且结果通过静态便捷方法 .edit() 返回,无需手动 exec
-            newStopwords = StopwordsDialog.edit(
-                currentWords=freq.stopwords,
-                parent=self.window(),
-            )
-            if newStopwords is not None:
-                freq.stopwords = newStopwords
-                _showInfoBar(
-                    "success",
-                    "已更新",
-                    "停用词已更新,下次构建时生效",
-                    self,
-                    duration=2000,
-                )
-        except Exception as e:
-            logger.error(f"[NetworkWidget] 打开停用词对话框失败: {e}")
-            _showInfoBar("error", "打开失败", str(e), self, duration=2500)
 
     # ------------------------------------------------------------------
     # AI 解读协议（PRD-001 REQ-AI-001）— 由 AiInsightMixin 调用

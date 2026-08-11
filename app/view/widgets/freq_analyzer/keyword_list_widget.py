@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from app.core.services import beginPaidAnalysisExport
+from app.core.services import beginPaidAnalysisExport, stopwordService
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -53,7 +53,6 @@ from qfluentwidgets import (
     SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
-    SwitchButton,
     TableWidget,
 )
 
@@ -77,7 +76,6 @@ from app.core.models.project import RESOURCE_TYPE_KEYWORD_LIST
 from app.view.widgets.freq_analyzer.corpus_store import CorpusStore
 from app.view.widgets.freq_analyzer.freq_engine import (
     TextSegmenter,
-    defaultStopwords,
 )
 from app.view.widgets.freq_analyzer.keyword_list_engine import (
     LL_THRESHOLD_P001,
@@ -98,6 +96,7 @@ from app.view.widgets.freq_analyzer.worker_utils import (
     WorkerMixin,
     populateTableAsync,
 )
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # P0-A2 fix 2026-07-18:统一的 loguru logger
 from app.core.utils import logger
@@ -179,7 +178,7 @@ class KeywordListWorker(CancellableWorker):
         self._caseSensitive = bool(caseSensitive)
         self._useStopwords = bool(useStopwords)
         self._excludeNumbers = bool(excludeNumbers)
-        self._stopwords = set(stopwords) if stopwords else None
+        self._stopwords = set(stopwords) if stopwords is not None else None
         self._minFreq = max(1, int(minFreq))
         self._topN = max(50, int(topN))
         self._significanceLevel = float(significanceLevel)
@@ -844,7 +843,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             - 观察语料(当前活动语料库,只读展示)
             - 参照语料库选择(下拉,默认 default / 第一个)
             - 最低频次 / Top-N / 显著性阈值
-            - 词长 / 大小写 / 停用词开关
+            - 词长 / 大小写 / 排除数字；停用词读取设置页全局规则
             - [开始分析] [取消]
         [ 状态 ]
         [ 结果摘要卡 ] 4 个指标(观察 tokens / 参照 tokens / 显著词数 / 耗时)
@@ -971,7 +970,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                     va="center",
                     transform=ax.transAxes,
                     fontsize=12,
-                    color="#888",
+                color=shellPalette().mutedText.name(),
                 )
             except Exception:
                 pass
@@ -1121,7 +1120,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             "底层算法:Log-Likelihood (Dunning 1993) / Log-Ratio (Hardie 2014) / %DIFF。",
             self,
         )
-        hint.setStyleSheet("color: #888; font-size: 12px;")
+        setThemeRole(hint, "muted", "font-size: 12px;")
         hint.setWordWrap(True)
         outerLayout.addWidget(hint)
 
@@ -1180,7 +1179,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         row1.setSpacing(8)
         row1.addWidget(BodyLabel("观察语料:", card))
         self.observedInfoLabel = CaptionLabel("当前活动语料库", card)
-        self.observedInfoLabel.setStyleSheet("color: #666; font-size: 12px;")
+        setThemeRole(self.observedInfoLabel, "muted", "font-size: 12px;")
         row1.addWidget(self.observedInfoLabel, 1)
         layout.addLayout(row1)
 
@@ -1232,7 +1231,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         row3.addStretch(1)
         layout.addLayout(row3)
 
-        # 第 4 行: 词长 / 大小写 / 停用词 / 排除数字
+        # 第 4 行: 词长 / 大小写 / 排除数字（停用词统一由设置页管理）
         row4 = QHBoxLayout()
         row4.setSpacing(12)
 
@@ -1251,10 +1250,6 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         self.caseSwitch = _makeSwitchButton("区分大小写", card)
         self.caseSwitch.setChecked(False)
         row4.addWidget(self.caseSwitch)
-
-        self.stopSwitch = _makeSwitchButton("过滤停用词", card)
-        self.stopSwitch.setChecked(False)
-        row4.addWidget(self.stopSwitch)
 
         self.numberSwitch = _makeSwitchButton("排除纯数字", card)
         self.numberSwitch.setChecked(True)
@@ -1292,7 +1287,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         self.statusLabel = CaptionLabel(
             "加载观察语料 + 选择参照语料后点击「开始分析」", card
         )
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         layout.addWidget(self.statusLabel)
 
         return card
@@ -1338,7 +1333,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             "按 Log-Likelihood 降序排列;显著词以浅橙色高亮(Log-Likelihood ≥ 阈值)",
             self._keywordsTab,
         )
-        self.keywordsHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(self.keywordsHint, "muted", "font-size: 11px;")
         actionRow.addWidget(self.keywordsHint, 1)
 
         exportBtn = PushButton("导出 CSV", self._keywordsTab)
@@ -1430,7 +1425,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         layout.addWidget(chartTitle)
 
         self._figure = Figure(figsize=(10, 5), dpi=100)
-        self._figure.patch.set_facecolor("#fafafa")
+        self._figure.patch.set_facecolor(shellPalette().surface.name())
         self._ax = self._figure.add_subplot(111)
         self._ax.text(
             0.5,
@@ -1439,7 +1434,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             ha="center",
             va="center",
             transform=self._ax.transAxes,
-            color="#999",
+            color=shellPalette().mutedText.name(),
             fontsize=14,
         )
         self._canvas = FigureCanvasQTAgg(self._figure)
@@ -1452,7 +1447,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             "横轴: 排名(按 LL 降序);纵轴: Log-Likelihood 值。",
             self._chartTab,
         )
-        chartHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(chartHint, "muted", "font-size: 11px;")
         chartHint.setWordWrap(True)
         layout.addWidget(chartHint)
 
@@ -1552,9 +1547,9 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             minLength=self.minLenSpin.value(),
             maxLength=self.maxLenSpin.value(),
             caseSensitive=self.caseSwitch.isChecked(),
-            useStopwords=self.stopSwitch.isChecked(),
+            useStopwords=stopwordService.isEnabled(),
             excludeNumbers=self.numberSwitch.isChecked(),
-            stopwords=defaultStopwords(),
+            stopwords=stopwordService.words(),
             minFreq=minFreq,
             topN=topN,
             significanceLevel=float(sigLevel),
@@ -1913,7 +1908,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         sigSet = set(significantIndices or [])
 
         # 预构造高亮 brush,避免每 cell 重复构造 QColor
-        sigBrush = QColor("#fff7e6")
+        sigBrush = shellPalette().warningSurface
         chunkSize = 500
         nCols = 9
 
@@ -1978,7 +1973,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         ranks, llVals, isKey, topN = self._pendingChartData
 
         self._ax.clear()
-        self._ax.set_facecolor("#fafafa")
+        self._ax.set_facecolor(shellPalette().surface.name())
 
         if len(ranks) == 0:
             self._ax.text(
@@ -1989,7 +1984,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                 va="center",
                 transform=self._ax.transAxes,
                 fontsize=14,
-                color="#999",
+                color=shellPalette().mutedText.name(),
             )
             QTimer.singleShot(0, self._canvas.draw_idle)
             return

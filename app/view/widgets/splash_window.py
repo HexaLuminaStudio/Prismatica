@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import PrimaryPushButton, PushButton
 
 from app.core.utils import logger
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 # 主题色:与 MainWindow.setThemeColor("#00b09c") 保持一致
@@ -133,13 +134,6 @@ class SplashWindow(QWidget):
         # 卡片容器(实际显示背景 + 内容)
         self._card = QWidget(self)
         self._card.setObjectName("splashCard")
-        self._card.setStyleSheet(
-            f"#splashCard {{"
-            f"background-color: rgb{BACKGROUND_COLOR.red(), BACKGROUND_COLOR.green(), BACKGROUND_COLOR.blue()};"
-            f"border-radius: 14px;"
-            f"border: 1px solid #e6e6e6;"
-            f"}}"
-        )
         self._card.setFixedSize(480, 360)
 
         cardLayout = QVBoxLayout(self._card)
@@ -180,9 +174,6 @@ class SplashWindow(QWidget):
         titleFont.setBold(True)
         self._titleLabel.setFont(titleFont)
         self._titleLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._titleLabel.setStyleSheet(
-            f"color: rgb{TEXT_COLOR_LIGHT.red(), TEXT_COLOR_LIGHT.green(), TEXT_COLOR_LIGHT.blue()};"
-        )
         cardLayout.addWidget(self._titleLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # ---- 副标题 / 动态文案 ----
@@ -192,9 +183,6 @@ class SplashWindow(QWidget):
         stageFont.setWeight(QFont.Weight.DemiBold)
         self._stageLabel.setFont(stageFont)
         self._stageLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._stageLabel.setStyleSheet(
-            f"color: rgb{TEXT_COLOR_LIGHT.red(), TEXT_COLOR_LIGHT.green(), TEXT_COLOR_LIGHT.blue()};"
-        )
         self._stageLabel.setWordWrap(True)
         cardLayout.addWidget(self._stageLabel)
 
@@ -203,9 +191,6 @@ class SplashWindow(QWidget):
         detailFont.setPointSize(9)
         self._detailLabel.setFont(detailFont)
         self._detailLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._detailLabel.setStyleSheet(
-            f"color: rgb{SUBTEXT_COLOR.red(), SUBTEXT_COLOR.green(), SUBTEXT_COLOR.blue()};"
-        )
         self._detailLabel.setWordWrap(True)
         self._detailLabel.setMinimumHeight(34)
         cardLayout.addWidget(self._detailLabel)
@@ -213,9 +198,7 @@ class SplashWindow(QWidget):
         progressHeader = QHBoxLayout()
         progressHeader.setContentsMargins(0, 2, 0, 0)
         self._progressHintLabel = QLabel("启动进度", self._card)
-        self._progressHintLabel.setStyleSheet("color: #6b7280; font-size: 9pt;")
         self._percentLabel = QLabel("0%", self._card)
-        self._percentLabel.setStyleSheet("color: #087b70; font-size: 9pt;")
         self._percentLabel.setAlignment(Qt.AlignmentFlag.AlignRight)
         progressHeader.addWidget(self._progressHintLabel)
         progressHeader.addStretch(1)
@@ -228,17 +211,6 @@ class SplashWindow(QWidget):
         self._progressBar.setValue(0)
         self._progressBar.setTextVisible(False)
         self._progressBar.setFixedHeight(8)
-        self._progressBar.setStyleSheet(
-            "QProgressBar {"
-            "    background-color: #eef0f2;"
-            "    border: none;"
-            "    border-radius: 3px;"
-            "}"
-            "QProgressBar::chunk {"
-            f"    background-color: rgb{THEME_COLOR.red(), THEME_COLOR.green(), THEME_COLOR.blue()};"
-            "    border-radius: 3px;"
-            "}"
-        )
         cardLayout.addWidget(self._progressBar)
 
         self._actionContainer = QWidget(self._card)
@@ -258,6 +230,29 @@ class SplashWindow(QWidget):
         cardLayout.addWidget(self._actionContainer)
 
         outerLayout.addWidget(self._card, 0, Qt.AlignmentFlag.AlignCenter)
+        self._applyTheme()
+
+    def _applyTheme(self) -> None:
+        palette = shellPalette()
+        self._card.setStyleSheet(
+            f"#splashCard {{ background-color: {palette.surface.name()}; "
+            f"border-radius: 14px; border: 1px solid {palette.border.name()}; }}"
+        )
+        for label in (self._titleLabel, self._stageLabel):
+            label.setStyleSheet(f"color: {palette.text.name()};")
+        self._detailLabel.setStyleSheet(f"color: {palette.mutedText.name()};")
+        self._progressHintLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 9pt;"
+        )
+        self._percentLabel.setStyleSheet(
+            f"color: {palette.accentText.name()}; font-size: 9pt;"
+        )
+        self._progressBar.setStyleSheet(
+            f"QProgressBar {{ background-color: {palette.surfaceAlt.name()}; "
+            "border: none; border-radius: 3px; }"
+            f"QProgressBar::chunk {{ background-color: {THEME_COLOR.name()}; "
+            "border-radius: 3px; }"
+        )
 
     def _applyShadow(self) -> None:
         """为卡片添加柔和阴影(在 translucent 窗口上才能显示)"""

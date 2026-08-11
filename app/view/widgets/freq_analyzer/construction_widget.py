@@ -76,6 +76,7 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeSwitchButton,
     _showInfoBar,
 )
+from app.view.widgets.prismatica_theme import setThemeRole
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -381,7 +382,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "参考 Stefanowitsch & Gries (2003) 的 collexeme / colostruct",
             self,
         )
-        hint.setStyleSheet("color: #888; font-size: 12px;")
+        setThemeRole(hint, "muted", "font-size: 12px;")
         hint.setWordWrap(True)
         outerLayout.addWidget(hint)
 
@@ -467,7 +468,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "支持 * (任意 1 词) 与 *+ (任意 ≥0 词)。",
             card,
         )
-        patternHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(patternHint, "muted", "font-size: 11px;")
         patternHint.setWordWrap(True)
         layout.addWidget(patternHint)
 
@@ -543,7 +544,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 状态
         self.statusLabel = CaptionLabel("未加载语料库", card)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         layout.addWidget(self.statusLabel)
 
         return card
@@ -584,7 +585,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "MI ≥ 设定阈值的行以浅橙色高亮。可视为 collexeme 表。",
             self._slotTab,
         )
-        self._slotHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(self._slotHint, "muted", "font-size: 11px;")
         layout.addWidget(self._slotHint)
 
         self._slotTable = TableWidget(self._slotTab)
@@ -636,7 +637,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "MI ≥ 设定阈值的行以浅橙色高亮。对应 collexeme pair 分析。",
             self._internalTab,
         )
-        self._internalHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(self._internalHint, "muted", "font-size: 11px;")
         layout.addWidget(self._internalHint)
 
         self._internalTable = TableWidget(self._internalTab)
@@ -689,7 +690,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "MI ≥ 设定阈值的搭配词以浅橙色高亮。",
             self._collocatesTab,
         )
-        self._collHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(self._collHint, "muted", "font-size: 11px;")
         layout.addWidget(self._collHint)
 
         self._collocatesTable = TableWidget(self._collocatesTab)

@@ -6,9 +6,10 @@ from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, StrongBodyLabel, SubtitleLabel
+from qfluentwidgets import BodyLabel, CaptionLabel, StrongBodyLabel, SubtitleLabel, qconfig
 
 from app.core.utils import logger
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 class SubscriptionCard(QFrame):
@@ -17,11 +18,10 @@ class SubscriptionCard(QFrame):
     def __init__(self, sub: Dict[str, Any], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._sub = sub
-        self.setStyleSheet(
-            "QFrame { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; }"
-        )
         self.setMinimumHeight(96)
         self._buildUi()
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
 
     def _buildUi(self) -> None:
         layout = QVBoxLayout(self)
@@ -34,18 +34,9 @@ class SubscriptionCard(QFrame):
         status = str(self._sub.get("status", "active"))
         row1.addWidget(SubtitleLabel(plan))
         row1.addStretch(1)
-        statusLabel = CaptionLabel(f"  {status.upper()}  ")
-        colorMap = {
-            "active": "#10b981",
-            "expired": "#9ca3af",
-            "canceled": "#f59e0b",
-            "past_due": "#ef4444",
-        }
-        statusLabel.setStyleSheet(
-            f"color: white; background: {colorMap.get(status, '#6b7280')}; "
-            f"padding: 2px 8px; border-radius: 8px;"
-        )
-        row1.addWidget(statusLabel)
+        self._status = status
+        self._statusLabel = CaptionLabel(f"  {status.upper()}  ")
+        row1.addWidget(self._statusLabel)
         layout.addLayout(row1)
 
         # 第二行:周期
@@ -62,6 +53,27 @@ class SubscriptionCard(QFrame):
         auto = bool(self._sub.get("autoRenew", False))
         row3 = CaptionLabel(f"周期额度:{quota} 积分  ·  自动续费:{'是' if auto else '否'}")
         layout.addWidget(row3)
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.setStyleSheet(
+            f"QFrame {{ background: {palette.surfaceAlt.name()}; "
+            f"border: 1px solid {palette.border.name()}; border-radius: 10px; }}"
+        )
+        roleMap = {
+            "active": (palette.successText, palette.successSurface),
+            "expired": (palette.mutedText, palette.surface),
+            "canceled": (palette.warningText, palette.warningSurface),
+            "past_due": (palette.dangerText, palette.dangerSurface),
+        }
+        foreground, background = roleMap.get(
+            self._status,
+            (palette.mutedText, palette.surface),
+        )
+        self._statusLabel.setStyleSheet(
+            f"color: {foreground.name()}; background: {background.name()}; "
+            "padding: 2px 8px; border-radius: 8px;"
+        )
 
 
 __all__ = ["SubscriptionCard"]

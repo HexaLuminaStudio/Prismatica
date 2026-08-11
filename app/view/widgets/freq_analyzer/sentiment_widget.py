@@ -97,6 +97,7 @@ from app.core.models.project import RESOURCE_TYPE_SENTIMENT
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -314,7 +315,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         row.addStretch(1)
 
         self.statusLabel = CaptionLabel("就绪", card)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         row.addWidget(self.statusLabel)
 
         layout.addLayout(row)
@@ -325,7 +326,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             f"负面 {len(self._engine._negative)} 词",
             card,
         )
-        dictInfo.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(dictInfo, "muted", "font-size: 11px;")
         layout.addWidget(dictInfo)
 
         return card
@@ -351,7 +352,11 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         layout.addWidget(StrongBodyLabel("情感分布(FR-SNT-004)", card))
 
         # 创建一个 Figure,内含两个子图:饼图 + 柱状图
-        self._figure = Figure(figsize=(10, 4), dpi=100, facecolor="#fafafa")
+        self._figure = Figure(
+            figsize=(10, 4),
+            dpi=100,
+            facecolor=shellPalette().surface.name(),
+        )
         self._axPie = self._figure.add_subplot(1, 2, 1)
         self._axBar = self._figure.add_subplot(1, 2, 2)
 
@@ -603,7 +608,12 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             f"负面({r.negativeCount})",
             f"中性({r.neutralCount})",
         ]
-        colors = ["#52c41a", "#f5222d", "#bfbfbf"]
+        palette = shellPalette()
+        colors = [
+            palette.successText.name(),
+            palette.dangerText.name(),
+            palette.mutedText.name(),
+        ]
         # 过滤 0 值避免警告
         filtered = [(s, l, c) for s, l, c in zip(sizes, labels, colors) if s > 0]
         if filtered:
@@ -667,10 +677,10 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             self.sentenceTable.setItem(i, 0, QTableWidgetItem(txt[:80]))
             polarityItem = QTableWidgetItem(self._polarityLabel(sent.polarity))
             color = {
-                Polarity.POSITIVE: QColor("#52c41a"),
-                Polarity.NEGATIVE: QColor("#f5222d"),
-                Polarity.NEUTRAL: QColor("#888888"),
-            }.get(sent.polarity, QColor("#888"))
+            Polarity.POSITIVE: shellPalette().successText,
+            Polarity.NEGATIVE: shellPalette().dangerText,
+            Polarity.NEUTRAL: shellPalette().mutedText,
+        }.get(sent.polarity, shellPalette().mutedText)
             polarityItem.setForeground(color)
             self.sentenceTable.setItem(i, 1, polarityItem)
             self.sentenceTable.setItem(i, 2, QTableWidgetItem(f"{sent.score:+.3f}"))
@@ -695,7 +705,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 ha="center",
                 va="center",
                 fontsize=14,
-                color="#999",
+                color=shellPalette().mutedText.name(),
                 transform=ax.transAxes,
             )
         self._canvas.draw_idle()
@@ -1203,7 +1213,12 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             f"负面({r.negativeCount})",
             f"中性({r.neutralCount})",
         ]
-        colors = ["#52c41a", "#f5222d", "#bfbfbf"]
+        palette = shellPalette()
+        colors = [
+            palette.successText.name(),
+            palette.dangerText.name(),
+            palette.mutedText.name(),
+        ]
         filtered = [(s, l, c) for s, l, c in zip(sizes, labels, colors) if s > 0]
         if filtered:
             fs, fl, fc = zip(*filtered)
@@ -1253,7 +1268,13 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             combined.sort(key=lambda x: x[1])
             words = [f"[{p}] {w}" for w, c, p in combined]
             counts = [c for _, c, _ in combined]
-            colors = ["#52c41a" if p == "正" else "#f5222d" for _, _, p in combined]
+            palette = shellPalette()
+            colors = [
+                palette.successText.name()
+                if polarity == "正"
+                else palette.dangerText.name()
+                for _, _, polarity in combined
+            ]
             y = np.arange(len(words))
             axWords.barh(y, counts, color=colors, alpha=0.85)
             axWords.set_yticks(y)

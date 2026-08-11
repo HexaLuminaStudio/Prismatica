@@ -6,7 +6,7 @@ import re
 from typing import Optional
 
 from PySide6.QtCore import QEasingCurve, Qt, Signal, QVariantAnimation
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QApplication,
@@ -25,7 +25,7 @@ from qfluentwidgetspro import IndeterminateProgressPushButton
 
 from app.core.services import CloudApiError, getCloudAuth
 from app.core.services.cloud_auth import CloudLoginWorker
-from app.core.utils import logger
+from app.core.utils import logger, qconfig
 from app.view.resource import resource as _resource
 from app.view.widgets.prismatica_theme import ACCENT, shellPalette
 
@@ -101,7 +101,8 @@ class _AuthLineEdit(QLineEdit):
         self.setFixedHeight(40)
         self.setPlaceholderText(placeholder)
         self.setClearButtonEnabled(not password)
-        self.addAction(icon.icon(), QLineEdit.LeadingPosition)
+        self._leadingIcon = icon
+        self._leadingAction = self.addAction(icon.icon(), QLineEdit.LeadingPosition)
         if password:
             self.setEchoMode(QLineEdit.Password)
             self._revealAction = self.addAction(FluentIcon.VIEW.icon(), QLineEdit.TrailingPosition)
@@ -112,19 +113,18 @@ class _AuthLineEdit(QLineEdit):
     def _togglePassword(self) -> None:
         reveal = self.echoMode() == QLineEdit.Password
         self.setEchoMode(QLineEdit.Normal if reveal else QLineEdit.Password)
-        self._revealAction.setIcon((FluentIcon.HIDE if reveal else FluentIcon.VIEW).icon())
         self._revealAction.setToolTip("隐藏密码" if reveal else "显示密码")
+        self._updateActionIcons()
 
     def _applyTheme(self) -> None:
         palette = shellPalette()
-        background = "#FFFFFF" if palette.content.lightness() > 128 else "#24292D"
-        borderHover = "#5F6B73" if palette.content.lightness() <= 128 else "#AAB6BC"
+        borderHover = palette.mutedText.name()
         self.setStyleSheet(
             f"""
             QLineEdit {{
                 padding: 0 34px 0 34px;
                 color: {palette.text.name()};
-                background-color: {background};
+                background-color: {palette.surfaceAlt.name()};
                 border: 1px solid {palette.border.name()};
                 border-radius: 6px;
                 selection-background-color: {ACCENT.name()};
@@ -133,22 +133,28 @@ class _AuthLineEdit(QLineEdit):
             QLineEdit:focus {{ border: 1px solid {ACCENT.name()}; }}
             """
         )
+        widgetPalette = self.palette()
+        widgetPalette.setColor(QPalette.ColorRole.PlaceholderText, palette.mutedText)
+        self.setPalette(widgetPalette)
+        self._updateActionIcons()
+
+    def _updateActionIcons(self) -> None:
+        palette = shellPalette()
+        self._leadingAction.setIcon(self._leadingIcon.icon(color=palette.text))
+        revealAction = getattr(self, "_revealAction", None)
+        if revealAction is not None:
+            revealIcon = (
+                FluentIcon.VIEW
+                if self.echoMode() == QLineEdit.Password
+                else FluentIcon.HIDE
+            )
+            revealAction.setIcon(revealIcon.icon(color=palette.text))
 
 
 class _StatusBanner(QFrame):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("authStatusBanner")
-        self.setStyleSheet(
-            """
-            QFrame#authStatusBanner {
-                background-color: #FFF2F0;
-                border: 1px solid #FFD1CC;
-                border-radius: 6px;
-            }
-            QLabel { color: #B42318; background: transparent; }
-            """
-        )
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 8, 12, 8)
         row.setSpacing(8)
@@ -162,7 +168,21 @@ class _StatusBanner(QFrame):
         self._label.setWordWrap(True)
         row.addWidget(icon)
         row.addWidget(self._label, 1)
+        self._applyTheme()
         self.hide()
+
+    def _applyTheme(self) -> None:
+        palette = shellPalette()
+        self.setStyleSheet(
+            f"""
+            QFrame#authStatusBanner {{
+                background-color: {palette.dangerSurface.name()};
+                border: 1px solid {palette.dangerText.name()};
+                border-radius: 6px;
+            }}
+            QLabel {{ color: {palette.dangerText.name()}; background: transparent; }}
+            """
+        )
 
     def setText(self, text: str) -> None:  # noqa: N802
         message = text.strip()
@@ -222,6 +242,7 @@ class LoginInterface(QWidget):
         )
         self.setFont(authFont)
         self._buildUi()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
         try:
             from app.core.utils import cfg
 
@@ -423,9 +444,9 @@ class LoginInterface(QWidget):
             layout.addSpacing(4)
             layout.addWidget(terms)
 
-    def _applyTheme(self) -> None:
+    def _applyTheme(self, *_args) -> None:
         palette = shellPalette()
-        card = "#FFFFFF" if palette.content.lightness() > 128 else "#202428"
+        card = palette.surface.name()
         self._transitionOverlay.setColor(QColor(card))
         page = "transparent"
         self.setStyleSheet(
@@ -451,6 +472,10 @@ class LoginInterface(QWidget):
             QProgressBar::chunk {{ background-color: {ACCENT.name()}; border-radius: 2px; }}
             """
         )
+        for lineEdit in self.findChildren(_AuthLineEdit):
+            lineEdit._applyTheme()
+        for statusBanner in self.findChildren(_StatusBanner):
+            statusBanner._applyTheme()
 
     def _switchTab(self, index: int, *, animate: bool = True) -> None:
         index = 1 if index else 0
@@ -496,11 +521,18 @@ class LoginInterface(QWidget):
         score += int(any(char.islower() for char in password) and any(char.isupper() for char in password))
         score += int(any(not char.isalnum() for char in password))
         labels = ("请输入密码", "较弱", "可用", "良好", "强")
-        colors = ("#B8C1C6", "#D92D20", "#E39400", "#00A28F", ACCENT.name())
+        palette = shellPalette()
+        colors = (
+            palette.mutedText.name(),
+            palette.dangerText.name(),
+            palette.warningText.name(),
+            palette.accentText.name(),
+            ACCENT.name(),
+        )
         self._passwordStrength.setValue(score)
         self._strengthLabel.setText(labels[score])
         self._passwordStrength.setStyleSheet(
-            f"QProgressBar {{ background: #E5EAED; border: none; border-radius: 2px; }} "
+            f"QProgressBar {{ background: {palette.border.name()}; border: none; border-radius: 2px; }} "
             f"QProgressBar::chunk {{ background: {colors[score]}; border-radius: 2px; }}"
         )
         self._updateConfirmHint(self._regConfirmEdit.text())

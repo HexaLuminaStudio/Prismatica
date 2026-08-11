@@ -61,6 +61,7 @@ from qfluentwidgets import (
 )
 
 from app.core.services import HSK_ESSAY_EXPORT_FEATURE, getPricingCatalog
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 
 class HskCorpusExportOptionsDialog(MessageBoxBase):
@@ -132,7 +133,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
             "从本地镜像库 hsk_corpus_local.db 提取原文并保存。",
             self.widget,
         )
-        descLabel.setStyleSheet("color: #888;")
+        setThemeRole(descLabel, "muted")
         self.viewLayout.addWidget(descLabel)
 
         self.viewLayout.addWidget(self._makeSeparator())
@@ -202,7 +203,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         mergeNameRow = QHBoxLayout()
         mergeNameRow.setSpacing(8)
         mergeNameLabel = CaptionLabel("合并文件名:", self.widget)
-        mergeNameLabel.setStyleSheet("color: #888;")
+        setThemeRole(mergeNameLabel, "muted")
         mergeNameLabel.setFixedWidth(80)
         mergeNameRow.addWidget(mergeNameLabel)
 
@@ -218,13 +219,15 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         # ---- 5. 预览 ----
         self.viewLayout.addWidget(self._buildLabel("预览"))
         self._previewLabel = BodyLabel("", self.widget)
-        self._previewLabel.setStyleSheet(
-            "color: #00b09c; font-size: 13px; font-weight: 600;"
+        setThemeRole(
+            self._previewLabel,
+            "accent",
+            "font-size: 13px; font-weight: 600;",
         )
         self.viewLayout.addWidget(self._previewLabel)
 
         self._warningLabel = CaptionLabel("", self.widget)
-        self._warningLabel.setStyleSheet("color: #d83a3a;")
+        setThemeRole(self._warningLabel, "danger")
         self._warningLabel.setVisible(False)
         self.viewLayout.addWidget(self._warningLabel)
 
@@ -240,14 +243,14 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setFrameShadow(QFrame.Shadow.Sunken)
-        sep.setStyleSheet("color: rgba(0, 0, 0, 8%);")
+        sep.setStyleSheet(f"color: {shellPalette().border.name()};")
         sep.setFixedHeight(1)
         return sep
 
     @staticmethod
     def _buildLabel(text: str) -> QLabel:
         lbl = CaptionLabel(text)
-        lbl.setStyleSheet("color: #555; font-weight: 600;")
+        setThemeRole(lbl, "text", "font-weight: 600;")
         return lbl
 
     # ------------------------------------------------------------------
@@ -333,7 +336,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
             self._previewLabel.setText(
                 "⚠ 本地镜像库不可用,无法导出"
             )
-            self._previewLabel.setStyleSheet("color: #d83a3a;")
+            setThemeRole(self._previewLabel, "danger")
             if self._warningLabel:
                 self._warningLabel.setText(
                     "请检查 datas/corpora/hsk_corpus_local.db 是否存在"
@@ -343,7 +346,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
 
         if not self.zwhaoList:
             self._previewLabel.setText("⚠ 当前筛选条件下无作文可导出")
-            self._previewLabel.setStyleSheet("color: #d83a3a;")
+            setThemeRole(self._previewLabel, "danger")
             return
 
         will_export = (
@@ -366,7 +369,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         if will_skip_missing > 0:
             text += f" · 缺 {will_skip_missing} 篇(local db 无)"
         self._previewLabel.setText(text)
-        self._previewLabel.setStyleSheet("color: #00b09c; font-weight: 600;")
+        setThemeRole(self._previewLabel, "accent", "font-weight: 600;")
 
         # 警告:全部缺失
         if will_export == 0 and will_skip_missing > 0:
@@ -404,7 +407,7 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
             f"预计费用：{cost} 点 · 每 {unitSize:,} 篇 {perUnitCost} 点，"
             "不足一档按一档计；开始后锁定当前价格"
         )
-        self._priceLabel.setStyleSheet("color: #007C70; font-weight: 600;")
+        setThemeRole(self._priceLabel, "accent", "font-weight: 600;")
         self.yesButton.setText(f"开始导出（{cost} 点）")
         self.yesButton.setEnabled(True)
 

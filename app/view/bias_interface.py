@@ -45,10 +45,16 @@ from qfluentwidgets import (
     TitleLabel,
     TransparentToggleToolButton,
     CheckBox,
+    isDarkTheme,
+    qconfig,
     ScrollArea,
     SpinBox,
+    TableView,
 )
 from qfluentwidgetspro import RoundTableWidget
+
+from app.view.widgets.result_table_models import BiasResultTableModel
+from app.view.widgets.prismatica_theme import shellPalette
 
 # matplotlib 必须使用 QtAgg(在 FigureCanvasQTAgg 导入前)
 # 用 force=True 确保即使 MPLBACKEND=Agg 也能切换
@@ -170,12 +176,40 @@ class MultiSelectFilter(QWidget):
 
         for item in self.items:
             cb = CheckBox(item, self)
-            cb.setStyleSheet("font-size: 12px; padding: 4px 8px;")
             cb.stateChanged.connect(lambda s, name=item: self._onChecked(s, name))
             self.checkboxes[item] = cb
             flowLayout.addWidget(cb)
 
         mainLayout.addLayout(flowLayout)
+        self.applyTheme()
+
+    def applyTheme(self, palette=None) -> None:
+        """同步筛选器文字、计数与交互态的语义色。"""
+        palette = palette or shellPalette()
+        text = palette.text.name()
+        muted = palette.mutedText.name()
+        accent = palette.accentText.name()
+        hover = palette.accentSurface.name()
+
+        self.checkAllBtn.setStyleSheet(
+            "QPushButton {"
+            " border: none;"
+            f" color: {accent};"
+            " font-size: 11px; padding: 2px 6px; background: transparent;"
+            "}"
+            "QPushButton:hover {"
+            f" background: {hover}; border-radius: 3px;"
+            "}"
+        )
+        self.countLabel.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        for checkbox in self.checkboxes.values():
+            checkbox.setStyleSheet(
+                "QCheckBox {"
+                f" color: {text};"
+                " font-size: 12px; padding: 4px 8px;"
+                "}"
+                f"QCheckBox:disabled {{ color: {muted}; }}"
+            )
 
     def _onChecked(self, state, name):
         self._updateCount()
@@ -1249,7 +1283,6 @@ class AssociationRulesDialog(MessageBoxBase):
         paramLayout.setVerticalSpacing(8)
 
         supportLabel = BodyLabel("最小支持度:", self)
-        supportLabel.setStyleSheet("font-size: 12px;")
         self.supportSpin = DoubleSpinBox(self)
         self.supportSpin.setRange(0.01, 1.0)
         self.supportSpin.setSingleStep(0.01)
@@ -1263,7 +1296,6 @@ class AssociationRulesDialog(MessageBoxBase):
         )
 
         confidenceLabel = BodyLabel("最小置信度:", self)
-        confidenceLabel.setStyleSheet("font-size: 12px;")
         self.confidenceSpin = DoubleSpinBox(self)
         self.confidenceSpin.setRange(0.05, 1.0)
         self.confidenceSpin.setSingleStep(0.05)
@@ -1277,7 +1309,7 @@ class AssociationRulesDialog(MessageBoxBase):
         )
 
         jointCountLabel = BodyLabel("最小共现次数:", self)
-        jointCountLabel.setStyleSheet("font-size: 12px;")
+        self.parameterLabels = (supportLabel, confidenceLabel, jointCountLabel)
         self.jointCountSpin = SpinBox(self)
         self.jointCountSpin.setRange(2, 100)
         self.jointCountSpin.setValue(3)
@@ -1308,13 +1340,12 @@ class AssociationRulesDialog(MessageBoxBase):
         )
         paramLayout.setColumnStretch(1, 1)
 
-        methodLabel = CaptionLabel(
+        self.methodLabel = CaptionLabel(
             "句子级事务 · 单侧 Fisher 精确检验 · Holm 校正 α=0.05 · 仅保留提升度 > 1。"
             "同一作者或篇章内句子可能相关，结果用于探索而非因果推断。",
             self,
         )
-        methodLabel.setWordWrap(True)
-        methodLabel.setStyleSheet("color: #707070; font-size: 11px;")
+        self.methodLabel.setWordWrap(True)
 
         # Tab 切换：表格 / 散点图 / 网络图
         self.viewSegment = SegmentedWidget(self)
@@ -1398,7 +1429,6 @@ class AssociationRulesDialog(MessageBoxBase):
 
         # 状态/进度
         self.statusLabel = CaptionLabel("点击「重新计算」开始挖掘...", self)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
         self.statusLabel.setWordWrap(True)
         self.statusLabel.setSizePolicy(
             QSizePolicy.Policy.Ignored,
@@ -1431,7 +1461,7 @@ class AssociationRulesDialog(MessageBoxBase):
 
         self.viewLayout.addSpacing(6)
         self.viewLayout.addWidget(self.paramWidget)
-        self.viewLayout.addWidget(methodLabel)
+        self.viewLayout.addWidget(self.methodLabel)
         self.viewLayout.addSpacing(4)
         self.viewLayout.addWidget(self.viewSegment)
         self.viewLayout.addSpacing(6)
@@ -1452,9 +1482,22 @@ class AssociationRulesDialog(MessageBoxBase):
 
         self.widget.setMinimumSize(440, 480)
         self.widget.resize(680, 560)
+        self._applyDialogTheme()
+        qconfig.themeChangedFinished.connect(self._applyDialogTheme)
 
         # 初始计算
         self._recompute()
+
+    def _applyDialogTheme(self, *_args) -> None:
+        palette = shellPalette()
+        for label in self.parameterLabels:
+            label.setStyleSheet(
+                f"color: {palette.text.name()}; font-size: 12px;"
+            )
+        for label in (self.methodLabel, self.statusLabel):
+            label.setStyleSheet(
+                f"color: {palette.mutedText.name()}; font-size: 11px;"
+            )
 
     def _onClose(self):
         if self._workerThread and self._workerThread.isRunning():
@@ -2118,14 +2161,13 @@ class BiasInterface(QWidget):
         titleTextLayout = QVBoxLayout()
         titleTextLayout.setSpacing(2)
         pageTitle = TitleLabel("偏误分析", self.scrollContent)
-        pageDescription = CaptionLabel(
+        self.pageDescription = CaptionLabel(
             "定位偏误句，并查看统计关系",
             self.scrollContent,
         )
-        pageDescription.setWordWrap(True)
-        pageDescription.setStyleSheet("color: #707070;")
+        self.pageDescription.setWordWrap(True)
         titleTextLayout.addWidget(pageTitle)
-        titleTextLayout.addWidget(pageDescription)
+        titleTextLayout.addWidget(self.pageDescription)
         titleLayout.addLayout(titleTextLayout, 1)
         scrollLayout.addLayout(titleLayout)
 
@@ -2136,13 +2178,6 @@ class BiasInterface(QWidget):
 
         self.conditionCard = QWidget(self.scrollContent)
         self.conditionCard.setObjectName("biasConditionCard")
-        self.conditionCard.setStyleSheet(
-            "QWidget#biasConditionCard {"
-            "    background-color: #FFFFFF;"
-            "    border: 1px solid #DCE4EF;"
-            "    border-radius: 12px;"
-            "}"
-        )
         self.conditionCard.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Maximum,
@@ -2167,9 +2202,8 @@ class BiasInterface(QWidget):
         self.sourceStatusLabel.setStyleSheet("color: #7A7A7A;")
         conditionLayout.addWidget(self.sourceStatusLabel)
 
-        columnLabel = CaptionLabel("分析字段", self.conditionCard)
-        columnLabel.setStyleSheet("color: #7A7A7A;")
-        conditionLayout.addWidget(columnLabel)
+        self.columnLabel = CaptionLabel("分析字段", self.conditionCard)
+        conditionLayout.addWidget(self.columnLabel)
 
         columnLayout = QHBoxLayout()
         columnLayout.setSpacing(8)
@@ -2196,9 +2230,9 @@ class BiasInterface(QWidget):
         conditionLayout.addWidget(self.columnCompatibilityLabel)
 
         filterTitleLayout = QHBoxLayout()
-        filterTitle = BodyLabel("偏误类型", self.conditionCard)
-        filterTitle.setStyleSheet("font-weight: 600;")
-        filterTitleLayout.addWidget(filterTitle)
+        self.filterTitle = BodyLabel("偏误类型", self.conditionCard)
+        self.filterTitle.setStyleSheet("font-weight: 600;")
+        filterTitleLayout.addWidget(self.filterTitle)
         filterTitleLayout.addStretch(1)
         self.selectionSummaryLabel = CaptionLabel("未选择", self.conditionCard)
         self.selectionSummaryLabel.setStyleSheet("color: #707070;")
@@ -2299,13 +2333,6 @@ class BiasInterface(QWidget):
 
         self.resultCard = QWidget(self.scrollContent)
         self.resultCard.setObjectName("biasResultCard")
-        self.resultCard.setStyleSheet(
-            "QWidget#biasResultCard {"
-            "    background-color: #FFFFFF;"
-            "    border: 1px solid #DCE4EF;"
-            "    border-radius: 12px;"
-            "}"
-        )
         self.resultCard.setMinimumHeight(540)
         self.resultCard.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -2364,18 +2391,18 @@ class BiasInterface(QWidget):
         )
         self.detailStack.addWidget(self.detailEmptyState)
 
-        self.tableWidget = RoundTableWidget(self.detailStack)
+        self.tableWidget = TableView(self.detailStack)
         self.tableWidget.setMinimumHeight(420)
-        self.tableWidget.setColumnCount(7)
-        self.tableWidget.setHorizontalHeaderLabels(
-            ["文件", "行号", "句子", "偏误类型", "标记内容", "等级", "国籍"]
-        )
+        self.tableModel = BiasResultTableModel(self.tableWidget)
+        self.tableWidget.setModel(self.tableModel)
         self.tableWidget.setSortingEnabled(True)
         self.tableWidget.setSelectionBehavior(
-            RoundTableWidget.SelectionBehavior.SelectRows
+            TableView.SelectionBehavior.SelectRows
         )
         self.tableWidget.setAlternatingRowColors(True)
-        self.tableWidget.setEditTriggers(RoundTableWidget.EditTrigger.NoEditTriggers)
+        self.tableWidget.setEditTriggers(TableView.EditTrigger.NoEditTriggers)
+        self.tableWidget.verticalHeader().setVisible(False)
+        self.tableWidget.setAccessibleName("偏误分析明细表")
 
         # 列宽设置
         self.tableWidget.setColumnWidth(0, 100)
@@ -2426,7 +2453,69 @@ class BiasInterface(QWidget):
         # 输入框互斥逻辑
         self.charLineEdit.textChanged.connect(lambda t: self._onInputMutual(t, "char"))
         self.wordLineEdit.textChanged.connect(lambda t: self._onInputMutual(t, "word"))
+        self._configureFocusChain()
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
         self._applyResponsiveLayout(self.width())
+
+    def _configureFocusChain(self) -> None:
+        focusChain = [
+            self.chooseFileBtn,
+            self.columnCombobox,
+            self.columnConfigBtn,
+            *self.filterSegment.items.values(),
+            self.charLineEdit,
+            self.charFilter.checkAllBtn,
+            *self.charFilter.checkboxes.values(),
+            self.wordLineEdit,
+            self.wordFilter.checkAllBtn,
+            *self.wordFilter.checkboxes.values(),
+            self.sentFilter.checkAllBtn,
+            *self.sentFilter.checkboxes.values(),
+            self.analyzeBtn,
+            self.exportBtn,
+            *self.resultSegment.items.values(),
+            self.tableWidget,
+        ]
+        for currentWidget, nextWidget in zip(focusChain, focusChain[1:]):
+            QWidget.setTabOrder(currentWidget, nextWidget)
+
+    def _applyTheme(self, *_args) -> None:
+        dark = isDarkTheme()
+        palette = shellPalette()
+        surface = "#2B2B2B" if dark else "#FFFFFF"
+        border = "#454545" if dark else "#DCE4EF"
+        muted = "#B8B8B8" if dark else "#616161"
+        warning = "#F2C97D" if dark else "#8A4B00"
+        cardStyle = (
+            "QWidget#{objectName} {{"
+            f" background-color: {surface};"
+            f" border: 1px solid {border};"
+            " border-radius: 12px;"
+            "}}"
+        )
+        self.conditionCard.setStyleSheet(
+            cardStyle.format(objectName="biasConditionCard")
+        )
+        self.resultCard.setStyleSheet(
+            cardStyle.format(objectName="biasResultCard")
+        )
+        for label in (
+            self.pageDescription,
+            self.sourceStatusLabel,
+            self.columnLabel,
+            self.selectionSummaryLabel,
+            self.statusLabel,
+        ):
+            label.setStyleSheet(f"color: {muted};")
+        self.filterTitle.setStyleSheet(
+            f"color: {palette.text.name()}; font-weight: 600;"
+        )
+        self.columnCompatibilityLabel.setStyleSheet(f"color: {warning};")
+        for filterWidget in (self.charFilter, self.wordFilter, self.sentFilter):
+            filterWidget.applyTheme(palette)
+        for emptyState in self.findChildren(BiasEmptyState):
+            emptyState.descriptionLabel.setStyleSheet(f"color: {muted};")
 
     def _onFilterPageChanged(self, key: str) -> None:
         pageIndex = {
@@ -3027,7 +3116,7 @@ class BiasInterface(QWidget):
             **{name: 0 for name in WORDS_TYPES},
         }
         self.totalCounts = None
-        self.tableWidget.setRowCount(0)
+        self.tableModel.clear()
         self.detailStack.setCurrentWidget(self.detailEmptyState)
         self.detailEmptyState.setContent(
             "等待分析",
@@ -3053,6 +3142,9 @@ class BiasInterface(QWidget):
           防止主线程冻结
         - 主线程仅负责数据收集 + UI 渲染
         """
+        if self._isAnalysisRunning:
+            return
+
         if not self.dfs:
             InfoBar.warning(
                 "提示",
@@ -3137,7 +3229,7 @@ class BiasInterface(QWidget):
         self.associationTransactions = []
         self.heatmapData = {}
         self.heatmapGroups = []
-        self.tableWidget.setRowCount(0)
+        self.tableModel.clear()
         self.totalCounts = None
         self.exportBtn.setEnabled(False)
         self._resetEmbeddedResults()
@@ -3275,18 +3367,7 @@ class BiasInterface(QWidget):
         self.totalCounts = {name: self.typeCounts[name] for name in selectTypes}
         self._resetEmbeddedResults()
 
-        # 填充表格
-        self.tableWidget.setRowCount(len(records))
-        for i, (fname, rowNum, sentence, errName, mark, level, country) in enumerate(
-            records
-        ):
-            self.tableWidget.setItem(i, 0, QTableWidgetItem(fname))
-            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(rowNum)))
-            self.tableWidget.setItem(i, 2, QTableWidgetItem(sentence))
-            self.tableWidget.setItem(i, 3, QTableWidgetItem(errName))
-            self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
-            self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
-            self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
+        self.tableModel.setRecords(records)
 
         self.exportBtn.setEnabled(bool(records))
         self.analyzeBtn.setText("重新分析")
@@ -3333,6 +3414,34 @@ class BiasInterface(QWidget):
             InfoBarPosition.TOP_RIGHT,
             self,
         )
+
+    @staticmethod
+    def _stopOwnedWorker(owner, attributeName: str) -> None:
+        worker = getattr(owner, attributeName, None)
+        if worker is None:
+            return
+        try:
+            if hasattr(worker, "cancel"):
+                worker.cancel()
+            if hasattr(worker, "isRunning") and worker.isRunning():
+                if not worker.wait(2000):
+                    logger.warning(
+                        f"[Bias] 关闭时等待后台任务超时: {attributeName}"
+                    )
+                    worker.wait()
+            if hasattr(worker, "deleteLater"):
+                worker.deleteLater()
+        except RuntimeError:
+            pass
+        setattr(owner, attributeName, None)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._isAnalysisRunning = False
+        self._stopOwnedWorker(self, "loadThread")
+        self._stopOwnedWorker(self, "_matchingWorker")
+        for dialog in getattr(self, "_embeddedDialogs", {}).values():
+            self._stopOwnedWorker(dialog, "_workerThread")
+        super().closeEvent(event)
 
     def _runCount(self):
         """切换到计数结果页。"""
@@ -3403,21 +3512,7 @@ class BiasInterface(QWidget):
             # 退化：仅按 errorName 过滤
             filtered = [r for r in self.currentRecords if r[3] == errorName]
 
-        # 重绘主表格
-        self.tableWidget.setRowCount(len(filtered))
-        for i, record in enumerate(filtered):
-            if len(record) < 7:
-                fname, rowNum, sentence, errName, mark = record[:5]
-                level, country = "", ""
-            else:
-                fname, rowNum, sentence, errName, mark, level, country = record
-            self.tableWidget.setItem(i, 0, QTableWidgetItem(fname))
-            self.tableWidget.setItem(i, 1, QTableWidgetItem(str(rowNum)))
-            self.tableWidget.setItem(i, 2, QTableWidgetItem(sentence))
-            self.tableWidget.setItem(i, 3, QTableWidgetItem(errName))
-            self.tableWidget.setItem(i, 4, QTableWidgetItem(mark))
-            self.tableWidget.setItem(i, 5, QTableWidgetItem(level))
-            self.tableWidget.setItem(i, 6, QTableWidgetItem(country))
+        self.tableModel.setRecords(filtered)
 
         self.detailStack.setCurrentWidget(self.tableWidget)
         self._selectResultTab("records")

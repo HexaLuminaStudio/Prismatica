@@ -16,6 +16,7 @@ import numpy as np
 
 from app.core.utils import logger
 from app.core.services import beginPaidAnalysisExport
+from app.view.widgets.prismatica_theme import applyMatplotlibTheme, shellPalette
 
 # matplotlib 后端必须在导入 pyplot 前设置
 import matplotlib  # noqa: E402
@@ -31,11 +32,11 @@ from matplotlib.backends.backend_qtagg import (
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
+from qfluentwidgets import PushButton, qconfig
 
 # ---------------------------------------------------------------------------
 # 中文字体初始化
@@ -89,6 +90,7 @@ class ConcordancePlotCanvas(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setObjectName("concordancePlotCanvas")
         self._fig: Optional[Figure] = None
         self._canvas: Optional[FigureCanvas] = None
         self._data: Optional[Tuple] = (
@@ -107,25 +109,42 @@ class ConcordancePlotCanvas(QWidget):
         # 导出按钮栏
         btnRow = QHBoxLayout()
         btnRow.addStretch()
-        self._exportPngBtn = QPushButton("导出 PNG")
+        self._exportPngBtn = PushButton("导出 PNG", self)
         self._exportPngBtn.setFixedHeight(28)
         self._exportPngBtn.clicked.connect(lambda: self._export("png"))
         btnRow.addWidget(self._exportPngBtn)
 
-        self._exportSvgBtn = QPushButton("导出 SVG")
+        self._exportSvgBtn = PushButton("导出 SVG", self)
         self._exportSvgBtn.setFixedHeight(28)
         self._exportSvgBtn.clicked.connect(lambda: self._export("svg"))
         btnRow.addWidget(self._exportSvgBtn)
         layout.addLayout(btnRow)
 
         # 初始占位
-        placeholder = Figure(figsize=(8, 3), dpi=100)
+        placeholder = Figure(
+            figsize=(8, 3),
+            dpi=100,
+            facecolor=shellPalette().surface.name(),
+        )
         self._canvas = FigureCanvas(placeholder)
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._canvas.setMinimumHeight(200)
         layout.addWidget(self._canvas, 1)
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _applyTheme(self, *_args) -> None:
+        """刷新现有画布，避免图表在主题切换后保留旧配色。"""
+        palette = shellPalette()
+        self.setStyleSheet(
+            "QWidget#concordancePlotCanvas {"
+            f" background: {palette.surface.name()};"
+            " border: none;"
+            "}"
+        )
+        applyMatplotlibTheme(self)
 
     # ------------------------------------------------------------------
     # 数据入口
@@ -176,7 +195,7 @@ class ConcordancePlotCanvas(QWidget):
         self._fig = Figure(
             figsize=(10, max(4, nFiles * 1.2)),
             dpi=100,
-            facecolor="white",
+            facecolor=shellPalette().surface.name(),
         )
 
         # 颜色映射
@@ -247,7 +266,11 @@ class ConcordancePlotCanvas(QWidget):
         fontProps: dict,
     ) -> None:
         """文件数 > _MAX_FILES_DISPLAY 时：将全部命中的全局位置绘制为密度直方图。"""
-        self._fig = Figure(figsize=(10, 3), dpi=100, facecolor="white")
+        self._fig = Figure(
+            figsize=(10, 3),
+            dpi=100,
+            facecolor=shellPalette().surface.name(),
+        )
         ax = self._fig.add_subplot(111)
 
         # 按文件名排序计算累积偏移
@@ -296,7 +319,11 @@ class ConcordancePlotCanvas(QWidget):
     # 空数据图
     # ------------------------------------------------------------------
     def _drawEmpty(self, searchWord: str, fontProps: dict) -> None:
-        self._fig = Figure(figsize=(8, 3), dpi=100, facecolor="white")
+        self._fig = Figure(
+            figsize=(8, 3),
+            dpi=100,
+            facecolor=shellPalette().surface.name(),
+        )
         ax = self._fig.add_subplot(111)
         ax.text(
             0.5,
@@ -305,7 +332,7 @@ class ConcordancePlotCanvas(QWidget):
             ha="center",
             va="center",
             fontsize=14,
-            color="#999",
+            color=shellPalette().mutedText.name(),
             transform=ax.transAxes,
             **fontProps,
         )
@@ -330,6 +357,7 @@ class ConcordancePlotCanvas(QWidget):
         )
         self._canvas.setMinimumHeight(200)
         self.layout().addWidget(self._canvas, 1)
+        self._applyTheme()
 
     # ------------------------------------------------------------------
     # 导出

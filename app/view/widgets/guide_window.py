@@ -47,6 +47,7 @@ from qfluentwidgets import (
 from PySide6.QtWidgets import QSizePolicy
 
 from app.core.utils import cfg, logger, qconfig
+from app.view.widgets.prismatica_theme import setThemeRole
 from app.view.widgets.window_geometry import fitWindowToAvailableScreen
 
 
@@ -291,13 +292,13 @@ class SavePathGuideInterface(_BaseGuidePage):
         )
         if not folderPath:
             self.statusLabel.setText("已取消选择,保留原路径。")
-            self.statusLabel.setStyleSheet("color: #888;")
+            setThemeRole(self.statusLabel, "muted")
             return
 
         qconfig.set(cfg.DownloadSavePath, folderPath)
         self.pathLineEdit.setText(folderPath)
         self.statusLabel.setText(f"已设置:{folderPath}")
-        self.statusLabel.setStyleSheet("color: #2c8a4a;")
+        setThemeRole(self.statusLabel, "success")
         logger.info(f"[Guide] 保存路径已更新: {folderPath}")
 
 
@@ -543,13 +544,13 @@ class _TokenGuideBase(_BaseGuidePage):
     ):
         self.statusLabel.setText(text)
         if success:
-            self.statusLabel.setStyleSheet("color: #2c8a4a;")
+            setThemeRole(self.statusLabel, "success")
         elif error:
-            self.statusLabel.setStyleSheet("color: #b00;")
+            setThemeRole(self.statusLabel, "danger")
         elif warn:
-            self.statusLabel.setStyleSheet("color: #c97a00;")
+            setThemeRole(self.statusLabel, "warning")
         else:
-            self.statusLabel.setStyleSheet("color: #888;")
+            setThemeRole(self.statusLabel, "muted")
 
 
 # ----------------------------------------------------------------------
@@ -745,7 +746,7 @@ class AiChatGuideInterface(_BaseGuidePage):
         self.statusLabel.setText(
             "提示:本页面全部可暂时跳过,后续在「设置 → AI 聊天设置」随时补配。"
         )
-        self.statusLabel.setStyleSheet("color: #888;")
+        setThemeRole(self.statusLabel, "muted")
 
     def _setStatus(
         self,
@@ -758,13 +759,13 @@ class AiChatGuideInterface(_BaseGuidePage):
     ):
         self.statusLabel.setText(text)
         if success:
-            self.statusLabel.setStyleSheet("color: #2c8a4a;")
+            setThemeRole(self.statusLabel, "success")
         elif error:
-            self.statusLabel.setStyleSheet("color: #b00;")
+            setThemeRole(self.statusLabel, "danger")
         elif warn:
-            self.statusLabel.setStyleSheet("color: #c97a00;")
+            setThemeRole(self.statusLabel, "warning")
         else:
-            self.statusLabel.setStyleSheet("color: #888;")
+            setThemeRole(self.statusLabel, "muted")
 
 
 # ----------------------------------------------------------------------

@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import BodyLabel, CaptionLabel, PushButton, TransparentPushButton
 
 from app.core.utils import cfg, logger, qconfig
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 # 主题色：与主窗口 setThemeColor("#00b09c") 对齐
@@ -181,12 +182,6 @@ class MainTourOverlay(QWidget):
         # ---- 顶部提示卡 ----
         self._card = QWidget(self)
         self._card.setObjectName("tourCard")
-        self._card.setStyleSheet(
-            "#tourCard {"
-            f"background-color: rgb{_CARD_BG_COLOR.red(), _CARD_BG_COLOR.green(), _CARD_BG_COLOR.blue()};"
-            f"border-radius: {_CARD_RADIUS}px;"
-            "}"
-        )
         shadow = QGraphicsDropShadowEffect(self._card)
         shadow.setBlurRadius(32)
         shadow.setOffset(0, 8)
@@ -224,9 +219,6 @@ class MainTourOverlay(QWidget):
         titleFont.setPointSize(14)
         titleFont.setBold(True)
         self._titleLabel.setFont(titleFont)
-        self._titleLabel.setStyleSheet(
-            f"color: rgb{_CARD_TEXT_COLOR.red(), _CARD_TEXT_COLOR.green(), _CARD_TEXT_COLOR.blue()};"
-        )
         self._titleLabel.setWordWrap(True)
         headerRow.addWidget(self._titleLabel, 1, Qt.AlignmentFlag.AlignVCenter)
 
@@ -235,16 +227,14 @@ class MainTourOverlay(QWidget):
         # 正文
         self._bodyLabel = CaptionLabel("")
         self._bodyLabel.setWordWrap(True)
-        self._bodyLabel.setStyleSheet("color: rgb(96, 96, 96);")
         self._bodyLabel.setMinimumWidth(0)
         cardLayout.addWidget(self._bodyLabel)
 
         # 分隔细线
-        separator = QWidget(self._card)
-        separator.setFixedHeight(1)
-        separator.setStyleSheet("background-color: #e6e6e6;")
+        self._separator = QWidget(self._card)
+        self._separator.setFixedHeight(1)
         cardLayout.addSpacing(4)
-        cardLayout.addWidget(separator)
+        cardLayout.addWidget(self._separator)
         cardLayout.addSpacing(4)
 
         # 操作行(上一步 / 下一步)
@@ -263,11 +253,6 @@ class MainTourOverlay(QWidget):
         actionRow.addWidget(self._prevButton)
 
         self._nextButton = PushButton("下一步 →")
-        self._nextButton.setStyleSheet(
-            f"QPushButton {{ background-color: rgb{_THEME_COLOR.red(), _THEME_COLOR.green(), _THEME_COLOR.blue()}; color: white; border: none; border-radius: 4px; padding: 6px 14px; }}"
-            f"QPushButton:hover {{ background-color: rgb{_THEME_COLOR.red() - 20 if _THEME_COLOR.red() > 20 else 0, _THEME_COLOR.green() - 20 if _THEME_COLOR.green() > 20 else 0, _THEME_COLOR.blue() - 20 if _THEME_COLOR.blue() > 20 else 0}; }}"
-            f"QPushButton:disabled {{ background-color: #c8c8c8; color: #f0f0f0; }}"
-        )
         self._nextButton.clicked.connect(self._onNextClicked)
         actionRow.addWidget(self._nextButton)
 
@@ -275,14 +260,12 @@ class MainTourOverlay(QWidget):
 
         # 步骤指示 (1 / N)
         self._stepIndicator = CaptionLabel("")
-        self._stepIndicator.setStyleSheet("color: #888;")
         self._stepIndicator.setAlignment(Qt.AlignmentFlag.AlignRight)
         cardLayout.addWidget(self._stepIndicator)
 
         # 关闭按钮 (✕) — 浮在卡片右上角
         self._closeButton = TransparentPushButton("✕")
         self._closeButton.setFixedSize(28, 28)
-        self._closeButton.setStyleSheet("color: #888; font-size: 14px;")
         self._closeButton.clicked.connect(self._onSkipClicked)
         self._closeButton.setParent(self._card)
         self._closeButton.raise_()
@@ -297,6 +280,34 @@ class MainTourOverlay(QWidget):
 
         # 构建步骤定义
         self._buildSteps()
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self._card.setStyleSheet(
+            f"#tourCard {{ background-color: {palette.surface.name()}; "
+            f"border: 1px solid {palette.border.name()}; "
+            f"border-radius: {_CARD_RADIUS}px; }}"
+        )
+        self._titleLabel.setStyleSheet(f"color: {palette.text.name()};")
+        self._bodyLabel.setStyleSheet(f"color: {palette.mutedText.name()};")
+        self._separator.setStyleSheet(
+            f"background-color: {palette.border.name()};"
+        )
+        self._stepIndicator.setStyleSheet(
+            f"color: {palette.mutedText.name()};"
+        )
+        self._closeButton.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 14px;"
+        )
+        self._nextButton.setStyleSheet(
+            f"QPushButton {{ background-color: {_THEME_COLOR.name()}; color: white; "
+            "border: none; border-radius: 4px; padding: 6px 14px; }}"
+            "QPushButton:hover { background-color: #008F7F; }"
+            f"QPushButton:disabled {{ background-color: {palette.surfaceAlt.name()}; "
+            f"color: {palette.mutedText.name()}; }}"
+        )
 
 
     # ------------------------------------------------------------------

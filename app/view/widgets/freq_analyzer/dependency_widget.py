@@ -63,6 +63,7 @@ from app.view.widgets.freq_analyzer.dependency_engine import (
 from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -199,7 +200,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "可导出 PNG/SVG/CoNLL-U。",
             self,
         )
-        hint.setStyleSheet("color: #888; font-size: 12px;")
+        setThemeRole(hint, "muted", "font-size: 12px;")
         hint.setWordWrap(True)
         outerLayout.addWidget(hint)
 
@@ -244,7 +245,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 提示行:句数估计
         self.previewLabel = CaptionLabel("", card)
-        self.previewLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.previewLabel, "muted", "font-size: 11px;")
         self.textEdit.textChanged.connect(self._updateSentencePreview)
         layout.addWidget(self.previewLabel)
 
@@ -254,7 +255,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 后端显示
         self.backendLabel = CaptionLabel("", card)
-        self.backendLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.backendLabel, "muted", "font-size: 11px;")
         opRow.addWidget(self.backendLabel)
 
         opRow.addStretch(1)
@@ -298,7 +299,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         subRow = QHBoxLayout()
         self.summaryLabel = CaptionLabel("尚未分析", card)
-        self.summaryLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.summaryLabel, "muted", "font-size: 11px;")
         subRow.addWidget(self.summaryLabel)
         subRow.addStretch(1)
         subRow.addWidget(QLabel("句子:", card))
@@ -329,7 +330,11 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 悬停提示标签
         self.deprelLegend = CaptionLabel("", card)
-        self.deprelLegend.setStyleSheet("color: #333; font-size: 11px; padding: 4px 0;")
+        setThemeRole(
+            self.deprelLegend,
+            "text",
+            "font-size: 11px; padding: 4px 0;",
+        )
         layout.addWidget(self.deprelLegend)
 
         # 导出按钮
@@ -365,8 +370,10 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         if err:
             text += f"   |   ⚠ {err}"
         self.backendLabel.setText(text)
-        self.backendLabel.setStyleSheet(
-            "color: #b00; font-size: 11px;" if err else "color: #666; font-size: 11px;"
+        setThemeRole(
+            self.backendLabel,
+            "danger" if err else "muted",
+            "font-size: 11px;",
         )
 
     def _updateSentencePreview(self) -> None:
@@ -580,7 +587,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             ha="center",
             va="center",
             fontsize=14,
-            color="#888",
+                color=shellPalette().mutedText.name(),
             transform=ax.transAxes,
         )
         ax.set_xticks([])
@@ -670,7 +677,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 va="center",
                 bbox=dict(
                     boxstyle="round,pad=0.18",
-                    facecolor="#fff7e6",
+                    facecolor=shellPalette().warningSurface.name(),
                     edgecolor="#d04a3a",
                     linewidth=0.5,
                 ),
@@ -700,7 +707,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 fontsize=7,
                 ha="center",
                 va="top",
-                color="#666",
+                    color=shellPalette().mutedText.name(),
             )
 
         # 设置坐标范围
@@ -778,7 +785,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 va="bottom",
                 bbox=dict(
                     boxstyle="round,pad=0.15",
-                    facecolor="#fff7e6",
+                    facecolor=shellPalette().warningSurface.name(),
                     edgecolor="#d04a3a",
                     linewidth=0.4,
                 ),
@@ -811,7 +818,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 fontsize=8,
                 ha="center",
                 va="top",
-                color="#666",
+                    color=shellPalette().mutedText.name(),
             )
 
         ax.set_xlim(-0.5, n - 0.5)

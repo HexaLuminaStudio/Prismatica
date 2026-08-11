@@ -3,32 +3,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from qfluentwidgets import FluentIcon
-
-from app.view.account_interface import AccountInterface, _LeadingIconPrimaryPushButton
-
-
-def testRedeemButtonKeepsIconAtLeadingInset(qtbot) -> None:
-    button = _LeadingIconPrimaryPushButton(FluentIcon.TAG, "兑换码")
-    button.resize(526, 40)
-    qtbot.addWidget(button)
-
-    iconRect = button._iconRect()
-
-    assert iconRect.left() == button.ICON_INSET
-    assert iconRect.center().y() == button.height() / 2
-
-
-def testRedeemButtonMirrorsIconForRightToLeftLayout(qtbot) -> None:
-    button = _LeadingIconPrimaryPushButton(FluentIcon.TAG, "兑换码")
-    button.resize(526, 40)
-    button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-    qtbot.addWidget(button)
-
-    iconRect = button._iconRect()
-
-    assert button.width() - iconRect.right() == button.ICON_INSET
+from app.view.account_interface import AccountInterface
 
 
 def testDangerButtonsReserveTextSpaceForIcons(qtbot) -> None:

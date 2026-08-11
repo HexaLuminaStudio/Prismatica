@@ -37,6 +37,7 @@ from qfluentwidgets import (
     ProgressBar,
     ToolButton,
     isDarkTheme,
+    qconfig,
 )
 
 from app.core.services import taskManager
@@ -104,10 +105,12 @@ class DownloadCard(CardWidget):
         self._status = self.infoDict.get("_status", "pending")
         self._errorText = self.infoDict.get("_error", "") or ""
         self._alwaysShowActions = False
+        self._styleState = "muted"
         self._connectedButtons: set[ToolButton] = set()
 
         self._initUi()
         self._applyInitialState()
+        qconfig.themeChangedFinished.connect(self._refreshTheme)
 
     # ------------------------------------------------------------------
     # UI
@@ -603,6 +606,7 @@ class DownloadCard(CardWidget):
     # Visual state
     # ------------------------------------------------------------------
     def _applyStyle(self, state: str) -> None:
+        self._styleState = state
         dark = isDarkTheme()
         card = "#2b2b2b" if dark else "#ffffff"
         foreground = "#f5f5f5" if dark else "#1f1f1f"
@@ -693,6 +697,9 @@ class DownloadCard(CardWidget):
             }}
             """
         )
+
+    def _refreshTheme(self, *_args) -> None:
+        self._applyStyle(self._styleState)
 
     def enterEvent(self, event) -> None:
         self.actionWidget.show()

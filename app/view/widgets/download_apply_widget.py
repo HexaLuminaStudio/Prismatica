@@ -4,6 +4,7 @@ from typing import Literal, Dict, Any
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame
 from PySide6.QtCore import Qt
 from app.core.utils import logger
+from app.view.widgets.prismatica_theme import setThemeRole
 
 from qfluentwidgets import (
     MessageBoxBase,
@@ -110,7 +111,7 @@ class ParamDisplay(QFrame):
             # 标签
             labelWidget = BodyLabel(f"{label}：", self)
             labelWidget.setFixedWidth(80)
-            labelWidget.setStyleSheet("color: #888;")
+            setThemeRole(labelWidget, "muted")
 
             # 值
             if isinstance(value, list):
@@ -157,7 +158,7 @@ class InfoItem(QFrame):
         # 标签
         self.labelWidget = BodyLabel(label, self)
         self.labelWidget.setFixedWidth(100)
-        self.labelWidget.setStyleSheet("color: #666;")
+        setThemeRole(self.labelWidget, "muted")
 
         # 内容
         self.valueWidget = BodyLabel(value, self)
@@ -214,7 +215,7 @@ class DownloadApplyWidget(MessageBoxBase):
 
         # 下载参数标签
         self.paramsLabel = BodyLabel("下载参数：", self.cardWidget)
-        self.paramsLabel.setStyleSheet("color: #666; font-weight: bold;")
+        setThemeRole(self.paramsLabel, "muted", "font-weight: bold;")
 
         # 下载参数展示
         self.paramsDisplay = ParamDisplay(

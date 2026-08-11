@@ -66,6 +66,7 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
     _makeSwitchButton,
     _showInfoBar,
 )
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
@@ -390,7 +391,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "输出 MI / MI3 / T-score / LogDice / Z-score / ΔP 等学术指标。",
             self,
         )
-        hint.setStyleSheet("color: #888; font-size: 12px;")
+        setThemeRole(hint, "muted", "font-size: 12px;")
         hint.setWordWrap(True)
         outerLayout.addWidget(hint)
 
@@ -535,7 +536,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 状态
         self.statusLabel = CaptionLabel("未加载语料库", card)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.statusLabel, "muted", "font-size: 11px;")
         layout.addWidget(self.statusLabel)
 
         return card
@@ -573,7 +574,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "表中包含 O/C/E 三类列联表原始频次,便于学术复核",
             self._collocatesTab,
         )
-        self._collocatesHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(self._collocatesHint, "muted", "font-size: 11px;")
         layout.addWidget(self._collocatesHint)
 
         # 表格
@@ -628,7 +629,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "展示各搭配词在跨距内不同位置(L5..L1 / R1..R5)的频次分布",
             self._positionTab,
         )
-        self._positionHint.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self._positionHint, "muted", "font-size: 11px;")
         layout.addWidget(self._positionHint)
 
         self._positionTable = TableWidget(self._positionTab)
@@ -652,7 +653,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "导出边列表(node, collocate, MI),可直接用于 NetworkWidget 绘制搭配网络图",
             self._networkTab,
         )
-        self._networkHint.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self._networkHint, "muted", "font-size: 11px;")
         layout.addWidget(self._networkHint)
 
         self._networkTable = TableWidget(self._networkTab)
@@ -952,7 +953,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 for c in range(11):
                     cell = self._collocatesTable.item(idx, c)
                     if cell:
-                        cell.setBackground(QColor("#fff7e6"))
+                        cell.setBackground(shellPalette().warningSurface)
 
     def _renderPositionTable(self, r: CollocationResult):
         """跨距位置分布表

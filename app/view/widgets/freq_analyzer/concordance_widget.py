@@ -22,14 +22,12 @@ import os
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal
-from PySide6.QtGui import QColor
 from PySide6.QtSvgWidgets import QSvgWidget
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QStackedWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -53,6 +51,7 @@ from qfluentwidgets import (
     StrongBodyLabel,
     SubtitleLabel,
     SwitchButton,
+    TableView,
     TransparentPushButton,
     TransparentToggleToolButton,
 )
@@ -69,6 +68,7 @@ from app.view.widgets.freq_analyzer.concordance_plot_widget import (
     extractHitPositions,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
+from app.view.widgets.prismatica_theme import shellPalette
 from app.core.utils import cfg, qconfig  # AI 解读配置（PRD-001 REQ-AI-001）
 
 # AI 解读 Mixin（PRD-001 REQ-AI-001）
@@ -79,10 +79,8 @@ from app.core.models.project import RESOURCE_TYPE_KWIC
 # P0-fix:统一使用 loguru,与项目其它模块保持一致
 from app.core.utils import logger
 from app.core.services import beginPaidAnalysisExport
+from app.view.widgets.result_table_models import KwicResultTableModel
 
-
-# 节点词高亮颜色（柔和黄色背景）
-_NODE_HIGHLIGHT_COLOR = QColor("#FFF7B0")
 
 
 def _makeCleanSwitchButton(text: str, parent: QWidget) -> "SwitchButton":
@@ -226,28 +224,19 @@ class KwicExpandDialog(MessageBoxBase):
         self.viewLayout.addLayout(headerLayout)
 
         # 元信息
-        metaLabel = CaptionLabel(
+        self.metaLabel = CaptionLabel(
             f"来源文件：{hit.sourceFile}    节点位置：token #{hit.tokenIndex}",
             self,
         )
-        metaLabel.setStyleSheet("color: #666; font-size: 12px;")
-        self.viewLayout.addWidget(metaLabel)
+        self.viewLayout.addWidget(self.metaLabel)
 
         # 扩展上下文（彩色拼接：左=灰、节点=黄高亮、右=蓝灰）
-        view = PlainTextEdit(self)
-        view.setReadOnly(True)
-        view.setStyleSheet(
-            "QPlainTextEdit {"
-            " background-color: #fafafa;"
-            " border: 1px solid #e0e0e0;"
-            " border-radius: 4px;"
-            " padding: 8px;"
-            " font-family: 'Consolas', 'Microsoft YaHei', monospace;"
-            " font-size: 13px;"
-            "}"
+        self.contextView = PlainTextEdit(self)
+        self.contextView.setReadOnly(True)
+        self.contextView.setPlainText(
+            self._formatExpanded(expandedLeft, hit, expandedRight)
         )
-        view.setPlainText(self._formatExpanded(expandedLeft, hit, expandedRight))
-        self.viewLayout.addWidget(view, 1)
+        self.viewLayout.addWidget(self.contextView, 1)
 
         # 底部关闭按钮
         closeBottom = PushButton("关闭", self)
@@ -256,6 +245,23 @@ class KwicExpandDialog(MessageBoxBase):
         self.buttonGroup.hide()
         self.widget.setFixedWidth(720)
         self.widget.setFixedHeight(420)
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self.metaLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 12px;"
+        )
+        self.contextView.setStyleSheet(
+            "QPlainTextEdit {"
+            f" color: {palette.text.name()};"
+            f" background-color: {palette.surfaceAlt.name()};"
+            f" border: 1px solid {palette.border.name()};"
+            " border-radius: 4px; padding: 8px;"
+            " font-family: 'Consolas', 'Microsoft YaHei', monospace;"
+            " font-size: 13px; }"
+        )
 
     @staticmethod
     def _formatExpanded(left: List[str], hit: KwicHit, right: List[str]) -> str:
@@ -519,7 +525,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         # 语料/规则变更 → 清空当前 KWIC 结果与二次检索历史
         self._currentResult = None
         if hasattr(self, "resultTable"):
-            self.resultTable.setRowCount(0)
+            self.resultModel.clear()
         if hasattr(self, "_resultSummary"):
             self._resultSummary.setPlaceholder("语料已变更，请重新检索")
         if hasattr(self, "statusLabel"):
@@ -575,6 +581,32 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         scrollLayout.addWidget(self._buildSearchCard())
         scrollLayout.addWidget(self._buildResultCard())
         scrollLayout.addStretch(1)
+        self._configureFocusChain()
+
+    def _configureFocusChain(self) -> None:
+        focusChain = [
+            self.searchEdit,
+            self.regexCheck,
+            self.caseCheck,
+            self.leftSpin,
+            self.rightSpin,
+            self.sortCombo,
+            self.sampleLimitSpin,
+            self.sampleRandomCheck,
+            self.secondaryEdit,
+            self.secondaryOffsetSpin,
+            self.secondaryRegexCheck,
+            self.addSecondaryBtn,
+            self.searchBtn,
+            self._aiInsightBtn,
+            self.resetSecondaryBtn,
+            self.exportTxtBtn,
+            self.exportCsvBtn,
+            *self._viewPivot.items.values(),
+            self.resultTable,
+        ]
+        for currentWidget, nextWidget in zip(focusChain, focusChain[1:]):
+            QWidget.setTabOrder(currentWidget, nextWidget)
 
     def _buildSearchCard(self) -> CardWidget:
         """检索参数卡片"""
@@ -657,9 +689,9 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         row4.addWidget(self.secondaryOffsetSpin)
         self.secondaryRegexCheck = CheckBox("正则", card)
         row4.addWidget(self.secondaryRegexCheck)
-        addBtn = PushButton("追加筛选", card)
-        addBtn.clicked.connect(self._addSecondary)
-        row4.addWidget(addBtn)
+        self.addSecondaryBtn = PushButton("追加筛选", card)
+        self.addSecondaryBtn.clicked.connect(self._addSecondary)
+        row4.addWidget(self.addSecondaryBtn)
         layout.addLayout(row4)
 
         # 已应用的二次检索栈
@@ -746,11 +778,9 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         tableLayout.setContentsMargins(0, 0, 0, 0)
         tableLayout.setSpacing(0)
 
-        self.resultTable = ProRoundTableWidget(tablePage)
-        self.resultTable.setColumnCount(4)
-        self.resultTable.setHorizontalHeaderLabels(
-            ["来源文件", "左侧语境", "节点词", "右侧语境"]
-        )
+        self.resultTable = TableView(tablePage)
+        self.resultModel = KwicResultTableModel(self.resultTable)
+        self.resultTable.setModel(self.resultModel)
         self.resultTable.verticalHeader().setVisible(False)
         self.resultTable.setEditTriggers(self.resultTable.EditTrigger.NoEditTriggers)
         self.resultTable.setSelectionBehavior(
@@ -765,7 +795,10 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.resultTable.setColumnWidth(0, 140)
         self.resultTable.setColumnWidth(2, 100)
-        self.resultTable.cellDoubleClicked.connect(self._onRowDoubleClicked)
+        self.resultTable.doubleClicked.connect(
+            lambda index: self._onRowDoubleClicked(index.row(), index.column())
+        )
+        self.resultTable.setAccessibleName("KWIC 检索结果表")
         # CardWidget 内 stretch 无效，给表格一个合理的最小高度避免被压缩到一行
         self.resultTable.setMinimumHeight(360)
         tableLayout.addWidget(self.resultTable)
@@ -779,7 +812,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 状态栏
         self.statusLabel = CaptionLabel("", card)
-        self.statusLabel.setStyleSheet("color: #666; font-size: 11px;")
+        self.statusLabel.setStyleSheet("font-size: 11px;")
         layout.addWidget(self.statusLabel)
         return card
 
@@ -825,7 +858,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             return
         self.fileToText = {}
         self._currentResult = None
-        self.resultTable.setRowCount(0)
+        self.resultModel.clear()
         if hasattr(self, "_resultSummary"):
             self._resultSummary.setPlaceholder("已清空 — 请重新检索")
         self.statusLabel.setText("已清空")
@@ -844,11 +877,12 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             try:
                 if hasattr(worker, "cancel"):
                     worker.cancel()
-                if worker.isRunning():
-                    worker.wait(2000)
-            except Exception:
+                if worker.isRunning() and not worker.wait(2000):
+                    logger.warning("[ConcordanceWidget] 关闭时等待检索任务超时")
+                    worker.wait()
+                worker.deleteLater()
+            except RuntimeError:
                 pass
-            worker.deleteLater()
             self._worker = None
         super().closeEvent(event)
 
@@ -962,6 +996,9 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # 检索
     # ------------------------------------------------------------------
     def _runSearch(self):
+        if self._worker and self._worker.isRunning():
+            return
+
         word = self.searchEdit.text().strip()
         if not word:
             _showInfoBar("warning", "提示", "请输入节点词", self, duration=2000)
@@ -977,9 +1014,6 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 duration=2000,
             )
             return
-        if self._worker and self._worker.isRunning():
-            return
-
         # 二次检索栈每次重新跑前都清空，避免叠加
         self._resetSecondary(silent=True)
 
@@ -1107,27 +1141,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         self.statusLabel.setText(f"双击索引行可查看上下文扩展（前后各 100 词）")
 
-        self.resultTable.setRowCount(len(result.hits))
-        for i, hit in enumerate(result.hits):
-            fileItem = QTableWidgetItem(hit.sourceFile)
-            self.resultTable.setItem(i, 0, fileItem)
-
-            leftItem = QTableWidgetItem(hit.leftText)
-            leftItem.setForeground(QColor("#666666"))
-            self.resultTable.setItem(i, 1, leftItem)
-
-            # 节点词高亮（FR-KWC-001）
-            nodeItem = QTableWidgetItem(hit.nodeText)
-            nodeItem.setBackground(_NODE_HIGHLIGHT_COLOR)
-            nodeItem.setForeground(QColor("#c2410c"))
-            font = nodeItem.font()
-            font.setBold(True)
-            nodeItem.setFont(font)
-            self.resultTable.setItem(i, 2, nodeItem)
-
-            rightItem = QTableWidgetItem(hit.rightText)
-            rightItem.setForeground(QColor("#666666"))
-            self.resultTable.setItem(i, 3, rightItem)
+        self.resultModel.setHits(result.hits)
 
     # ------------------------------------------------------------------
     # 双击行 → 上下文扩展（FR-KWC-006）
@@ -1282,14 +1296,6 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 # ===========================================================================
 # 内部工具：PySide6 + qfluentwidgets 复用
 # ===========================================================================
-# qfluentwidgetspro 才是提供 ProRoundTableWidget 的实际包
-try:
-    from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget  # noqa: E402
-except ImportError:
-    # 兜底：若环境仅有 qfluentwidgets，则使用 QTableWidget
-    from qfluentwidgets.components.widgets.table_view import TableWidget as ProRoundTableWidget  # type: ignore  # noqa: E402
-
-
 def _makeSvgIcon(path: str, parent: QWidget):
     icon = QSvgWidget(path, parent)
     icon.setFixedSize(20, 20)

@@ -43,7 +43,7 @@ from app.core.services.research_report_service import researchReportService
 from app.core.utils import logger
 from app.view.widgets.project_manager_dialogs import RenameProjectDialog
 from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
-from app.view.widgets.prismatica_theme import pageBackgroundColor
+from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 
 
 _RESOURCE_TYPE_TO_MODULE = {
@@ -778,14 +778,15 @@ class ProjectDashboardWidget(QWidget):
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()
+        palette = shellPalette(dark)
         background = pageBackgroundColor(dark).name()
-        surface = "#2B2B2B" if dark else "#FFFFFF"
-        border = "#3A3A3A" if dark else "#E5E5E5"
-        text = "#F5F5F5" if dark else "#1F1F1F"
-        muted = "#B3B3B3" if dark else "#616161"
-        hover = "#383838" if dark else "#F5F5F5"
-        subtle = "#353535" if dark else "#F0F0F0"
-        accent = "#20B8A6" if dark else "#007C70"
+        surface = palette.surface.name()
+        border = palette.border.name()
+        text = palette.text.name()
+        muted = palette.mutedText.name()
+        hover = palette.surfaceAlt.name()
+        subtle = palette.surfaceAlt.name()
+        accent = palette.accentText.name()
         self.page.setStyleSheet(
             f"""
             QWidget#projectDashboardPage {{ background: {background}; }}
@@ -793,7 +794,7 @@ class ProjectDashboardWidget(QWidget):
                 border-bottom: 1px solid {border}; }}
             QLabel#dashboardProjectTitle {{ color: {text}; font-size: 26px;
                 font-weight: 700; }}
-            QLabel#dashboardStatusChip {{ color: #05655C; background: #DDF6F1;
+            QLabel#dashboardStatusChip {{ color: {palette.accentText.name()}; background: {palette.accentSurface.name()};
                 border-radius: 10px; padding: 3px 10px; font-weight: 600; }}
             QLabel#dashboardStatusChip[status="archived"] {{ color: {muted}; background: {hover}; }}
             QLabel#projectHeaderTag {{ background: {subtle}; color: {muted};
@@ -819,18 +820,18 @@ class ProjectDashboardWidget(QWidget):
                 background: {hover}; font-weight: 600; }}
             QLabel#resourceStatusChip {{ border-radius: 4px; padding: 2px 7px;
                 background: {hover}; color: {muted}; }}
-            QLabel#resourceStatusChip[status="candidate"] {{ color: #725A00;
-                background: #FFF7D6; }}
-            QLabel#resourceStatusChip[status="selected"] {{ color: #107C10;
-                background: #E7F4E7; }}
-            QLabel#resourceStatusChip[status="rejected"] {{ color: #A4262C;
-                background: #FDE7E9; }}
+            QLabel#resourceStatusChip[status="candidate"] {{ color: {palette.warningText.name()};
+                background: {palette.warningSurface.name()}; }}
+            QLabel#resourceStatusChip[status="selected"] {{ color: {palette.successText.name()};
+                background: {palette.successSurface.name()}; }}
+            QLabel#resourceStatusChip[status="rejected"] {{ color: {palette.dangerText.name()};
+                background: {palette.dangerSurface.name()}; }}
             QLabel#insightModelChip {{ background: {hover}; color: {muted};
                 border-radius: 4px; padding: 2px 6px; }}
-            QLabel#insightConfidenceChip {{ color: #107C10; background: #E7F4E7;
+            QLabel#insightConfidenceChip {{ color: {palette.successText.name()}; background: {palette.successSurface.name()};
                 border-radius: 4px; padding: 2px 6px; }}
-            QLabel#insightConfidenceChip[confidence="medium"] {{ color: #725A00;
-                background: #FFF7D6; }}
+            QLabel#insightConfidenceChip[confidence="medium"] {{ color: {palette.warningText.name()};
+                background: {palette.warningSurface.name()}; }}
             QPushButton#insightLinkButton {{ border: none; color: {accent};
                 background: transparent; padding: 2px 0; }}
             QLabel#scopeLabel {{ color: {muted}; }}

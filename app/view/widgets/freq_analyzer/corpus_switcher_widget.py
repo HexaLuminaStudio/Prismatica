@@ -39,6 +39,7 @@ from app.view.widgets.freq_analyzer.ui_helpers import _showInfoBar
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
+from app.view.widgets.prismatica_theme import setThemeRole
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +71,7 @@ class NewCorpusDialog(MessageBoxBase):
             "例如:HSK-A级 / 学术汉语 / 新闻语料 (1-32 字符)"
         )
         self.nameErrLabel = CaptionLabel("", self)
-        self.nameErrLabel.setStyleSheet("color: #d83b01; font-size: 11px;")
+        setThemeRole(self.nameErrLabel, "danger", "font-size: 11px;")
         self.nameErrLabel.setVisible(False)
         nameWrap.addWidget(nameLabel)
         nameWrap.addWidget(self.nameEdit)
@@ -90,7 +91,7 @@ class NewCorpusDialog(MessageBoxBase):
 
         # 保存路径提示
         pathHint = CaptionLabel(f"数据库文件将保存至: {defaultPath}", self)
-        pathHint.setStyleSheet("color: #888; font-size: 11px;")
+        setThemeRole(pathHint, "muted", "font-size: 11px;")
         pathHint.setWordWrap(True)
         self.viewLayout.addWidget(pathHint)
         self.viewLayout.addSpacing(4)
@@ -200,7 +201,7 @@ class CorpusSwitcherWidget(CardWidget):
         layout.addLayout(row1)
 
         self.infoLabel = CaptionLabel("", self)
-        self.infoLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self.infoLabel, "muted", "font-size: 11px;")
         self.infoLabel.setWordWrap(True)
         layout.addWidget(self.infoLabel)
 

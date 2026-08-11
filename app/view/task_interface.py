@@ -16,7 +16,7 @@ from qfluentwidgets import (
     Pivot,
     PrimaryPushButton,
     PushButton,
-    isDarkTheme,
+    qconfig,
 )
 from app.core.services import taskManager
 from app.core.utils import logger
@@ -24,6 +24,7 @@ from app.core.utils import logger
 from .widgets.task_downloaded import DownloadedScrollArea
 from .widgets.task_downloading import DownloadingScrollArea
 from .widgets.task_failed import FailedScrollArea
+from .widgets.prismatica_theme import shellPalette
 
 
 class TaskInterface(QWidget):
@@ -122,6 +123,7 @@ class TaskInterface(QWidget):
             signals.append(taskManager.taskCreated)
         for signal in signals:
             signal.connect(self._scheduleStatsRefresh)
+        qconfig.themeChangedFinished.connect(self._applyStyle)
 
     def _scheduleStatsRefresh(self, *_args) -> None:
         if self._statsRefreshPending:
@@ -166,16 +168,14 @@ class TaskInterface(QWidget):
         except Exception as exc:
             logger.warning(f"[TaskInterface] 新建任务跳转异常: {exc}")
 
-    def _applyStyle(self) -> None:
-        dark = isDarkTheme()
-        border = "#3b3b3b" if dark else "#e5e5e5"
-        muted = "#303030" if dark else "#f5f5f5"
+    def _applyStyle(self, *_args) -> None:
+        palette = shellPalette()
         self.setStyleSheet(
             f"""
             QWidget#TaskInterface {{ background: transparent; }}
             QFrame#taskToolbar {{
-                background: {muted};
-                border: 1px solid {border};
+                background: {palette.surfaceAlt.name()};
+                border: 1px solid {palette.border.name()};
                 border-radius: 7px;
             }}
             """

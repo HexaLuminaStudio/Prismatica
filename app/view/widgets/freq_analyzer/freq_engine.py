@@ -16,13 +16,20 @@ from __future__ import annotations
 import os
 import re
 import math
-import functools
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 import jieba
 import pandas as pd
+from app.core.services.stopword_service import (
+    DEFAULT_STOPWORDS_EN,
+    DEFAULT_STOPWORDS_ZH,
+    defaultStopwords,
+    loadStopwordsFromFile,
+    parseStopwordsFromText,
+    saveStopwordsToFile,
+)  # noqa: F401
 from app.core.utils import logger
 
 
@@ -56,95 +63,6 @@ def isSafeUserRegex(pattern: str) -> Tuple[bool, str]:
 
 
 from app.view.widgets.freq_analyzer.token_cache import backendModelVersion
-
-
-# 默认中文停用词表(精简版,可由用户扩展)
-DEFAULT_STOPWORDS_ZH = {
-    "的",
-    "了",
-    "和",
-    "是",
-    "在",
-    "就",
-    "都",
-    "而",
-    "及",
-    "与",
-    "或",
-    "一个",
-    "没有",
-    "我们",
-    "你们",
-    "他们",
-    "它们",
-    "这个",
-    "那个",
-    "这样",
-    "那样",
-    "什么",
-    "怎么",
-    "为什么",
-    "因为",
-    "所以",
-    "但是",
-    "如果",
-    "虽然",
-    "然后",
-    "现在",
-    "可以",
-    "应该",
-    "需要",
-    "已经",
-    "还",
-    "也",
-    "又",
-    "再",
-    "才",
-    "只",
-    "就是",
-    "不是",
-    "只是",
-}
-
-# 默认英文停用词(精简版)
-DEFAULT_STOPWORDS_EN = {
-    "the",
-    "a",
-    "an",
-    "and",
-    "or",
-    "but",
-    "if",
-    "of",
-    "at",
-    "by",
-    "for",
-    "with",
-    "to",
-    "in",
-    "on",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "being",
-    "this",
-    "that",
-    "these",
-    "those",
-    "it",
-    "its",
-    "i",
-    "you",
-    "he",
-    "she",
-    "we",
-    "they",
-    "them",
-    "their",
-}
 
 
 @dataclass
@@ -946,98 +864,6 @@ def loadTextFile(filePath: str) -> str:
     # fallback
     with open(filePath, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
-
-
-def loadStopwordsFromFile(filePath: str) -> List[str]:
-    """从 TXT 文件加载停用词列表,每行一个词。
-
-    行为:
-        - 自动识别 UTF-8 / UTF-8 with BOM / GBK / UTF-16 / Latin-1 编码
-        - 跳过空行
-        - 去除每行首尾空白
-        - 跳过 `#` 开头的注释行
-        - 内部去重(保持首次出现顺序)
-        - 大小写:不强制转换,保留原始大小写(由 FrequencyAnalyzer 在比较时归一化)
-
-    Args:
-        filePath: 停用词文件路径
-    Returns:
-        去重后的停用词字符串列表
-    """
-    if not filePath or not os.path.exists(filePath):
-        raise FileNotFoundError(f"停用词文件不存在: {filePath}")
-
-    encodings = ["utf-8-sig", "utf-8", "gbk", "utf-16", "latin-1"]
-    text: Optional[str] = None
-    lastErr: Optional[Exception] = None
-    for enc in encodings:
-        try:
-            with open(filePath, "r", encoding=enc) as f:
-                text = f.read()
-            break
-        except UnicodeDecodeError as e:
-            lastErr = e
-            continue
-    if text is None:
-        # 兜底:忽略错误
-        with open(filePath, "r", encoding="utf-8", errors="ignore") as f:
-            text = f.read()
-
-    seen: set = set()
-    result: List[str] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        # 去除 BOM 等不可见字符
-        line = line.replace("\ufeff", "")
-        if line and line not in seen:
-            seen.add(line)
-            result.append(line)
-    return result
-
-
-def parseStopwordsFromText(text: str) -> List[str]:
-    """从文本字符串解析停用词(用于弹窗内可编辑文本框)。"""
-    seen: set = set()
-    result: List[str] = []
-    for raw in (text or "").splitlines():
-        line = raw.strip().replace("\ufeff", "")
-        if not line or line.startswith("#"):
-            continue
-        if line not in seen:
-            seen.add(line)
-            result.append(line)
-    return result
-
-
-@functools.lru_cache(maxsize=1)
-def defaultStopwords() -> List[str]:
-    """返回合并后的默认中英文停用词列表(按集合迭代顺序,无重复)。
-
-    使用 lru_cache 缓存结果:每次点击分析按钮不再重新构造列表,
-    节省主线程 1-3ms 的去重开销(在 hot path 上累计可观)。
-    """
-    seen: set = set()
-    result: List[str] = []
-    for w in DEFAULT_STOPWORDS_ZH | DEFAULT_STOPWORDS_EN:
-        if w not in seen:
-            seen.add(w)
-            result.append(w)
-    return result
-
-
-def saveStopwordsToFile(filePath: str, words: List[str]) -> None:
-    """把停用词列表写回 TXT 文件,每行一个词,UTF-8 编码。"""
-    seen: set = set()
-    with open(filePath, "w", encoding="utf-8") as f:
-        f.write("# 停用词列表 (UTF-8,每行一个词)\n")
-        f.write(f"# 共 {len(words)} 个\n")
-        for w in words:
-            if not w or w in seen:
-                continue
-            seen.add(w)
-            f.write(w + "\n")
 
 
 # ===========================================================================

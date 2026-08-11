@@ -25,6 +25,7 @@ from qfluentwidgets import (
 )
 
 from .glossary import getGlossaryFor, getPanelDisplayName
+from app.view.widgets.prismatica_theme import setThemeRole
 
 
 # 弹窗尺寸常量(集中管理,方便调整)
@@ -68,7 +69,7 @@ class GlossaryDialog(MessageBoxBase):
         self.subtitleLabel = CaptionLabel(
             "以下是该子页面涉及的主要专业术语及释义。", self
         )
-        self.subtitleLabel.setStyleSheet("color: #888;")
+        setThemeRole(self.subtitleLabel, "muted")
         self.viewLayout.addWidget(self.subtitleLabel)
         self.viewLayout.addSpacing(4)
 
@@ -76,7 +77,7 @@ class GlossaryDialog(MessageBoxBase):
         terms = getGlossaryFor(self._routeKey)
         if not terms:
             emptyLabel = BodyLabel("该子页面暂无术语解释。", self)
-            emptyLabel.setStyleSheet("color: #888;")
+            setThemeRole(emptyLabel, "muted")
             self.viewLayout.addWidget(emptyLabel)
             self._termsScrollArea = None
         else:
@@ -85,7 +86,7 @@ class GlossaryDialog(MessageBoxBase):
 
             # 统计条
             countLabel = CaptionLabel(f"共 {len(terms)} 条术语", self)
-            countLabel.setStyleSheet("color: #888;")
+            setThemeRole(countLabel, "muted")
             self.viewLayout.addWidget(countLabel)
 
         # ---- 弹窗尺寸约束 ----
@@ -131,14 +132,14 @@ class GlossaryDialog(MessageBoxBase):
 
         # 术语标题(加粗)
         termLabel = StrongBodyLabel(term, row)
-        termLabel.setStyleSheet("font-size: 13px; color: #0078D4;")
+        setThemeRole(termLabel, "accent", "font-size: 13px;")
         termLabel.setWordWrap(True)
         rowLayout.addWidget(termLabel)
 
         # 释义
         defLabel = BodyLabel(definition, row)
         defLabel.setWordWrap(True)
-        defLabel.setStyleSheet("color: #555; font-size: 12px;")
+        setThemeRole(defLabel, "muted", "font-size: 12px;")
         rowLayout.addWidget(defLabel)
 
         return row

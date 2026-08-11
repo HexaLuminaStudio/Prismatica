@@ -5,8 +5,7 @@
     1. 概览   — 用户头像 / 邮箱 / tier / 余额
     2. 订阅   — subscription_card
     3. 设备   — 设备列表 + 撤销
-    4. 兑换码 — redeem_dialog 入口
-    5. 安全   — 修改密码 / 注销
+    4. 安全   — 修改密码 / 注销
 
 只读账单元数据都从 CloudAccount.me() 拉;余额变化订阅 signalBus.balanceChanged。
 """
@@ -52,9 +51,9 @@ from app.core.services import (
     getCloudAuth,
     getCloudBilling,
 )
-from app.core.utils import logger, signalBus
+from app.core.utils import logger, qconfig, signalBus
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
-from .redeem_dialog import RedeemDialog
 from .subscription_card import SubscriptionCard
 
 
@@ -69,6 +68,8 @@ class _OverviewPage(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._buildUi()
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
         signalBus.balanceChanged.connect(self._onBalanceChanged)
         signalBus.sessionChanged.connect(self._onSessionChanged)
 
@@ -88,9 +89,6 @@ class _OverviewPage(QWidget):
         self._emailLabel = SubtitleLabel("—")
         self._displayLabel = CaptionLabel("—")
         self._tierBadge = CaptionLabel("—")
-        self._tierBadge.setStyleSheet(
-            "color: white; background: #6b7280; padding: 2px 8px; border-radius: 8px;"
-        )
         textCol.addWidget(self._emailLabel)
         textCol.addWidget(self._displayLabel)
         textCol.addWidget(self._tierBadge)
@@ -100,9 +98,6 @@ class _OverviewPage(QWidget):
 
         # 余额卡片
         self._balanceCard = QFrame()
-        self._balanceCard.setStyleSheet(
-            "QFrame { background: #f3f4f6; border-radius: 12px; }"
-        )
         card = QVBoxLayout(self._balanceCard)
         card.setContentsMargins(20, 18, 20, 18)
         card.setSpacing(4)
@@ -119,14 +114,11 @@ class _OverviewPage(QWidget):
         # 快捷操作
         quick = QHBoxLayout()
         quick.setSpacing(10)
-        redeemBtn = PrimaryPushButton("兑换码")
-        redeemBtn.clicked.connect(self._onRedeem)
-        quick.addWidget(redeemBtn)
         changePwBtn = PushButton("修改密码")
         changePwBtn.clicked.connect(self._onChangePassword)
         quick.addWidget(changePwBtn)
         deleteBtn = PushButton("注销账号")
-        deleteBtn.setStyleSheet("color: #c42b1c;")
+        setThemeRole(deleteBtn, "danger")
         deleteBtn.clicked.connect(self._onDeleteAccount)
         quick.addWidget(deleteBtn)
         quick.addStretch(1)
@@ -134,10 +126,21 @@ class _OverviewPage(QWidget):
 
         # 设备上限提示
         self._devicesHint = CaptionLabel(" ")
-        self._devicesHint.setStyleSheet("color: #c42b1c;")
+        setThemeRole(self._devicesHint, "danger")
         layout.addWidget(self._devicesHint)
 
         layout.addStretch(1)
+
+    def _applyTheme(self, *_args) -> None:
+        palette = shellPalette()
+        self._tierBadge.setStyleSheet(
+            f"color: {palette.text.name()}; background: {palette.surfaceAlt.name()}; "
+            "padding: 2px 8px; border-radius: 8px;"
+        )
+        self._balanceCard.setStyleSheet(
+            f"QFrame {{ background: {palette.surfaceAlt.name()}; "
+            f"border: 1px solid {palette.border.name()}; border-radius: 12px; }}"
+        )
 
     def refresh(self) -> None:
         try:
@@ -175,11 +178,6 @@ class _OverviewPage(QWidget):
             self._displayLabel.setText("—")
             self._tierBadge.setText("—")
             self._balanceLabel.setText("—")
-
-    def _onRedeem(self) -> None:
-        dlg = RedeemDialog(self)
-        if dlg.exec():
-            self.refresh()
 
     def _onChangePassword(self) -> None:
         old, ok1 = QInputDialog.getText(
@@ -375,7 +373,7 @@ class _DevicesPage(QWidget):
 class AccountPanel(QDialog):
     """「我的账户」抽屉 — 主对话框。
 
-    通过 Pivot 切换 4 个子页签:概览 / 订阅 / 设备 / 兑换码(走概览页里的入口)。
+    通过 Pivot 切换 3 个子页签:概览 / 订阅 / 设备。
     """
 
     closed = Signal()

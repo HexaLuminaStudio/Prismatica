@@ -127,6 +127,22 @@ class Config(QConfig):
     )
 
     # ============================================================
+    # 分析规则：停用词由设置页统一管理，所有分析器运行时读取同一配置。
+    # StopwordsJson 为空表示使用内置中英文默认表；JSON 数组允许显式空表。
+    # ============================================================
+    analysisStopwordsEnabled = ConfigItem(
+        "Analysis",
+        "StopwordsEnabled",
+        False,
+        BoolValidator(),
+    )
+    analysisStopwordsJson = ConfigItem(
+        "Analysis",
+        "StopwordsJson",
+        "",
+    )
+
+    # ============================================================
     # HSK 语料检索库（独立 SQLite + 全 NOCASE 索引）
     # - DbEnabled:    是否启用本模块
     # - DbPath:       SQLite 数据库绝对路径,默认 <DATA>/corpora/hsk_corpus.db

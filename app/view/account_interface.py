@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from PySide6.QtCore import QObject, QRectF, QRunnable, QThreadPool, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -33,7 +32,6 @@ from qfluentwidgets import (
     IconWidget,
     MessageBox,
     Pivot,
-    PrimaryPushButton,
     PushButton,
     ScrollArea,
     StrongBodyLabel,
@@ -46,8 +44,6 @@ from qfluentwidgets import (
 from app.core.services import CloudApiError, getCloudAccount, getCloudAuth
 from app.core.utils import logger, signalBus
 from app.view.widgets.prismatica_theme import pageBackgroundColor
-
-from .widgets.account.redeem_dialog import RedeemDialog
 
 
 def _clearLayout(layout: QVBoxLayout) -> None:
@@ -143,37 +139,6 @@ class _SurfaceCard(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
 
-class _LeadingIconPrimaryPushButton(PrimaryPushButton):
-    """文案保持居中、图标固定在前导侧的主按钮。"""
-
-    ICON_INSET = 14
-
-    def _iconRect(self) -> QRectF:
-        iconWidth = self.iconSize().width()
-        iconHeight = self.iconSize().height()
-        iconX = self.ICON_INSET
-        if self.isRightToLeft():
-            iconX = self.width() - iconWidth - self.ICON_INSET
-        iconY = (self.height() - iconHeight) / 2
-        return QRectF(iconX, iconY, iconWidth, iconHeight)
-
-    def paintEvent(self, event) -> None:
-        QPushButton.paintEvent(self, event)
-        if self.icon().isNull():
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
-        if not self.isEnabled():
-            painter.setOpacity(0.3628)
-        elif self.isPressed:
-            painter.setOpacity(0.786)
-        self._drawIcon(self._icon, painter, self._iconRect())
-
-
 class _StatusChip(CaptionLabel):
     def __init__(
         self,
@@ -243,14 +208,6 @@ class _OverviewPage(QWidget):
         billsRow.addWidget(self._viewBillsButton)
         cardLayout.addLayout(billsRow)
         layout.addWidget(self._balanceCard)
-
-        self._redeemButton = _LeadingIconPrimaryPushButton(
-            FluentIcon.TAG, "兑换码", self
-        )
-        self._redeemButton.setObjectName("accountRedeemButton")
-        self._redeemButton.setMinimumHeight(40)
-        self._redeemButton.clicked.connect(self._onRedeem)
-        layout.addWidget(self._redeemButton)
 
         secondary = QHBoxLayout()
         secondary.setSpacing(10)
@@ -327,11 +284,6 @@ class _OverviewPage(QWidget):
 
     def _onBalanceChanged(self, balance: int) -> None:
         self._balanceLabel.setText(f"{int(balance):,}")
-
-    def _onRedeem(self) -> None:
-        dialog = RedeemDialog(self)
-        if dialog.exec():
-            self.refresh()
 
     def _onChangePassword(self) -> None:
         oldPassword, accepted = QInputDialog.getText(
@@ -469,7 +421,7 @@ class _SubscriptionsPage(QWidget):
         self._listLayout = QVBoxLayout()
         self._listLayout.setSpacing(10)
         layout.addLayout(self._listLayout)
-        self._emptyLabel = CaptionLabel("暂无订阅。兑换订阅码后会显示在这里。")
+        self._emptyLabel = CaptionLabel("暂无订阅。")
         self._emptyLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._emptyLabel.setObjectName("accountEmptyState")
         layout.addWidget(self._emptyLabel)
@@ -493,7 +445,7 @@ class _SubscriptionsPage(QWidget):
     def _onRefreshSucceeded(self, data) -> None:
         items = list(data.get("items", []) or [])
         self._countChip.setText(f"{len(items)} 项订阅")
-        self._emptyLabel.setText("暂无订阅。兑换订阅码后会显示在这里。")
+        self._emptyLabel.setText("暂无订阅。")
         self._emptyLabel.setVisible(not items)
         for item in items:
             self._listLayout.addWidget(_SubscriptionRow(item, self))
@@ -1061,14 +1013,6 @@ class AccountInterface(ScrollArea):
         )
         self._avatarIcon.setStyleSheet(
             f"color: {readableAccent}; background: transparent;"
-        )
-        # PrimaryPushButton 自带主题样式，需在控件级覆盖以保证白字对比度。
-        self._overview._redeemButton.setStyleSheet(
-            "PrimaryPushButton { color: white; background: #006F66; "
-            "border: 1px solid #006F66; border-radius: 5px; }"
-            "PrimaryPushButton:hover { background: #005F57; border-color: #005F57; }"
-            "PrimaryPushButton:pressed { background: #004F49; border-color: #004F49; }"
-            "PrimaryPushButton:disabled { background: #777777; border-color: #777777; }"
         )
 
 

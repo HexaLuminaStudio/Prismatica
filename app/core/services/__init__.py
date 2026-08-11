@@ -37,6 +37,7 @@ from .hsk_local_corpus_service import HskLocalCorpusService, hskLocalCorpusServi
 from .hsk_service import HskTokenRefreshThread, GetTotalWorker
 from .project_manager import ProjectManager, projectManager
 from .system_info_service import SystemInfoService, systemInfoService
+from .stopword_service import StopwordService, stopwordService
 from .task_manager import TaskManager, taskManager
 
 __all__ = [
@@ -55,6 +56,8 @@ __all__ = [
     "projectManager",
     "SystemInfoService",
     "systemInfoService",
+    "StopwordService",
+    "stopwordService",
     "HskCorpusService",
     "hskCorpusService",
     "BatchApplyService",

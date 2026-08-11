@@ -67,6 +67,7 @@ from app.view.widgets.freq_analyzer.ui_helpers import (
     _setupDialogClose,
     _showInfoBar,
 )
+from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # ---------------------------------------------------------------------------
 # CJK 字体检测（与 network_widget 保持一致）
@@ -273,14 +274,16 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
         self._progressBar.setFixedHeight(24)
 
         self._progressLabel = CaptionLabel("正在启动分析...", self)
-        self._progressLabel.setStyleSheet("color: #666; font-size: 12px;")
+        setThemeRole(self._progressLabel, "muted", "font-size: 12px;")
         self._progressLabel.setWordWrap(True)
 
         # ---- 图表区域（占位） ----
         self._chartPlaceholder = CaptionLabel("聚类分析进行中，请稍候...", self)
         self._chartPlaceholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._chartPlaceholder.setStyleSheet(
-            "color: #999; font-size: 14px; padding: 40px;"
+        setThemeRole(
+            self._chartPlaceholder,
+            "muted",
+            "font-size: 14px; padding: 40px;",
         )
 
         # ---- 簇摘要区域（占位） ----
@@ -292,7 +295,7 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
 
         # ---- 底部按钮 ----
         self._infoLabel = CaptionLabel("", self)
-        self._infoLabel.setStyleSheet("color: #666; font-size: 11px;")
+        setThemeRole(self._infoLabel, "muted", "font-size: 11px;")
 
         btnLayout = QHBoxLayout()
         btnLayout.addWidget(self._infoLabel)
@@ -368,6 +371,11 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
 
         # 显示占位
         self._chartPlaceholder.setText("聚类分析进行中，请稍候...")
+        setThemeRole(
+            self._chartPlaceholder,
+            "muted",
+            "font-size: 14px; padding: 40px;",
+        )
         self._chartPlaceholder.setVisible(True)
 
         # 重置进度
@@ -508,8 +516,10 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
         self._progressBar.setFormat("失败")
         self._progressLabel.setText(f"分析失败：{errMsg}")
         self._chartPlaceholder.setText(f"分析失败\n{errMsg}")
-        self._chartPlaceholder.setStyleSheet(
-            "color: #C44E52; font-size: 13px; padding: 40px;"
+        setThemeRole(
+            self._chartPlaceholder,
+            "danger",
+            "font-size: 13px; padding: 40px;",
         )
         self._rerunBtn.setEnabled(True)
         _showInfoBar("error", "聚类分析失败", errMsg, self, duration=5000)
@@ -586,7 +596,10 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
             xytext=(15, 15),
             textcoords="offset points",
             bbox=dict(boxstyle="round,pad=0.4", fc="#ffffe0", ec="#999", alpha=0.95),
-            arrowprops=dict(arrowstyle="->", color="#666"),
+                arrowprops=dict(
+                    arrowstyle="->",
+                    color=shellPalette().mutedText.name(),
+                ),
             fontsize=9,
             zorder=10,
         )

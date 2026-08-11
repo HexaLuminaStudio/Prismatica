@@ -30,10 +30,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import CardWidget
+from qfluentwidgets import CardWidget, qconfig
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.utils import logger
+from app.view.widgets.prismatica_theme import shellPalette
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,16 @@ class MetricColor(Enum):
     ERROR = ("#f5222d", "#fff1f0")  # 红(错误)
     NEUTRAL = ("#666666", "#fafafa")  # 灰(中性)
     ACCENT = ("#722ed1", "#f9f0ff")  # 紫(强调)
+
+
+_DARK_METRIC_COLORS = {
+    MetricColor.PRIMARY: ("#6CB6FF", "#183A58"),
+    MetricColor.SUCCESS: ("#85D98A", "#223A28"),
+    MetricColor.WARNING: ("#F2C96D", "#473A1D"),
+    MetricColor.ERROR: ("#FF9B96", "#4A2727"),
+    MetricColor.NEUTRAL: ("#E2E8EC", "#32383D"),
+    MetricColor.ACCENT: ("#C5A3FF", "#392650"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -93,23 +104,31 @@ class MetricCard(QFrame):
         # 标签(小)
         self.textLabel = QLabel(self._labelText, self)
         self.textLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.textLabel.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self.textLabel)
 
         self._applyColor()
+        qconfig.themeChangedFinished.connect(self._applyColor)
 
-    def _applyColor(self):
+    def _applyColor(self, *_args):
         """根据 _color 应用配色"""
-        fg, bg = self._color.value
+        palette = shellPalette()
+        fg, bg = (
+            _DARK_METRIC_COLORS[self._color]
+            if palette.content.lightness() < 128
+            else self._color.value
+        )
         self.setStyleSheet(
             f"QFrame#MetricCard {{"
             f"  background: {bg};"
-            f"  border: 1px solid #e8e8e8;"
+            f"  border: 1px solid {palette.border.name()};"
             f"  border-radius: 8px;"
             f"}}"
         )
         self.valueLabel.setStyleSheet(
             f"color: {fg}; font-size: 22px; font-weight: 700;"
+        )
+        self.textLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 11px;"
         )
 
     def setValue(self, value: str, color: Optional[MetricColor] = None):
@@ -155,6 +174,7 @@ class ResultSummary(CardWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setObjectName("ResultSummary")
+        self._topWordGroups = (None, None)
         self._initUi()
 
     def _initUi(self):
@@ -179,7 +199,6 @@ class ResultSummary(CardWidget):
 
         # 占位状态
         self._placeholderLabel = QLabel("", self)
-        self._placeholderLabel.setStyleSheet("color: #999; font-size: 12px;")
         self._placeholderLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholderLabel.setMinimumHeight(56)
         self._placeholderLabel.hide()
@@ -187,21 +206,37 @@ class ResultSummary(CardWidget):
 
         # 详情描述(可选)
         self._detailLabel = QLabel("", self)
-        self._detailLabel.setStyleSheet(
-            "color: #555; font-size: 12px; line-height: 1.6;"
-        )
         self._detailLabel.setWordWrap(True)
         self._detailLabel.hide()
         self._outerLayout.addWidget(self._detailLabel)
 
         # 高亮条目(Top 词等)
         self._topWordsLabel = QLabel("", self)
-        self._topWordsLabel.setStyleSheet(
-            "color: #444; font-size: 12px; padding-top: 4px;"
-        )
         self._topWordsLabel.setWordWrap(True)
         self._topWordsLabel.hide()
         self._outerLayout.addWidget(self._topWordsLabel)
+        self._applyTheme()
+        qconfig.themeChangedFinished.connect(self._applyTheme)
+
+    def _applyTheme(self, *_args):
+        palette = shellPalette()
+        self.setStyleSheet(
+            f"CardWidget#ResultSummary {{ background: {palette.surface.name()}; "
+            f"border: 1px solid {palette.border.name()}; border-radius: 8px; }}"
+        )
+        self._titleLabel.setStyleSheet(
+            f"color: {palette.text.name()}; background: transparent;"
+        )
+        self._placeholderLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 12px;"
+        )
+        self._detailLabel.setStyleSheet(
+            f"color: {palette.mutedText.name()}; font-size: 12px; line-height: 1.6;"
+        )
+        self._topWordsLabel.setStyleSheet(
+            f"color: {palette.text.name()}; font-size: 12px; padding-top: 4px;"
+        )
+        self._renderTopWords()
 
     def setTitle(self, title: str):
         self._titleLabel.setText(title)
@@ -250,20 +285,34 @@ class ResultSummary(CardWidget):
             negative: [(word, count), ...]
         """
         if not positive and not negative:
+            self._topWordGroups = (None, None)
             self._topWordsLabel.hide()
             return
 
+        self._topWordGroups = (positive, negative)
+        self._renderTopWords()
+        self._topWordsLabel.show()
+
+    def _renderTopWords(self) -> None:
+        positive, negative = self._topWordGroups
+        if not positive and not negative:
+            return
+
+        palette = shellPalette()
         parts = []
         if positive:
             posStr = ", ".join(f"{w}({c})" for w, c in positive)
-            parts.append(f'<span style="color:#52c41a;">正面:</span> {posStr}')
+            parts.append(
+                f'<span style="color:{palette.successText.name()};">正面:</span> {posStr}'
+            )
         if negative:
             negStr = ", ".join(f"{w}({c})" for w, c in negative)
-            parts.append(f'<span style="color:#f5222d;">负面:</span> {negStr}')
+            parts.append(
+                f'<span style="color:{palette.dangerText.name()};">负面:</span> {negStr}'
+            )
 
         self._topWordsLabel.setText("&nbsp;&nbsp;|&nbsp;&nbsp;".join(parts))
         self._topWordsLabel.setTextFormat(Qt.TextFormat.RichText)
-        self._topWordsLabel.show()
 
     def setPlaceholder(self, text: str):
         """设为占位状态(隐藏指标,显示提示文字)"""
@@ -280,6 +329,7 @@ class ResultSummary(CardWidget):
         self._detailLabel.hide()
         self._topWordsLabel.setText("")
         self._topWordsLabel.hide()
+        self._topWordGroups = (None, None)
         while self._metricsLayout.count():
             item = self._metricsLayout.takeAt(0)
             w = item.widget()
