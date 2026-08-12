@@ -1,9 +1,10 @@
-# coding: utf-8
 """桌面端价格目录缓存；约每 30 秒检查服务端版本。"""
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict
+from datetime import datetime
+from typing import Any
 
 from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 
@@ -19,13 +20,15 @@ PRICE_REFRESH_MAX_MS = 300_000
 
 class PricingCatalog(QObject):
     catalogChanged = Signal(object)
+    refreshStarted = Signal()
     refreshFailed = Signal(str)
     _loadedFromWorker = Signal(object)
     _failedFromWorker = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._catalog: Dict[str, Any] = {}
+        self._catalog: dict[str, Any] = {}
+        self._lastSyncedAt: datetime | None = None
         self._refreshing = False
         self._shuttingDown = False
         self._consecutiveFailures = 0
@@ -44,7 +47,19 @@ class PricingCatalog(QObject):
     def version(self) -> str:
         return str(self._catalog.get("version", ""))
 
-    def rule(self, featureCode: str) -> Dict[str, Any]:
+    @property
+    def isRefreshing(self) -> bool:
+        return self._refreshing
+
+    @property
+    def lastSyncedAt(self) -> datetime | None:
+        return self._lastSyncedAt
+
+    def snapshot(self) -> dict[str, Any]:
+        """返回当前只读价格快照，供界面立即展示缓存内容。"""
+        return dict(self._catalog)
+
+    def rule(self, featureCode: str) -> dict[str, Any]:
         for item in self._catalog.get("rules", []) or []:
             if item.get("featureCode") == featureCode:
                 return dict(item)
@@ -62,28 +77,28 @@ class PricingCatalog(QObject):
             return None
         unitSize = max(1, int(rule.get("unitSize", 1) or 1))
         units = max(0, (max(0, int(resourceUsed)) + unitSize - 1) // unitSize)
-        cost = int(rule.get("baseCost", 0) or 0) + units * int(
-            rule.get("perUnitCost", 0) or 0
-        )
+        cost = int(rule.get("baseCost", 0) or 0) + units * int(rule.get("perUnitCost", 0) or 0)
         minimum = int(rule.get("minCost", 0) or 0)
         maximum = int(rule.get("maxCost", 1_000_000) or 1_000_000)
         return max(minimum, min(maximum, cost))
 
-    def refreshBlocking(self) -> Dict[str, Any]:
+    def refreshBlocking(self) -> dict[str, Any]:
         data = getCloudApi().get("/v1/pricing/catalog", withAuth=False, timeout=5.0) or {}
         if isinstance(data, dict):
             self._applyCatalog(data)
         return dict(self._catalog)
 
-    def refreshResponsive(self) -> Dict[str, Any]:
+    def refreshResponsive(self) -> dict[str, Any]:
         """后台获取价格目录，并在调用线程安全地应用新快照。"""
         data = runResponsiveCall(
-            lambda: getCloudApi().get(
-                "/v1/pricing/catalog",
-                withAuth=False,
-                timeout=5.0,
+            lambda: (
+                getCloudApi().get(
+                    "/v1/pricing/catalog",
+                    withAuth=False,
+                    timeout=5.0,
+                )
+                or {}
             )
-            or {}
         )
         if isinstance(data, dict):
             self._applyCatalog(data)
@@ -94,6 +109,7 @@ class PricingCatalog(QObject):
             return
         self._timer.stop()
         self._refreshing = True
+        self.refreshStarted.emit()
         future = self._executor.submit(
             getCloudApi().get,
             "/v1/pricing/catalog",
@@ -112,19 +128,24 @@ class PricingCatalog(QObject):
 
         future.add_done_callback(_done)
 
-    def _applyCatalog(self, data: Dict[str, Any]) -> None:
+    def _applyCatalog(self, data: dict[str, Any]) -> None:
         if self._shuttingDown or isApplicationShuttingDown():
+            return
+        if not data.get("version") or not isinstance(data.get("rules"), list):
+            self._onFailed("服务端返回的价格目录无效")
             return
         self._refreshing = False
         wasRecovering = self._consecutiveFailures > 0
         self._consecutiveFailures = 0
         previousVersion = self.version
         self._catalog = dict(data)
+        self._lastSyncedAt = datetime.now().astimezone()
         self._timer.start(PRICE_REFRESH_MS)
         if wasRecovering:
             logger.info("[PricingCatalog] 云端价格目录连接已恢复")
         if self.version != previousVersion or not previousVersion:
-            self.catalogChanged.emit(dict(self._catalog))
+            logger.info(f"[PricingCatalog] 当前生效价格版本：{self.version}")
+        self.catalogChanged.emit(dict(self._catalog))
 
     def _onFailed(self, message: str) -> None:
         if self._shuttingDown or isApplicationShuttingDown():
@@ -138,10 +159,7 @@ class PricingCatalog(QObject):
         )
         self._timer.start(retryDelayMs)
         if self._consecutiveFailures == 1:
-            logger.warning(
-                f"[PricingCatalog] 刷新失败，将在 {retryDelayMs // 1000} 秒后重试: "
-                f"{message}"
-            )
+            logger.warning(f"[PricingCatalog] 刷新失败，将在 {retryDelayMs // 1000} 秒后重试: {message}")
         else:
             logger.debug(
                 f"[PricingCatalog] 连续刷新失败 {self._consecutiveFailures} 次，"

@@ -318,6 +318,30 @@ def testPricingCatalogUsesBoundedExponentialBackoff(qtbot, monkeypatch) -> None:
         catalog.shutdown()
 
 
+def testPricingCatalogKeepsSnapshotAndSignalsSameVersionRefresh(qtbot, monkeypatch) -> None:
+    monkeypatch.setattr(
+        pricingCatalogModule.PricingCatalog,
+        "refreshAsync",
+        lambda _self: None,
+    )
+    catalog = pricingCatalogModule.PricingCatalog()
+    updates = []
+    catalog.catalogChanged.connect(updates.append)
+
+    try:
+        snapshot = {"version": "v1", "state": "active", "rules": []}
+        catalog._applyCatalog(snapshot)
+        catalog._applyCatalog(snapshot)
+        catalog._applyCatalog({})
+
+        assert len(updates) == 2
+        assert catalog.snapshot()["version"] == "v1"
+        assert catalog.lastSyncedAt is not None
+        assert catalog._consecutiveFailures == 1
+    finally:
+        catalog.shutdown()
+
+
 def testCloudLoginWorkerRunsServiceOffMainThread(qtbot) -> None:
     mainThreadId = threading.get_ident()
 

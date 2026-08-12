@@ -50,6 +50,7 @@ from app.core.services import (
 from app.core.services.startup_database_service import StartupDatabaseService
 from app.core.utils import cfg, qconfig, logger, signalBus
 from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
+from app.view.widgets.pricing_status_dialog import PricingStatusDialog
 from app.view.widgets.resource_verification_dialog import (
     ResourceVerificationDialog,
 )
@@ -1471,7 +1472,7 @@ class AboutSettingWidget(OverviewGroupCard):
             logger.exception(f"[Setting] 重新查看引导失败: {e}")
 
 class AgreementLabelWidget(QWidget):
-    """用户协议组件"""
+    """当前定价与用户协议入口。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1482,9 +1483,9 @@ class AgreementLabelWidget(QWidget):
         hBoxLayout = QHBoxLayout(self)
         hBoxLayout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # 定价协议链接
-        self.privacyPolicyLabel = HyperlinkLabel("定价协议", self)
-        self.privacyPolicyLabel.setUrl("https://docs.qq.com/pdf/DTnFzeXhjWXBRd3h0")
+        self.pricingStatusLabel = HyperlinkLabel("当前定价", self)
+        self.pricingStatusLabel.setAccessibleName("查看当前定价")
+        self.pricingStatusLabel.clicked.connect(self._showPricingStatus)
 
         # 用户协议链接
         self.userAgreementLabel = HyperlinkLabel("用户协议", self)
@@ -1495,11 +1496,15 @@ class AgreementLabelWidget(QWidget):
         self.separator.setFixedHeight(15)
 
         # 添加组件
-        hBoxLayout.addWidget(self.privacyPolicyLabel, 0, Qt.AlignmentFlag.AlignCenter)
+        hBoxLayout.addWidget(self.pricingStatusLabel, 0, Qt.AlignmentFlag.AlignCenter)
         hBoxLayout.addSpacing(10)
         hBoxLayout.addWidget(self.separator)
         hBoxLayout.addSpacing(10)
         hBoxLayout.addWidget(self.userAgreementLabel, 0, Qt.AlignmentFlag.AlignCenter)
+
+    def _showPricingStatus(self) -> None:
+        dialog = PricingStatusDialog(parent=self.window())
+        dialog.exec()
 
 
 class SettingInterface(ScrollArea):
