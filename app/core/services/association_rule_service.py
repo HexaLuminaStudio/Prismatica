@@ -25,6 +25,8 @@ RULE_COLUMNS = [
     "antecedent count",
     "consequent count",
     "transaction count",
+    "directional p-value",
+    "directional adjusted p-value",
 ]
 
 
@@ -57,6 +59,7 @@ def _emptyRuleFrame(
         {
             "transactionCount": transactionCount,
             "testedPairCount": testedPairCount,
+            "testedHypothesisCount": testedPairCount * 2,
             "familyWiseAlpha": familyWiseAlpha,
             "minJointCount": minJointCount,
         }
@@ -92,7 +95,7 @@ def mineAssociationRules(
         item: sum(item in transaction for transaction in normalizedTransactions)
         for item in allItems
     }
-    pairStatistics = []
+    directionalStatistics = []
 
     for leftItem, rightItem in combinations(allItems, 2):
         leftCount = itemCounts[leftItem]
@@ -104,39 +107,48 @@ def mineAssociationRules(
         leftOnlyCount = leftCount - jointCount
         rightOnlyCount = rightCount - jointCount
         neitherCount = transactionCount - leftCount - rightCount + jointCount
-        fisherResult = fisher_exact(
-            [
-                [jointCount, leftOnlyCount],
-                [rightOnlyCount, neitherCount],
-            ],
-            alternative="greater",
-        )
-        pairStatistics.append(
-            {
-                "leftItem": leftItem,
-                "rightItem": rightItem,
-                "leftCount": leftCount,
-                "rightCount": rightCount,
-                "jointCount": jointCount,
-                "oddsRatio": float(fisherResult.statistic),
-                "rawPValue": float(fisherResult.pvalue),
-            }
-        )
+        for antecedent, consequent, antecedentCount, consequentCount in (
+            (leftItem, rightItem, leftCount, rightCount),
+            (rightItem, leftItem, rightCount, leftCount),
+        ):
+            # Fisher 检验的是无向 2×2 关联;方向规则的置信度阈值另行应用。
+            fisherResult = fisher_exact(
+                [
+                    [jointCount, antecedentCount - jointCount],
+                    [consequentCount - jointCount, neitherCount],
+                ],
+                alternative="greater",
+            )
+            directionalStatistics.append(
+                {
+                    "antecedent": antecedent,
+                    "consequent": consequent,
+                    "antecedentCount": antecedentCount,
+                    "consequentCount": consequentCount,
+                    "jointCount": jointCount,
+                    "oddsRatio": float(fisherResult.statistic),
+                    "rawPValue": float(fisherResult.pvalue),
+                }
+            )
 
     adjustedPValues = adjustPValuesHolm(
-        [pair["rawPValue"] for pair in pairStatistics]
+        [rule["rawPValue"] for rule in directionalStatistics]
     )
     rules = []
 
-    for pair, adjustedPValue in zip(pairStatistics, adjustedPValues):
-        leftCount = pair["leftCount"]
-        rightCount = pair["rightCount"]
-        jointCount = pair["jointCount"]
+    for direction, adjustedPValue in zip(directionalStatistics, adjustedPValues):
+        antecedentCount = direction["antecedentCount"]
+        consequentCount = direction["consequentCount"]
+        jointCount = direction["jointCount"]
         support = jointCount / transactionCount
-        leftSupport = leftCount / transactionCount
-        rightSupport = rightCount / transactionCount
-        leverage = support - leftSupport * rightSupport
-        lift = support / (leftSupport * rightSupport) if leftSupport and rightSupport else 0.0
+        antecedentSupport = antecedentCount / transactionCount
+        consequentSupport = consequentCount / transactionCount
+        leverage = support - antecedentSupport * consequentSupport
+        lift = (
+            support / (antecedentSupport * consequentSupport)
+            if antecedentSupport and consequentSupport
+            else 0.0
+        )
 
         if (
             jointCount < minJointCount
@@ -146,45 +158,19 @@ def mineAssociationRules(
         ):
             continue
 
-        directions = (
-            (
-                pair["leftItem"],
-                pair["rightItem"],
-                leftCount,
-                rightCount,
-                leftSupport,
-                rightSupport,
-            ),
-            (
-                pair["rightItem"],
-                pair["leftItem"],
-                rightCount,
-                leftCount,
-                rightSupport,
-                leftSupport,
-            ),
-        )
-        for (
-            antecedent,
-            consequent,
-            antecedentCount,
-            consequentCount,
-            antecedentSupport,
-            consequentSupport,
-        ) in directions:
-            confidence = jointCount / antecedentCount if antecedentCount else 0.0
-            if confidence < minConfidence:
-                continue
+        confidence = jointCount / antecedentCount if antecedentCount else 0.0
+        if confidence < minConfidence:
+            continue
 
-            conviction = (
-                (1.0 - consequentSupport) / (1.0 - confidence)
-                if confidence < 1.0
-                else inf
-            )
-            rules.append(
+        conviction = (
+            (1.0 - consequentSupport) / (1.0 - confidence)
+            if confidence < 1.0
+            else inf
+        )
+        rules.append(
                 {
-                    "antecedents": frozenset({antecedent}),
-                    "consequents": frozenset({consequent}),
+                    "antecedents": frozenset({direction["antecedent"]}),
+                    "consequents": frozenset({direction["consequent"]}),
                     "antecedent support": antecedentSupport,
                     "consequent support": consequentSupport,
                     "support": support,
@@ -192,13 +178,15 @@ def mineAssociationRules(
                     "lift": lift,
                     "leverage": leverage,
                     "conviction": conviction,
-                    "odds ratio": pair["oddsRatio"],
-                    "raw p-value": pair["rawPValue"],
+                    "odds ratio": direction["oddsRatio"],
+                    "raw p-value": direction["rawPValue"],
                     "adjusted p-value": adjustedPValue,
                     "joint count": jointCount,
                     "antecedent count": antecedentCount,
                     "consequent count": consequentCount,
                     "transaction count": transactionCount,
+                    "directional p-value": direction["rawPValue"],
+                    "directional adjusted p-value": adjustedPValue,
                 }
             )
 
@@ -219,6 +207,7 @@ def mineAssociationRules(
         {
             "transactionCount": transactionCount,
             "testedPairCount": testedPairCount,
+            "testedHypothesisCount": testedPairCount * 2,
             "familyWiseAlpha": familyWiseAlpha,
             "minJointCount": minJointCount,
         }

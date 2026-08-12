@@ -329,6 +329,15 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         setThemeRole(dictInfo, "muted", "font-size: 11px;")
         layout.addWidget(dictInfo)
 
+        methodInfo = CaptionLabel(
+            "方法:词典 + 否定/程度规则;不是 SnowNLP 或概率模型。篇章分数按情感词命中数"
+            "加权,段落仅来自原文显式空行。不同领域使用前应验证词典覆盖率与分类表现。",
+            card,
+        )
+        methodInfo.setWordWrap(True)
+        setThemeRole(methodInfo, "muted", "font-size: 11px;")
+        layout.addWidget(methodInfo)
+
         return card
 
     def _buildSummaryCard(self) -> CardWidget:
@@ -550,7 +559,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self.exportReportBtn.setEnabled(True)
         InfoBar.success(
             title="分析完成",
-            content=f"平均分 {result.avgScore:+.3f},耗时 {result.elapsedSeconds:.1f}s",
+            content=f"文档宏平均 {result.avgScore:+.3f},耗时 {result.elapsedSeconds:.1f}s",
             orient=Qt.Orientation.Horizontal,
             isClosable=True,
             duration=2500,
@@ -580,7 +589,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self._resultSummary.setMetrics(
             [
                 ("整体倾向", polarity, polarity_color),
-                ("平均分", f"{r.avgScore:+.3f}", MetricColor.PRIMARY),
+                ("文档宏平均", f"{r.avgScore:+.3f}", MetricColor.PRIMARY),
                 ("正面句", f"{r.positiveCount:,}", MetricColor.SUCCESS),
                 ("负面句", f"{r.negativeCount:,}", MetricColor.ERROR),
             ]
@@ -916,7 +925,8 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             f.write(f"正面句子: {r.positiveCount}\n")
             f.write(f"负面句子: {r.negativeCount}\n")
             f.write(f"中性句子: {r.neutralCount}\n")
-            f.write(f"平均分: {r.avgScore:+.4f}\n")
+            f.write(f"文档宏平均分: {r.avgScore:+.4f}\n")
+            f.write("方法:词典 + 否定/程度规则;篇章分数按情感词命中数加权。\n")
             f.write(f"耗时: {r.elapsedSeconds:.2f}s\n\n")
 
             f.write("# Top 正面词\n")

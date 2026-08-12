@@ -54,6 +54,7 @@ from .ui_helpers import (
     _setupDialogClose,
     _showInfoBar,
 )
+from .freq_engine import FrequencyAnalyzer
 
 
 class ZipfDialog(MessageBoxBase):
@@ -61,7 +62,7 @@ class ZipfDialog(MessageBoxBase):
 
     def __init__(self, df, parent=None):
         super().__init__(parent)
-        self.df = df
+        self.df = FrequencyAnalyzer().computeZipf(df) if df is not None else df
         self._figure = None
 
         _makeDialogHeader(self, ":app/icons/Chart.svg", "Zipf 曲线图", self.accept)
@@ -82,6 +83,10 @@ class ZipfDialog(MessageBoxBase):
 
         self.viewLayout.setContentsMargins(15, 15, 15, 10)
         self.viewLayout.addSpacing(8)
+        self.fitNote = CaptionLabel(self)
+        self.fitNote.setWordWrap(True)
+        setThemeRole(self.fitNote, "muted", "font-size: 11px;")
+        self.viewLayout.addWidget(self.fitNote)
         self.viewLayout.addWidget(_makeScrollArea(self, self.canvas), 1)
         self.viewLayout.addLayout(btnLayout)
 
@@ -96,12 +101,35 @@ class ZipfDialog(MessageBoxBase):
         self._figure = fig
 
         if self.df is None or self.df.empty:
+            self.fitNote.setText("无可拟合数据。")
             ax.text(0.5, 0.5, "无数据", ha="center", va="center", fontsize=14)
             ax.axis("off")
         else:
             ranks = self.df["Rank"].values
             freqs = self.df["Freq"].values
-            ax.loglog(ranks, freqs, "o-", markersize=4, color="#4477AA", alpha=0.7)
+            ax.loglog(
+                ranks, freqs, "o", markersize=4, color="#4477AA", alpha=0.7,
+                label="实际频率",
+            )
+            alpha = float(self.df["ZipfAlpha"].iloc[0])
+            r2 = float(self.df["ZipfR2"].iloc[0])
+            fitN = int(self.df["ZipfFitN"].iloc[0])
+            fitMask = self.df["ZipfFitLogFreq"].notna()
+            if fitMask.any():
+                fitRows = self.df.loc[fitMask].sort_values("Rank")
+                ax.loglog(
+                    fitRows["Rank"].values,
+                    10 ** fitRows["ZipfFitLogFreq"].values,
+                    "-",
+                    linewidth=1.5,
+                    color="#E07A3F",
+                    label="log-log OLS 描述拟合",
+                )
+            self.fitNote.setText(
+                f"完整频率表拟合：n={fitN}，α={alpha:.3f}，R²={r2:.3f}。"
+                "该 OLS 仅用于描述，受并列频次、语料规模、分词与截断影响；"
+                "R² 不是 Zipf 分布的正式拟合优度检验。"
+            )
             ax.set_xlabel("词频排名 (Rank)", fontsize=11)
             ax.set_ylabel("词频 (Frequency)", fontsize=11)
             ax.set_title(
@@ -110,7 +138,7 @@ class ZipfDialog(MessageBoxBase):
                 pad=12,
             )
             ax.grid(linestyle="--", alpha=0.4, which="both")
-            ax.legend(["实际分布"], loc="upper right")
+            ax.legend(loc="upper right")
 
         fig.tight_layout()
         self.canvas.figure = fig

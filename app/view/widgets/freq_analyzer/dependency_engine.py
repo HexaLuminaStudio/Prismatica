@@ -3,41 +3,40 @@
 
 设计目标:
     - 抽象接口 DependencyParser,可替换后端
-    - 优先尝试专业引擎(HanLP > LTP > spaCy),失败时降级到基于规则的简易实现
+    - 默认由桌面端直连 HanLP,另提供显式的规则演示后端
     - 输出统一格式(DepToken 列表),与具体后端解耦
     - 支持 CoNLL-U 导出(FR-DEP-005)
 
 CoNLL-U 格式(标准):
     # ID  FORM  LEMMA  UPOS  XPOS  FEATS  HEAD  DEPREL  DEPS  MISC
-    1    我    _     r     _     _       2    SBV     _     _
-    2    爱    _     v     _     _       0    ROOT    _     _
+    1    我    _     _     r     _       2    SBV     _     _
+    2    爱    _     _     v     _       0    ROOT    _     _
 
 学术严谨性说明
 --------------
 本模块提供两个后端:
-    1. HanLPDependencyParser — 调用 HanLP RESTful API(商业级,
-       基于 Transformer 与大规模标注数据;HanLP 团队 2020)。
-       输出符合 Universal Dependencies (UD) 标准,学术发表可直接引用。
+    1. HanLPDependencyParser — 由桌面端直接调用 HanLP RESTful API。
+       本适配器默认请求 ``tok/fine``、``dep`` 与 ``pos/ctb`` 任务,并保留
+       HanLP 返回的依存标签原貌。
+       实际标注体系、模型版本和分词粒度必须随研究结果一并报告;不能仅凭
+       “HanLP”名称推定为 UD,也不能宣称可不经人工核验直接用于发表。
     2. RuleBasedDependencyParser — 基于 jieba 分词 + 启发式规则
        的**降级方案**,无任何学术发表的依存分析后端作为支撑。
        其规则仅覆盖常见汉语模式(的/地/得、介词、副词等),
        **不可用于学术研究**;仅供教学演示或在没有外部依赖时使用。
-       严格学术场景应至少使用 HanLP 或 LTP(哈工大)或 spaCy-zh。
+       严格学术场景应使用经过目标领域评测的模型并进行人工抽样核验。
 
 References:
     Nivre, J., et al. (2016). Universal Dependencies v1: A
         multilingual treebank collection. LREC.
-    Che, W., Feng, Y., Qin, L., & Liu, T. (2020). N-LTP: An
-        Open-source Neural Language Technology Platform. arXiv.
-    HanLP 团队 (2020). HanLP: Han Language Processing.
+    HanLP 2.x Documentation. RESTful APIs and Data Format.
 """
 
 from __future__ import annotations
 
-import os
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict, Any
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
@@ -79,6 +78,12 @@ class DependencyParse:
     tokens: List[DepToken] = field(default_factory=list)
     text: str = ""
     backend: str = ""  # 实际使用的后端名
+    provider: str = ""
+    endpoint: str = ""
+    language: str = ""
+    tasks: List[str] = field(default_factory=list)
+    modelVersion: str = ""
+    labelScheme: str = "backend-native"
 
     @property
     def root(self) -> Optional[DepToken]:
@@ -354,286 +359,145 @@ class RuleBasedDependencyParser(DependencyParser):
 
 
 # ---------------------------------------------------------------------------
-# HanLP RESTful 适配器(hanlp_restful 客户端)
+# HanLP RESTful 直连适配器(凭据按产品决策硬编码)
 # ---------------------------------------------------------------------------
 class HanLPDependencyParser(DependencyParser):
-    """基于 hanlp_restful 的 HanLP 依存分析适配器
-
-    安装:
-        pip install hanlp_restful
-
-    配置(优先级递减,生产环境推荐方式 1):
-        1. 环境变量 HANLP_AUTH  (推荐)
-        2. 启动参数传入 auth="..."
-        3. 直接修改类常量 HanLPDependencyParser.HANLP_AUTH(仅供演示)
-
-    用法:
-        parser = HanLPDependencyParser()              # 默认从 env/常量加载
-        parser = HanLPDependencyParser(auth="...")    # 显式传入自定义密钥
-        if parser.isAvailable():
-            result = parser.parse("我爱自然语言处理")
-    """
+    """桌面端直接调用 HanLP RESTful API。"""
 
     name = "hanlp"
-
-    # HanLP RESTful 输出标签(UD 英文)→ CTB/中文通用标签
-    # RESTful API 输出的 deprel 是英文标签(nsubj/dobj/advmod/...)
-    DEPREL_MAP = {
-        "root": "ROOT",
-        "nsubj": "SBV",
-        "dobj": "VOB",
-        "obj": "VOB",
-        "iobj": "IOB",
-        "amod": "ATT",
-        "advmod": "ADV",
-        "conj": "COO",
-        "cc": "CC",
-        "case": "ADV",
-        "mark": "MT",
-        "aux": "AUX",
-        "cop": "AUX",
-        "det": "DE",
-        "clf": "DE",
-        "punct": "PUNCT",
-        "dep": "DE",
-        "xcomp": "CMP",
-        "ccomp": "CMP",
-        "acl": "ATT",
-        "relcl": "ATT",
-        "appos": "AP",
-        "nmod": "DE",
-        "nummod": "DE",
-        "compound": "DE",
-        "obl": "ADV",  # oblique(介宾/状语)
-        "discourse": "DE",
-        "parataxis": "DE",
-        "list": "DE",
-        "fixed": "DE",
-        "flat": "DE",
-        "orphan": "DE",
-    }
-
-    # HanLP RESTful 服务地址(官方)
+    HANLP_AUTH = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
     HANLP_API_URL = "https://hanlp.hankcs.com/api"
-    HANLP_LANGUAGE = "zh"  # 默认中文(可选: zh/en/ja/mul)
-
-    # HanLP RESTful 联合任务的合法任务名(官方限制)
-    # 合法值:
-    #   'tok/fine', 'tok/coarse', 'pos/ctb', 'pos/pku', 'pos/863',
-    #   'ner/msra', 'ner/pku', 'ner/ontonotes', 'srl', 'dep', 'sdp', 'con'
-    # 一次性取 分词 + 词性 + 依存 三个任务即可满足需求
+    HANLP_LANGUAGE = "zh"
     HANLP_TASKS = ("tok/fine", "pos/ctb", "dep")
 
-    @classmethod
-    def _resolveAuth(cls, explicit: Optional[str]) -> Optional[str]:
-        """按优先级解析 HanLP 认证密钥(P1-1 修复)。
-
-        优先级:
-            1. 显式传入的 `auth` 参数(程序内调用)
-            2. 环境变量 `HANLP_AUTH`(推荐部署方式)
-            3. 配置文件 `setting.py` 中的 `HANLP_AUTH_KEY`(可选)
-
-        注意:
-            - 不再硬编码密钥到源码(P1-1 修复)
-            - 未配置时返回 None,客户端初始化会失败,
-              由 fallback RuleBasedDependencyParser 接替
-        """
-        if explicit:
-            return explicit
-        # 环境变量
-        import os
-        envAuth = os.environ.get("HANLP_AUTH")
-        if envAuth:
-            return envAuth
-        # 配置项(可选)
-        try:
-            from app.core.utils import setting as _setting
-
-            cfgAuth = getattr(_setting, "HANLP_AUTH_KEY", None)
-            if cfgAuth:
-                return cfgAuth
-        except Exception:
-            pass
-        return None
-
-    def __init__(
-        self,
-        auth: Optional[str] = None,
-        url: Optional[str] = None,
-        language: Optional[str] = None,
-        timeout: float = 30.0,
-    ):
-        """初始化 HanLP RESTful 客户端
-
-        Args:
-            auth: HanLP 认证密钥。优先级: 参数 > 环境变量 > 配置项
-            url: HanLP API 端点,默认 https://hanlp.hankcs.com/api
-            language: 语言代码,默认 'zh'
-            timeout: HTTP 请求超时(秒)
-        """
+    def __init__(self) -> None:
+        """使用代码内固定配置初始化 HanLP 客户端。"""
         self._client = None
-        self._auth = "MTA4MzRAYmJzLmhhbmxwLmNvbTprN0NMTnhXWk92ajBmRmdL"
-        self._url = url or self.HANLP_API_URL
-        self._language = language or self.HANLP_LANGUAGE
-        self._timeout = timeout
         self._lastError: Optional[str] = None
-
-        if not self._auth:
-            self._lastError = (
-                "HanLP 认证密钥未配置:请通过环境变量 HANLP_AUTH"
-                " 或显式参数传入"
-            )
-            logger.warning(f"[HanLPDepParser] {self._lastError}")
-            return
-
-        # 尝试初始化客户端
+        self._metadata: Dict[str, Any] = {
+            "provider": "HanLP RESTful",
+            "endpoint": self.HANLP_API_URL,
+            "language": self.HANLP_LANGUAGE,
+            "tasks": list(self.HANLP_TASKS),
+            "modelVersion": "",
+            "labelScheme": "backend-native",
+        }
         try:
-            from hanlp_restful import HanLPClient  # noqa
+            from hanlp_restful import HanLPClient
 
             self._client = HanLPClient(
-                url=self._url,
-                auth=self._auth,
-                language=self._language,
-                timeout=int(self._timeout),
+                url=self.HANLP_API_URL,
+                auth=self.HANLP_AUTH,
+                language=self.HANLP_LANGUAGE,
+                timeout=60,
             )
         except ImportError:
-            self._lastError = "hanlp_restful 未安装(pip install hanlp_restful)"
-            logger.debug(f"[HanLPDepParser] {self._lastError}")
-        except Exception as e:
-            self._lastError = str(e)
-            logger.warning(f"[HanLPDepParser] HanLP 客户端初始化失败: {e}")
+            self._lastError = "hanlp_restful 未安装"
+        except Exception as error:
+            self._lastError = str(error)
+            logger.warning(f"[HanLPDepParser] 客户端初始化失败:{error}")
 
     def isAvailable(self) -> bool:
-        """后端是否可用:客户端已初始化 且 没有错误"""
         return self._client is not None
 
     def describe(self) -> str:
-        return f"HanLP RESTful 依存分析({self._url}, lang={self._language})"
+        return f"HanLP RESTful 直连({self.HANLP_API_URL})"
 
     def getLastError(self) -> Optional[str]:
         """返回最近一次的初始化/解析错误信息(用于 UI 提示)"""
         return self._lastError
 
+    def clearLastError(self) -> None:
+        self._lastError = None
+
     def parse(self, sentence: str) -> DependencyParse:
-        """分析单句(调用 HanLP RESTful)"""
+        """通过桌面端内置凭据直连 HanLP 分析单句。"""
         sentence = (sentence or "").strip()
-        if not sentence or self._client is None:
+        if not sentence:
             return DependencyParse(text=sentence, backend=self.name)
-
+        if self._client is None:
+            raise RuntimeError(self._lastError or "HanLP 客户端不可用")
         try:
-            # 调用 RESTful API,取 分词 + 词性 + 依存 三个任务
-            # 注意: tasks 必须是 HanLP RESTful 官方支持的合法任务名
-            # (参见类常量 HANLP_TASKS 的注释)
-            doc = self._client(sentence, tasks=list(self.HANLP_TASKS))
-            tokens, pos, heads, deprels = self._extractRestfulOutput(doc, sentence)
-        except Exception as e:
-            self._lastError = str(e)
-            logger.warning(f"[HanLPDepParser] 解析失败: {e}")
-            return DependencyParse(text=sentence, backend=self.name)
-
-        tokenList: List[DepToken] = []
-        n = len(tokens)
-        for i, form in enumerate(tokens):
-            posTag = pos[i] if i < len(pos) else ""
-            head = heads[i] if i < len(heads) else 0  # HanLP RESTful:1-based,0 = ROOT
-            depRel = deprels[i] if i < len(deprels) else "DE"
-            id1 = i + 1  # 1-based token id
-            # HanLP RESTful 的 head 字段已是 1-based(0=ROOT),直接使用即可
-            # 不要 +1(之前误以为是 0-based,导致偏移)
-            head1 = head
-            tokenList.append(
-                DepToken(
-                    id=id1,
-                    form=form,
-                    pos=posTag,
-                    head=head1,
-                    deprel=self.DEPREL_MAP.get(depRel.lower(), depRel.upper()),
-                    lemma=form,
-                )
+            document = self._client(sentence, tasks=list(self.HANLP_TASKS))
+            tokens, posTags, dependencies = self._extractOutput(document)
+        except Exception as error:
+            self._lastError = str(error)
+            raise
+        self._lastError = None
+        parsedTokens = [
+            DepToken(
+                id=index + 1,
+                form=str(form),
+                lemma=str(form),
+                pos=str(posTags[index]) if index < len(posTags) else "",
+                head=int(dependencies[index][0]),
+                deprel=str(dependencies[index][1]),
             )
-
-        # 防御性:校验 head 引用合法性,超出范围/指向自身的 head → fallback 到 ROOT (0)
-        validIds = {t.id for t in tokenList}
-        for tok in tokenList:
-            if tok.head != 0 and (tok.head not in validIds or tok.head == tok.id):
-                logger.warning(
-                    f"[HanLPDepParser] token id={tok.id} ({tok.form!r}) "
-                    f"head={tok.head} 非法,fallback 到 ROOT"
-                )
-                tok.head = 0
-                if not tok.deprel or tok.deprel == "DE":
-                    tok.deprel = "DE"
-
-        return DependencyParse(tokens=tokenList, text=sentence, backend=self.name)
+            for index, form in enumerate(tokens)
+        ]
+        self._validateTree(parsedTokens)
+        return DependencyParse(
+            text=sentence,
+            backend=self.name,
+            provider=self._metadata["provider"],
+            endpoint=self._metadata["endpoint"],
+            language=self._metadata["language"],
+            tasks=list(self._metadata["tasks"]),
+            modelVersion=self._metadata["modelVersion"],
+            labelScheme=self._metadata["labelScheme"],
+            tokens=parsedTokens,
+        )
 
     @staticmethod
-    def _extractRestfulOutput(doc, sentence: str):
-        """从 hanlp_restful 返回的 doc 中提取 (tokens, pos, heads, deprels)
+    def _extractOutput(document: Any) -> Tuple[List[Any], List[Any], List[Any]]:
+        data = document.to_dict() if hasattr(document, "to_dict") else document
+        if not isinstance(data, dict):
+            raise ValueError("HanLP 返回格式无效")
 
-        HanLP RESTful 返回结构(关键字段名随 tasks 参数变化):
-            {
-              "tok/fine": [["我", "爱", ...]],          # 二维 list(每个子列表一句)
-              "pos/ctb":  [["r", "v", ...]],
-              "dep":      [[[2, "nsubj"], [0, "root"], ...]],   # 每个 token 是 [head_id(0-based), deprel]
-            }
-        注意: 任务名是带斜杠的 'tok/fine' / 'pos/ctb'(不是简写 'tok'/'pos')
+        def firstField(prefix: str) -> Any:
+            for key, value in data.items():
+                if key == prefix or key.startswith(f"{prefix}/"):
+                    return value
+            return None
 
-        Args:
-            doc: HanLP RESTful 返回的 Document/dict 对象
-            sentence: 原始句子(用于退化 fallback)
-        Returns:
-            (tokens, pos, heads, deprels) — 全部为一维 list(本函数只处理单句)
-        """
-        try:
-            # 兼容 doc["key"] 与 doc.key 两种访问方式
-            def g(*keys):
-                """尝试多个 key(优先带后缀的合法任务名,再兼容简写)"""
-                if isinstance(doc, dict):
-                    for k in keys:
-                        if k in doc and doc[k] is not None:
-                            return doc[k]
-                    return None
-                for k in keys:
-                    v = getattr(doc, k, None)
-                    if v is not None:
-                        return v
-                return None
+        def firstSentence(value: Any) -> List[Any]:
+            if not isinstance(value, list):
+                return []
+            if value and isinstance(value[0], list):
+                return list(value[0])
+            return list(value)
 
-            # 取分词: 优先 'tok/fine'(HANLP_TASKS 中使用的合法名),再 fallback 到 'tok'
-            tok2d = g("tok/fine", "tok") or []
-            pos2d = g("pos/ctb", "pos") or []
-            dep2d = g("dep") or []
+        tokens = firstSentence(firstField("tok"))
+        posTags = firstSentence(firstField("pos"))
+        dependencies = firstSentence(firstField("dep"))
+        if not tokens or len(tokens) != len(dependencies):
+            raise ValueError("HanLP 分词与依存结果长度不一致")
+        if any(
+            not isinstance(item, (list, tuple)) or len(item) < 2
+            for item in dependencies
+        ):
+            raise ValueError("HanLP 依存节点结构无效")
+        return tokens, posTags, dependencies
 
-            # 取第一个句子(本适配器每次只处理单句)
-            tokens = list(tok2d[0]) if tok2d else list(sentence)
-            pos = list(pos2d[0]) if pos2d else ["n"] * len(tokens)
-            # dep 元素是 [head, deprel] 二元组
-            depPairs = dep2d[0] if dep2d else []
+    @staticmethod
+    def _validateTree(tokens: List[DepToken]) -> None:
+        tokenCount = len(tokens)
+        if sum(token.head == 0 for token in tokens) != 1:
+            raise ValueError("HanLP 依存树应有且仅有一个 ROOT")
+        headById = {token.id: token.head for token in tokens}
+        for token in tokens:
+            if token.head < 0 or token.head > tokenCount or token.head == token.id:
+                raise ValueError("HanLP 依存树包含无效中心词索引")
+            visited: set[int] = set()
+            currentId = token.id
+            while currentId != 0:
+                if currentId in visited:
+                    raise ValueError("HanLP 依存树包含环")
+                visited.add(currentId)
+                currentId = headById[currentId]
 
-            heads: List[int] = []
-            deprels: List[str] = []
-            for pair in depPairs:
-                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                    heads.append(int(pair[0]))
-                    deprels.append(str(pair[1]))
-                else:
-                    heads.append(0)
-                    deprels.append("DE")
-
-            # 长度对齐(防御性)
-            while len(heads) < len(tokens):
-                heads.append(0)
-                deprels.append("DE")
-
-            return tokens, pos, heads, deprels
-        except Exception as e:
-            logger.warning(f"[HanLPDepParser] RESTful 输出解析失败: {e}")
-            return (
-                list(sentence),
-                ["n"] * len(sentence),
-                [0] * len(sentence),
-                ["ROOT"] * len(sentence),
-            )
+    def metadata(self) -> Dict[str, Any]:
+        return dict(self._metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -658,19 +522,34 @@ def splitSentences(text: str) -> List[str]:
 # CoNLL-U 序列化(FR-DEP-005)
 # ---------------------------------------------------------------------------
 def toConllU(parse: DependencyParse) -> str:
-    """将 DependencyParse 序列化为 CoNLL-U 格式
+    """将 DependencyParse 序列化为 10 列 CoNLL-U 容器格式。
 
     CoNLL-U 标准(每行 10 字段,Tab 分隔):
         ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
+
+    当前后端返回 CTB/jieba 词性与原始依存标签，未经 UD 映射验证。
+    因此词性写入 XPOS，UPOS 留空；不把该导出宣称为 UD 树库。
     """
-    lines = [f"# text = {parse.text}", f"# backend = {parse.backend}"]
+    lines = [
+        f"# text = {parse.text}",
+        f"# backend = {parse.backend}",
+        f"# label_scheme = {parse.labelScheme}; UPOS unavailable",
+    ]
+    optionalMetadata = (
+        ("provider", parse.provider),
+        ("endpoint", parse.endpoint),
+        ("language", parse.language),
+        ("tasks", ",".join(parse.tasks)),
+        ("model_version", parse.modelVersion or "未报告"),
+    )
+    lines.extend(f"# {key} = {value}" for key, value in optionalMetadata if value)
     for tok in parse.tokens:
         fields = [
             str(tok.id),
             tok.form,
             tok.lemma or "_",
-            tok.pos or "_",
-            "_",  # XPOS
+            "_",  # UPOS: 未做经验证的 UD 映射
+            tok.pos or "_",  # XPOS: 后端原生词性
             "_",  # FEATS
             str(tok.head),
             tok.deprel,

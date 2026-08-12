@@ -531,7 +531,7 @@ class ParagraphSentiment:
     """段落情感分析结果"""
 
     text: str
-    score: float  # 段内所有句子的平均分
+    score: float  # 段内句子的情感词命中数加权平均分
     polarity: Polarity
     sentences: List[SentenceSentiment] = field(default_factory=list)
 
@@ -542,7 +542,7 @@ class DocumentSentiment:
 
     fileName: str
     text: str
-    score: float  # 篇章总分
+    score: float  # 全文句子的情感词命中数加权平均分
     polarity: Polarity
     paragraphs: List[ParagraphSentiment] = field(default_factory=list)
     sentences: List[SentenceSentiment] = field(default_factory=list)
@@ -641,7 +641,7 @@ class SentimentEngine:
         sent_results = [self._analyzeSentence(s) for s in sentences if s.strip()]
         if not sent_results:
             return SentenceSentiment(text=text, score=0.0, polarity=Polarity.NEUTRAL)
-        avg = sum(s.score for s in sent_results) / len(sent_results)
+        avg = self._aggregateSentenceScores(sent_results)
         return SentenceSentiment(
             text=text,
             score=avg,
@@ -702,7 +702,7 @@ class SentimentEngine:
                         pass
             if not sent_results:
                 continue
-            avg = sum(s.score for s in sent_results) / len(sent_results)
+            avg = self._aggregateSentenceScores(sent_results)
             para_results.append(
                 ParagraphSentiment(
                     text=para,
@@ -718,7 +718,7 @@ class SentimentEngine:
                 fileName=fileName, text=text, score=0.0, polarity=Polarity.NEUTRAL
             )
 
-        doc_score = sum(s.score for s in all_sentences) / len(all_sentences)
+        doc_score = self._aggregateSentenceScores(all_sentences)
         polarity = self._scoreToPolarity(doc_score)
 
         # 统计正负面文档/句子
@@ -946,18 +946,10 @@ class SentimentEngine:
 
     @staticmethod
     def _splitParagraphs(text: str) -> List[str]:
-        """按段落切分(P0-4 / P1-4 修复)
+        """只按原文显式空行切分段落。
 
-        改进点:
-            1. 优先按空行切段(连续两个换行)
-            2. 若全文无空行,降级按「句末标点聚合段」切分
-               — 即 3~5 个相邻句子合并为一个段落(中文常见长度)
-            3. 兼容 Word/Excel 导入的纯连续文本
-
-        学术依据:
-            - Biber et al. (1999) 的语篇段落定义:段是话题/论点的相对闭合单位,
-              中文书面语平均 80~200 字/段
-            - 3~5 句聚合策略在无明确段落标记时是常用工程近似
+        没有显式段界时整篇视为一个段落。不能按固定句数伪造段落,否则会把
+        工程切块误报成原始语篇单位,并改变段落级分布与导出结果。
         """
         if not text:
             return []
@@ -975,21 +967,20 @@ class SentimentEngine:
         if buf:
             paras.append("\n".join(buf))
 
-        # 2) 若只有 1 段且长度过长,降级按句聚合
-        # 阈值:超过 600 字符且无段落分隔,启用降级策略
-        if len(paras) <= 1:
-            only = paras[0] if paras else text
-            if len(only) > 600:
-                sentences = SentimentEngine._splitSentences(only)
-                if len(sentences) > 4:
-                    aggregated: List[str] = []
-                    chunkSize = 4  # 每段约 4 个句子
-                    for i in range(0, len(sentences), chunkSize):
-                        chunk = sentences[i : i + chunkSize]
-                        aggregated.append("".join(chunk))
-                    return aggregated
+        return paras or [text]
 
-        return paras
+    @staticmethod
+    def _aggregateSentenceScores(sentences: List[SentenceSentiment]) -> float:
+        """按有效情感证据量聚合句分,避免长短句获得相同权重。
+
+        无词典命中的句子仍保留在中性句计数中,但不稀释有证据句子的篇章
+        强度。若全文均无命中则返回 0。
+        """
+        weighted = [(sentence.score, sentence.hitCount) for sentence in sentences]
+        totalWeight = sum(weight for _, weight in weighted)
+        if totalWeight <= 0:
+            return 0.0
+        return sum(score * weight for score, weight in weighted) / totalWeight
 
     def _analyzeSentence(self, sentence: str) -> SentenceSentiment:
         """分析单句情感"""

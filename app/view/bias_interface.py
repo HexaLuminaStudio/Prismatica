@@ -1341,7 +1341,8 @@ class AssociationRulesDialog(MessageBoxBase):
         paramLayout.setColumnStretch(1, 1)
 
         self.methodLabel = CaptionLabel(
-            "句子级事务 · 单侧 Fisher 精确检验 · Holm 校正 α=0.05 · 仅保留提升度 > 1。"
+            "句子级事务(每个有效 Excel 行/句子一个事务,含零命中事务) · "
+            "方向规则族单侧 Fisher 精确检验 · Holm 校正 α=0.05 · 仅保留提升度 > 1。"
             "同一作者或篇章内句子可能相关，结果用于探索而非因果推断。",
             self,
         )
@@ -1564,12 +1565,16 @@ class AssociationRulesDialog(MessageBoxBase):
             rulesDf.attrs.get("transactionCount", len(self.transactions))
         )
         testedPairCount = int(rulesDf.attrs.get("testedPairCount", 0))
+        testedHypothesisCount = int(
+            rulesDf.attrs.get("testedHypothesisCount", testedPairCount * 2)
+        )
         familyWiseAlpha = float(rulesDf.attrs.get("familyWiseAlpha", 0.05))
 
         if rulesDf is None or rulesDf.empty:
             self.statusLabel.setText(
                 f"未发现通过统计筛选的正关联：共 {transactionCount} 个句子事务，"
-                f"检验 {testedPairCount} 组偏误关系，Holm 校正 α={familyWiseAlpha:.2f}。"
+                f"检验 {testedPairCount} 组偏误关系 / "
+                f"{testedHypothesisCount} 个方向假设，Holm 校正 α={familyWiseAlpha:.2f}。"
                 "可以降低支持度或置信度查看，但不建议降低显著性标准。"
             )
             self.table.setRowCount(0)
@@ -1610,6 +1615,7 @@ class AssociationRulesDialog(MessageBoxBase):
         self.statusLabel.setText(
             f"完成：{len(rulesDf)} 条规则 | "
             f"句子事务={numTransactions}  偏误类型={numItems}  "
+            f"方向假设={testedHypothesisCount}  "
             f"置信度范围=[{confMin * 100:.1f}%, {confMax * 100:.1f}%]  "
             f"提升度=[{liftMin:.2f}, {liftMax:.2f}]  "
             f"最大校正 p={adjustedPMax:.4g}。关联不表示因果。{warning}"
@@ -2424,7 +2430,7 @@ class BiasInterface(QWidget):
             "count": "完成分析后，这里会按偏误类型汇总计数和占比。",
             "chart": "完成分析后，可在饼图和条形图之间切换。",
             "heatmap": "完成分析并配置等级或国籍列后，可查看交叉分布。",
-            "rules": "至少需要两个含偏误的文件，才能挖掘文件级关联规则。",
+            "rules": "至少需要 10 个句子事务且包含两种偏误类型,才能进行探索性关联统计。",
         }
         for key in ("count", "chart", "heatmap", "rules"):
             page = QWidget(self.resultStack)
@@ -2683,7 +2689,7 @@ class BiasInterface(QWidget):
             "count": "完成分析后，这里会按偏误类型汇总计数和占比。",
             "chart": "完成分析后，可在饼图和条形图之间切换。",
             "heatmap": "完成分析并配置等级或国籍列后，可查看交叉分布。",
-            "rules": "至少需要两个含偏误的文件，才能挖掘文件级关联规则。",
+            "rules": "至少需要 10 个句子事务且包含两种偏误类型,才能进行探索性关联统计。",
         }
         for key, description in descriptions.items():
             self._showResultMessage(key, "暂无结果", description)

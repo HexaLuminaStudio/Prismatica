@@ -86,6 +86,14 @@ DEPREL_DESCRIPTIONS_ZH: Dict[str, str] = {
     "MT": "标记/助词",
     "DE": "依存关系(默认)",
     "PUNCT": "标点符号",
+    "root": "根节点(标签含义以当前 HanLP 模型标注体系为准)",
+    "nsubj": "名词性主语(常见 UD 标签)",
+    "obj": "宾语(常见 UD 标签)",
+    "iobj": "间接宾语(常见 UD 标签)",
+    "amod": "形容词修饰语(常见 UD 标签)",
+    "advmod": "副词修饰语(常见 UD 标签)",
+    "obl": "斜格名词成分(常见 UD 标签)",
+    "punct": "标点(常见 UD 标签)",
     "CC": "并列连词",
     "AUX": "助动词",
     "AP": "同位语",
@@ -114,8 +122,8 @@ class DependencyAnalysisWorker(QThread):
 
     def run(self):
         try:
-            results: List[DependencyParse] = []
             total = max(1, len(self._sentences))
+            results: List[DependencyParse] = []
             for i, sent in enumerate(self._sentences):
                 if self.isInterruptionRequested():
                     return
@@ -194,15 +202,11 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         outerLayout.addWidget(titleLabel)
 
         # 3) 说明
-        hint = CaptionLabel(
-            "基于 HanLP RESTful API 的依存句法分析。"
-            "支持中文(简体、繁体)及英文,可视化展示句子的句法结构,"
-            "可导出 PNG/SVG/CoNLL-U。",
-            self,
-        )
-        setThemeRole(hint, "muted", "font-size: 12px;")
-        hint.setWordWrap(True)
-        outerLayout.addWidget(hint)
+        self.backendHint = CaptionLabel("", self)
+        self.backendHint.setWordWrap(True)
+        self._updateBackendHint()
+        setThemeRole(self.backendHint, "muted", "font-size: 12px;")
+        outerLayout.addWidget(self.backendHint)
 
         # 4) 滚动容器
         self._scrollArea = ScrollArea(self)
@@ -365,16 +369,35 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # =====================================================================
     def _refreshBackendLabel(self) -> None:
         text = f"分析引擎:{self._parser.name}({self._parser.describe()})"
-        # HanLP 初始化失败时,附加错误说明
+        # 云端请求失败时,附加最近错误说明
         err = getattr(self._parser, "getLastError", lambda: None)()
         if err:
             text += f"   |   ⚠ {err}"
         self.backendLabel.setText(text)
+        self._updateBackendHint()
         setThemeRole(
             self.backendLabel,
             "danger" if err else "muted",
             "font-size: 11px;",
         )
+
+    def _updateBackendHint(self) -> None:
+        parser = getattr(self, "_parser", None)
+        if getattr(parser, "name", "") == "rule":
+            text = (
+                "当前为 jieba + 启发式规则的教学降级结果,不属于经过标注语料评测的"
+                "依存分析模型,不可作为论文定量证据或 UD 标注使用。"
+            )
+        else:
+            text = (
+                "输入句子会由桌面客户端直接上传至 HanLP RESTful API；"
+                "当前版本按产品决策使用代码内固定凭据。"
+                "结果保留 HanLP 原始关系标签；用于研究时请记录任务、语言、"
+                "模型版本与分词粒度，并抽样人工核验。"
+            )
+        hint = getattr(self, "backendHint", None)
+        if hint is not None:
+            hint.setText(text)
 
     def _updateSentencePreview(self) -> None:
         text = self.textEdit.toPlainText().strip()
@@ -417,6 +440,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         # 启动后台 worker(P0-fix:统一使用 self._worker 命名)
         self.runBtn.setEnabled(False)
         self.summaryLabel.setText("正在分析...")
+        getattr(self._parser, "clearLastError", lambda: None)()
         self._worker = DependencyAnalysisWorker(self._parser, sentences)
         self._worker.progress.connect(self._onProgress)
         self._worker.finished.connect(self._onFinished)
@@ -434,7 +458,27 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         self._refreshSentenceSelector()
         if results:
             self._renderCurrentSentence()
-            self.summaryLabel.setText(f"分析完成 — 共 {len(results)} 句,后端:{backend}")
+            validCount = sum(bool(p.tokens) for p in results)
+            if validCount == 0:
+                self.summaryLabel.setText("分析失败 — 后端未返回可用依存节点")
+                self._results = []
+                self.refreshAiInsightButton()
+                _showInfoBar(
+                    "error",
+                    "分析失败",
+                    "后端未返回可用依存节点,请检查凭据、网络或服务响应。",
+                    self,
+                )
+                return
+            self.summaryLabel.setText(
+                f"分析完成 — {validCount}/{len(results)} 句有效,后端:{backend}"
+            )
+            metadata = getattr(self._parser, "metadata", lambda: {})()
+            modelVersion = str(metadata.get("modelVersion", "")).strip()
+            if modelVersion:
+                self.summaryLabel.setText(
+                    f"{self.summaryLabel.text()},模型版本:{modelVersion}"
+                )
         else:
             self.summaryLabel.setText("分析完成 — 无结果")
         # AI 解读:有结果后启用按钮
@@ -486,6 +530,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "sentenceCount": len(results),
             "totalEdges": sum(len(p.edges) for p in results),
             "backend": getattr(self, "_backend", ""),
+            "backendMetadata": getattr(self._parser, "metadata", lambda: {})(),
             "conlluSnippets": conlluSnippets,
         }
         parameters = {
@@ -503,19 +548,18 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     def _onFailed(self, err: str) -> None:
         self.runBtn.setEnabled(True)
         self.summaryLabel.setText(f"分析失败:{err}")
+        self._refreshBackendLabel()
         # HanLP 常见错误:未授权、配额耗尽、网络超时、参数非法
         # 给出可操作的修复提示
         msg = err
-        if "401" in err or "Unauthorized" in err or "auth" in err.lower():
-            msg += "\n\n提示:HanLP 鉴权失败。请检查 dependency_engine.py 中"
-            msg += " HanLPDependencyParser.HANLP_AUTH 是否正确。"
+        if "401" in err or "403" in err:
+            msg += "\n\n提示:内置 HanLP 凭据无效或已失效。"
         elif "timeout" in err.lower() or "timed out" in err.lower():
             msg += "\n\n提示:网络超时。可稍后重试或检查代理设置。"
         elif "429" in err or "rate" in err.lower():
-            msg += "\n\n提示:API 配额已用完。可稍后重试或更换密钥。"
+            msg += "\n\n提示:HanLP 配额已用完，请稍后重试或联系管理员。"
         elif "Invalid tasks" in err or "Available tasks" in err:
-            msg += "\n\n提示:HanLP 任务名非法。请检查 dependency_engine.py 中"
-            msg += " HanLPDependencyParser.HANLP_TASKS 是否为官方支持的任务名。"
+            msg += "\n\n提示:代码内 HANLP_TASKS 配置无效。"
         MessageBox("分析失败", msg, self.window()).exec()
 
     def _onSentenceChanged(self, index: int) -> None:

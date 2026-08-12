@@ -20,7 +20,7 @@
     - 输入: 两个语料库(CorpusStore 实例)+ 过滤参数
     - 输出: KeywordListResult,DataFrame 列:
         Rank | Keyword | ObsFreq | RefFreq | ObsRate(per 10k) | RefRate(per 10k)
-              | LL | LogRatio | PctDiff | IsKey
+              | LL | LogRatio | PctDiff | RawP | AdjustedP | Direction | IsKey
 
 参考:
     - Dunning, T. (1993). Accurate methods for the statistics of surprise
@@ -49,10 +49,10 @@ from app.core.utils import logger
 # ---------------------------------------------------------------------------
 
 
-# 关键性阈值(Likelihood 默认 p < 0.01)
-LL_THRESHOLD_P001 = 6.6349
-LL_THRESHOLD_P005 = 5.024
-LL_THRESHOLD_P001_LARGE = 15.13  # 大样本的更严格阈值(常用语料库)
+# χ²(1) 单次检验临界值；界面中用它们反推 Holm 校正的家族错误率。
+LL_THRESHOLD_P001 = 6.634897  # α = 0.01
+LL_THRESHOLD_P005 = 3.841459  # α = 0.05
+LL_THRESHOLD_P001_LARGE = 10.827566  # α = 0.001
 
 
 @dataclass
@@ -68,8 +68,8 @@ class KeywordListResult:
         observedTokens:      观察语料总 token 数
         referenceTokens:     参照语料总 token 数
         elapsedSeconds:      计算耗时
-        significanceLevel:   使用的 LL 阈值(默认 6.6349 = p<0.01)
-        significantCount:    IsKey=True 的词数
+        significanceLevel:   用于换算 FWER alpha 的χ²(1) 临界值
+        significantCount:    完整检验族中 IsKey=True 的词数
         method:              算法描述
     """
 
@@ -81,7 +81,9 @@ class KeywordListResult:
     elapsedSeconds: float = 0.0
     significanceLevel: float = LL_THRESHOLD_P001
     significantCount: int = 0
-    method: str = "Log-Likelihood (Dunning 1993)"
+    familyWiseAlpha: float = 0.01
+    testedHypotheses: int = 0
+    method: str = "G² (Dunning 1993) + Holm FWER"
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +217,27 @@ def computePctDiff(
     return (rateA - rateB) / rateB * 100.0
 
 
+def significanceAlphaFromLlThreshold(significanceLevel: float) -> float:
+    """将 G² 阈值换算为自由度 1 的χ²上尾概率。"""
+    return math.erfc(math.sqrt(max(float(significanceLevel), 0.0) / 2.0))
+
+
+def adjustPValuesHolm(rawPValues: np.ndarray) -> np.ndarray:
+    """Holm step-down 校正，控制完整候选词族的 FWER。"""
+    values = np.asarray(rawPValues, dtype=float)
+    count = len(values)
+    if count == 0:
+        return values.copy()
+    order = np.argsort(values, kind="stable")
+    sortedValues = values[order]
+    adjustedSorted = np.maximum.accumulate(
+        np.minimum(sortedValues * (count - np.arange(count)), 1.0)
+    )
+    adjusted = np.empty(count, dtype=float)
+    adjusted[order] = adjustedSorted
+    return adjusted
+
+
 # ---------------------------------------------------------------------------
 # 主入口:对比两个 CorpusStore 的词频
 # ---------------------------------------------------------------------------
@@ -233,7 +256,7 @@ def analyzeKeywordList(
     minFreq: int = 2,
     topN: int = 500,
     significanceLevel: float = LL_THRESHOLD_P001,
-    method: str = "Log-Likelihood (Dunning 1993)",
+    method: str = "G² (Dunning 1993) + Holm FWER",
     smoothing: float = 0.5,
 ) -> Optional[KeywordListResult]:
     """对比观察语料与参照语料,找出 Keyness 显著的主题词。
@@ -272,18 +295,13 @@ def analyzeKeywordList(
     nA = len(observedTokens)
     nB = len(referenceTokens)
 
-    # 2) 候选词表 = 至少在一个语料中达到 minFreq 的词
-    #    (如果只看观察语料,会漏掉「观察中频次低但参照中也频次低」的对照词)
-    candidateWords = set()
-    for w, c in obsCounter.items():
-        if c >= minFreq:
-            candidateWords.add(w)
-    # 也加入参照语料的高频词,用于「负向 keyness」(参照语料中更显著)
-    # 设阈值 = max(minFreq, refSize / 1000) 至少取参照语料中 top0.1% 的词
-    refMinFreq = max(minFreq, nB // 1000)
-    for w, c in refCounter.items():
-        if c >= refMinFreq:
-            candidateWords.add(w)
+    # 2) 候选词族对称定义：任一语料中达到 minFreq 即纳入。
+    #    先在完整候选族上校正，再做 topN 展示截断。
+    candidateWords = {
+        word
+        for word in set(obsCounter) | set(refCounter)
+        if max(obsCounter.get(word, 0), refCounter.get(word, 0)) >= minFreq
+    }
 
     # 3) 对每个候选词计算显著度指标(向量化预分配)
     wordList = list(candidateWords)
@@ -321,6 +339,11 @@ def analyzeKeywordList(
         )
     llVals = 2.0 * (llTermA + llTermB)
     llVals = np.maximum(llVals, 0.0)  # LL 永远 >= 0
+    rawPValues = np.array(
+        [math.erfc(math.sqrt(value / 2.0)) for value in llVals], dtype=float
+    )
+    adjustedPValues = adjustPValuesHolm(rawPValues)
+    familyWiseAlpha = significanceAlphaFromLlThreshold(significanceLevel)
 
     # Log-Ratio (向量化)
     rateA = (obsFreqs + smoothing) / nA
@@ -353,14 +376,23 @@ def analyzeKeywordList(
             "LL": llVals,
             "LogRatio": logRatio,
             "PctDiff": pctDiff,
-            "IsKey": llVals >= significanceLevel,
+            "RawP": rawPValues,
+            "AdjustedP": adjustedPValues,
+            "Direction": np.select(
+                [obsRate > refRate, obsRate < refRate],
+                ["观察语料过度使用", "参照语料过度使用"],
+                default="归一化频率相同",
+            ),
+            "IsKey": adjustedPValues <= familyWiseAlpha,
         }
     )
 
     # 5) 排序:LL 降序;正 keyness 优先(LL 大的整体靠前)
     df = df.sort_values(["LL"], ascending=[False]).reset_index(drop=True)
 
-    # 6) 取 top-N
+    totalSignificantCount = int(df["IsKey"].sum())
+
+    # 6) 取 top-N（不改变已经完成的多重校正）
     if topN > 0 and len(df) > topN:
         df = df.head(topN).reset_index(drop=True)
 
@@ -368,7 +400,7 @@ def analyzeKeywordList(
     df.insert(0, "Rank", df.index + 1)
 
     elapsed = _time.perf_counter() - startTime
-    significantCount = int(df["IsKey"].sum())
+    significantCount = totalSignificantCount
 
     logger.info(
         f"[KeywordList] 完成: 观察={observedName}({nA} tokens) vs "
@@ -385,6 +417,8 @@ def analyzeKeywordList(
         elapsedSeconds=elapsed,
         significanceLevel=significanceLevel,
         significantCount=significantCount,
+        familyWiseAlpha=familyWiseAlpha,
+        testedHypotheses=n,
         method=method,
     )
 

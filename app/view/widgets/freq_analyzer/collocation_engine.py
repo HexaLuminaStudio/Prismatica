@@ -17,18 +17,20 @@
 
 学术严谨性说明
 ----------------
-本引擎的统计量推导基于 2×2 列联表(Church & Hanks 1990):
+本引擎的统计量推导基于 2×2 列联表(Church & Hanks 1990)。
+抽样单位是一个合法的“center-context 有向位置对”，即每个中心
+token 与其 L/R 跨距内、不跨越指定边界的上下文 token 构成一个观测:
 
                     共现(w₂)   不共现(¬w₂)   行合计
-    节点词(w₁)         O₁₁         R₁-C₁        R₁
-    非节点词(¬w₁)      C₁-O₁₁       N-R₁-C₁+O₁₁  N-R₁
-    列合计              C₁           N-C₁          N
+    节点词(w₁)         O₁₁         R-O₁₁         R
+    非节点词(¬w₁)      C-O₁₁       N-R-C+O₁₁   N-R
+    列合计              C            N-C           N
 
 其中:
-    O = O₁₁   : 跨距内的共现频次
-    R = f₁    : 节点词在语料中的总频次(nodeFreq)
-    C = f₂    : 搭配词在语料中的总频次(collocateFreq)
-    N         : 语料 token 总数
+    O = O₁₁   : center 为节点词且 context 为搭配词的位置对数
+    R         : center 为节点词的合法上下文位置对数
+    C         : context 为搭配词的合法位置对数
+    N         : 全部合法有向位置对数
 
 期望频次(零假设:节点词与搭配词独立):
     E = R · C / N
@@ -50,14 +52,11 @@
 设计选择与已知局限
 ------------------
 1. 跨距按"词位"度量(token position),而非字符距离;语料应先经分词
-2. 当前实现对跨句搭配不主动切断 — 用户应自行决定是否引入句子边界
-3. MI ≥ 3 的显著性阈值是 Church & Hanks (1990) 经验值,基于英语语料;
-   中文搭配研究中该阈值可能需调整(参见 Wei et al. 2014);
-   对低频语料建议改用 G² ≥ 3.84 (Dunning 1993)
-4. `continuityCorrection=True` 仅作用于 G²(Likelihood Ratio)的 Yates
-   修正(Yates 1934),不应用于 Z-score(Mann 2012 指出 Yates 修正
-   会破坏 Z 的正态近似,在小样本时反而引入偏差)。Yates 修正仅对
-   期望频次接近 1~5 的低频格子有理论意义,默认关闭以兼容 AntConc。
+2. 默认在句子边界处切断；文件边界无论用户是否允许跨句都必须切断
+3. MI 是关联强度而非显著性检验。MI ≥ 3 仅是 Church & Hanks (1990)
+   的经验性强关联阈值，不应解读为 p < 0.05
+4. `continuityCorrection` 仅保留为旧调用兼容参数。Yates 修正针对
+   Pearson χ²，不应作用于 G²；本引擎始终返回未修正的 G²
 5. 当 O = 0 时,该搭配词不出现在结果中(已过滤);当 O > 0 但 E = 0
    (极端稀有的搭配词全频次出现在节点词跨距内),MI / G² 记为 +inf,
    由调用方决定如何呈现
@@ -105,16 +104,27 @@ class ContingencyTable:
     """2×2 共现列联表(Church & Hanks 1990)
 
     Attributes:
-        O:  共现频次 O₁₁ (w₁ 与 w₂ 同时出现在跨距内)
-        R:  节点词在语料中的总频次 R₁
-        C:  搭配词在语料中的总频次 C₁
-        N:  语料 token 总数
+        O:  节点词-center 与搭配词-context 共现的位置对数
+        R:  节点词-center 的合法上下文位置对数
+        C:  搭配词作为 context 的合法位置对数
+        N:  全部合法有向 center-context 位置对数
     """
 
     O: int = 0
     R: int = 0
     C: int = 0
     N: int = 0
+
+    def __post_init__(self) -> None:
+        """校验列联表边际约束，拒绝通过截断负数掩盖抽样总体错误。"""
+        if min(self.O, self.R, self.C, self.N) < 0:
+            raise ValueError("列联表频数不能为负数")
+        if self.O > self.R or self.O > self.C:
+            raise ValueError("共现频数 O 不能超过行或列边际频数")
+        if self.R > self.N or self.C > self.N:
+            raise ValueError("行或列边际频数不能超过总观测数 N")
+        if self.N - self.R - self.C + self.O < 0:
+            raise ValueError("列联表的 O22 单元格不能为负数")
 
     @property
     def E(self) -> float:
@@ -132,17 +142,17 @@ class ContingencyTable:
     @property
     def O12(self) -> int:
         """节点词跨距内非搭配词(同一行的其他列)"""
-        return max(0, self.R - self.O)
+        return self.R - self.O
 
     @property
     def O21(self) -> int:
         """非节点词位置上的搭配词"""
-        return max(0, self.C - self.O)
+        return self.C - self.O
 
     @property
     def O22(self) -> int:
         """非节点词位置上的非搭配词"""
-        return max(0, self.N - self.R - self.C + self.O)
+        return self.N - self.R - self.C + self.O
 
 
 # ---------------------------------------------------------------------------
@@ -166,9 +176,10 @@ class CollocateEntry:
     deltaP2: float = 0.0  # ΔP₂: w₂ → w₁ 方向性
 
     # 元数据(用于学术报告)
-    collocateFreq: int = 0  # f₂ = C(搭配词全语料频次)
+    collocateFreq: int = 0  # C(搭配词作为 context 的位置对数)
+    corpusFreq: int = 0  # 搭配词在原语料中的 token 频次
     expectedFreq: float = 0.0  # E = R·C/N(零假设期望)
-    isSignificant: bool = False  # MI ≥ 阈值(默认 3.0)
+    meetsMiThreshold: bool = False  # MI 达到经验强关联阈值,不是 p 值
 
 
 @dataclass
@@ -192,20 +203,22 @@ class CollocationResult:
 
     nodeWord: str = ""  # 节点词(原始大小写)
     nodeKey: str = ""  # 用于匹配的归一化形式
-    nodeFreq: int = 0  # 节点词频 R
+    nodeFreq: int = 0  # 节点词在原语料中的 token 频次
     leftSpan: int = 5
     rightSpan: int = 5
-    totalTokens: int = 0  # N
+    totalTokens: int = 0  # 原语料 token 总数
     uniqueTypes: int = 0  # V(类型数)
+    contextOpportunityCount: int = 0  # 有效 center-context 位置对总数 N
+    nodeOpportunityCount: int = 0  # center 为节点词的位置对数 R
 
     collocates: List[CollocateEntry] = field(default_factory=list)
     positionDistribution: Dict[int, Counter] = field(default_factory=dict)
     networkEdges: List[Tuple[str, str, float]] = field(default_factory=list)
 
     # 学术元数据
-    significantCount: int = 0  # MI ≥ threshold 数量
-    significanceThreshold: float = 3.0  # MI 阈值(Church & Hanks 1990)
-    continuityCorrection: bool = False  # 是否启用 Yates 修正
+    strongAssociationCount: int = 0  # MI 达到经验强关联阈值的数量
+    miThreshold: float = 3.0  # MI 经验强关联阈值(Church & Hanks 1990)
+    continuityCorrection: bool = False  # 实际是否应用连续性修正(始终 False)
     elapsedSeconds: float = 0.0
 
 
@@ -227,7 +240,7 @@ class CollocationEngine:
             rightSpan=5,
             minFreq=2,
             topN=100,
-            significanceThreshold=3.0,
+            miThreshold=3.0,
             continuityCorrection=False,
         )
     """
@@ -253,10 +266,11 @@ class CollocationEngine:
         topN: int = 100,
         caseSensitive: bool = False,
         excludePunct: bool = True,
-        significanceThreshold: float = 3.0,
+        miThreshold: float = 3.0,
         continuityCorrection: bool = False,
         crossSentenceBoundary: bool = False,
         sentenceBoundaryIndices: Optional[List[int]] = None,
+        documentBoundaryIndices: Optional[List[int]] = None,
     ) -> CollocationResult:
         """搭配分析
 
@@ -269,16 +283,16 @@ class CollocationEngine:
             topN: 返回前 N 个搭配词(按 MI 降序,0 表示不限)
             caseSensitive: 是否区分大小写(英文场景)
             excludePunct: 是否过滤纯标点搭配词
-            significanceThreshold: 显著搭配的 MI 阈值(默认 3.0,
-                Church & Hanks 1990; 中文研究可调至 2.5~3.5)
-            continuityCorrection: 是否启用 Yates 连续性修正
-                (仅对 O=0 或 E=O 等边界情况有意义,默认关闭)
+            miThreshold: MI 强关联经验阈值(默认 3.0)
+            continuityCorrection: 旧版兼容参数；不会应用到 G²
             crossSentenceBoundary: P1-2 修复 — 是否允许跨句边界取搭配词。
                 学术惯例默认 False:搭配关系应受句子边界约束
                 (Sinclair 1991, Stubbs 1995)。
             sentenceBoundaryIndices: P1-2 修复 — 句子边界索引列表,
                 即「该位置的 token 之前有一个句子结束」。
                 若为 None 则按默认行为(全语料内统计,不切断)。
+            documentBoundaryIndices: 文件边界索引列表。无论是否允许跨句，
+                这些边界都会切断跨距。
 
         Returns:
             CollocationResult
@@ -286,6 +300,12 @@ class CollocationEngine:
         import time as _time
 
         startTime = _time.time()
+
+        if continuityCorrection:
+            logger.warning(
+                "[CollocationEngine] Yates 修正不适用于 G²，"
+                "continuityCorrection 已忽略"
+            )
 
         # 0) 输入校验
         nodeWord = (nodeWord or "").strip()
@@ -306,9 +326,19 @@ class CollocationEngine:
             logger.warning("[CollocationEngine] 语料为空,返回空结果")
             return CollocationResult(nodeWord=nodeWord, nodeKey=nodeKey)
 
-        # P1-2 修复:把句子边界索引转换成 set,O(1) 查询
-        # boundarySet[k] == True 表示「位置 k 之前存在句子边界」
-        boundarySet = set(sentenceBoundaryIndices) if sentenceBoundaryIndices else set()
+        # boundarySet[k] 表示「位置 k 的 token 之前存在边界」。
+        # 文件边界始终生效；句子边界受用户开关控制。
+        boundarySet = {
+            idx
+            for idx in (documentBoundaryIndices or [])
+            if 0 < idx < N
+        }
+        if not crossSentenceBoundary:
+            boundarySet.update(
+                idx
+                for idx in (sentenceBoundaryIndices or [])
+                if 0 < idx < N
+            )
 
         # 2) 全局频次统计
         totalFreq = Counter(normalizedTokens)
@@ -326,59 +356,72 @@ class CollocationEngine:
                 nodeFreq=0,
                 totalTokens=N,
                 uniqueTypes=V,
-                significanceThreshold=significanceThreshold,
-                continuityCorrection=continuityCorrection,
+                miThreshold=miThreshold,
+                continuityCorrection=False,
                 elapsedSeconds=_time.time() - startTime,
             )
 
-        # 3) 跨距共现统计
-        # 使用节点词出现位置列表(而非全表扫描),复杂度 O(K·(L+R)),
-        # K = nodeFreq。对大语料显著优于全表扫描
+        # 3) 在同一抽样总体上统计 2×2 列联表边际。
+        # 抽样单位是合法的有向 center-context 位置对。这保证
+        # O <= R, O <= C，即使节点窗口重叠也不会产生负单元格。
         collocateFreq: Counter = Counter()
+        contextFreq: Counter = Counter()
         positionFreq: Dict[int, Counter] = defaultdict(Counter)
+        contextOpportunityCount = 0
+        nodeOpportunityCount = 0
 
         for i, tok in enumerate(normalizedTokens):
-            if tok != nodeKey:
-                continue
-            # 左跨距:严格 < 节点词位置
+            isNode = tok == nodeKey
             for d in range(1, leftSpan + 1):
                 j = i - d
                 if j < 0:
                     break
-                # P1-2 修复:跨句切断。若该位置之前有句边界,不取该搭配。
-                if not crossSentenceBoundary and (j in boundarySet):
+                # 从 j 向右到 i 会穿过“j+1 之前”的边界。
+                if (j + 1) in boundarySet:
                     break
                 w = normalizedTokens[j]
                 if excludePunct and self._isPunct(w):
                     continue
-                collocateFreq[w] += 1
-                positionFreq[-d][w] += 1
-            # 右跨距:严格 > 节点词位置
+                contextOpportunityCount += 1
+                contextFreq[w] += 1
+                if isNode:
+                    nodeOpportunityCount += 1
+                    collocateFreq[w] += 1
+                    positionFreq[-d][w] += 1
             for d in range(1, rightSpan + 1):
                 j = i + d
                 if j >= N:
                     break
-                # P1-2 修复:跨句切断。节点词位置 i 处若存在句边界,
-                # 意味着 i 自身就是上一句的结束,不应向 i 右侧取。
-                if not crossSentenceBoundary and ((i + 1) in boundarySet):
+                # 从 i 向右到 j 会穿过“j 之前”的边界。
+                if j in boundarySet:
                     break
                 w = normalizedTokens[j]
                 if excludePunct and self._isPunct(w):
                     continue
-                collocateFreq[w] += 1
-                positionFreq[d][w] += 1
+                contextOpportunityCount += 1
+                contextFreq[w] += 1
+                if isNode:
+                    nodeOpportunityCount += 1
+                    collocateFreq[w] += 1
+                    positionFreq[d][w] += 1
 
         # 4) 构造列联表 + 计算统计量
         entries: List[CollocateEntry] = []
         for w, O in collocateFreq.items():
             if O < minFreq:
                 continue
-            C = totalFreq.get(w, 0)
+            C = contextFreq.get(w, 0)
             if C == 0:
                 continue
-            table = ContingencyTable(O=O, R=nodeFreq, C=C, N=N)
-            entry = self._computeAll(table, significanceThreshold, continuityCorrection)
+            table = ContingencyTable(
+                O=O,
+                R=nodeOpportunityCount,
+                C=C,
+                N=contextOpportunityCount,
+            )
+            entry = self._computeAll(table, miThreshold, continuityCorrection)
             entry.collocate = w
+            entry.corpusFreq = totalFreq.get(w, 0)
             entries.append(entry)
 
         # 5) 排序:MI 降序(主排序);同 MI 按 freq 降序(辅助,保证稳定)
@@ -386,14 +429,14 @@ class CollocationEngine:
         if topN > 0:
             entries = entries[:topN]
 
-        # 6) 显著搭配统计(MI ≥ threshold)
-        sigCount = sum(1 for e in entries if e.isSignificant)
+        # 6) MI 达到经验强关联阈值的搭配数量
+        strongAssociationCount = sum(1 for e in entries if e.meetsMiThreshold)
 
-        # 7) 网络图边:仅 MI > 0 且显著的搭配
+        # 7) 网络图边:仅保留 MI > 0 且达到强关联阈值的搭配
         networkEdges = [
             (nodeWord, e.collocate, round(e.mi, 4))
             for e in entries
-            if e.mi > 0 and e.isSignificant
+            if e.mi > 0 and e.meetsMiThreshold
         ]
 
         return CollocationResult(
@@ -404,12 +447,14 @@ class CollocationEngine:
             rightSpan=rightSpan,
             totalTokens=N,
             uniqueTypes=V,
+            contextOpportunityCount=contextOpportunityCount,
+            nodeOpportunityCount=nodeOpportunityCount,
             collocates=entries,
             positionDistribution={pos: cnt for pos, cnt in positionFreq.items()},
             networkEdges=networkEdges,
-            significantCount=sigCount,
-            significanceThreshold=significanceThreshold,
-            continuityCorrection=continuityCorrection,
+            strongAssociationCount=strongAssociationCount,
+            miThreshold=miThreshold,
+            continuityCorrection=False,
             elapsedSeconds=_time.time() - startTime,
         )
 
@@ -419,13 +464,15 @@ class CollocationEngine:
     def _computeAll(
         self,
         t: ContingencyTable,
-        sigThreshold: float,
+        miThreshold: float,
         useCorrection: bool,
     ) -> CollocateEntry:
         """基于列联表 t 计算所有统计量
 
         所有公式严格按列联表语义实现,与 AntConc 4.x 系列兼容。
         """
+        # 仅保留参数以兼容旧调用；Yates 修正不适用于 G²。
+        _ = useCorrection
         O, R, C, N = t.O, t.R, t.C, t.N
         E = t.E
 
@@ -466,9 +513,7 @@ class CollocationEngine:
         # 使用超几何分布方差(Dunning 1993, CL Vol.19 No.1, eq.7):
         #   V_O = E · (N - R) / N · (N - C) / (N - 1)
         # 该方差是超几何分布在零假设下的精确方差,优于 Barry (2018) 的简化形式。
-        # 注:Yates continuity correction 在 Z-score 上**没有学术依据** —
-        # Yates 修正仅用于 Pearson 卡方,误用于 Z 会破坏其正态性近似,
-        # 因此 useCorrection 仅影响 G²/LL 计算,不影响 Z-score。
+        # Yates 修正不应用于 Z-score。
         if N > 1:
             var = E * (N - R) / N * (N - C) / (N - 1)
             sigma = math.sqrt(max(var, 1e-12))
@@ -476,13 +521,12 @@ class CollocationEngine:
         else:
             zScore = 0.0
 
-            # ---- Log-Likelihood Ratio (G² / LL) ----
+        # ---- Log-Likelihood Ratio (G² / LL) ----
         # Dunning (1993) 推荐用于低频搭配的显著性检验(优于卡方):
         #   G² = 2 · Σ O_ij · ln(O_ij / E_ij)
         # 四格: O11=O, O12=R-O, O21=C-O, O22=N-R-C+O
         # 对 O_ij = 0 的格子,贡献为 0(0·ln(0/E)=0,工程实现按 0 处理)。
-        # Yates 修正:当 E - 0.5 < O < E + 0.5 时,加 0.5 到各 O_ij
-        # (见 Dunning 1993, eq.11)
+        # 本引擎不对 G² 应用 Yates 修正。
         logLikelihood = 0.0
         if N > 0 and R > 0 and C > 0:
             o11 = O
@@ -502,9 +546,6 @@ class CollocationEngine:
                     # 期望为 0 但实际 > 0:LL → +inf
                     logLikelihood = float("inf")
                     break
-                if useCorrection and observed == 0:
-                    # Yates 修正:对 O=0 的格子跳过 0.5 加法(无法加到 0)
-                    pass
                 logLikelihood += 2.0 * observed * math.log(observed / expected)
 
         # ---- Delta-P₁ = P(w₂|w₁) - P(w₂|¬w₁) ----
@@ -548,7 +589,7 @@ class CollocationEngine:
             deltaP2=round(deltaP2, 4),
             collocateFreq=C,
             expectedFreq=round(E, 4),
-            isSignificant=(math.isfinite(mi) and mi >= sigThreshold),
+            meetsMiThreshold=(math.isfinite(mi) and mi >= miThreshold),
         )
 
     # ============================================================

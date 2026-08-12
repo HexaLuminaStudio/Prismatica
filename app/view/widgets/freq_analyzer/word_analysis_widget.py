@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -443,6 +444,11 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         root.setSpacing(12)
 
         self._scrollArea.setWidget(self._contentWidget)
+        # qfluentwidgets.ScrollArea.setWidget() 会重置滚动条策略；内容较高时
+        # 必须在挂载后恢复按需滚动，避免下方图表被强行压缩进视口。
+        self._scrollArea.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         # ===== 参数区 =====
         paramCard = CardWidget(self)
@@ -604,6 +610,10 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # ============= 词汇指标 tab =============
     def _buildMetricsTab(self):
         self._metricsTab = QWidget(self)
+        self._metricsTab.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
         layout = QVBoxLayout(self._metricsTab)
         layout.setContentsMargins(0, 8, 0, 0)
         layout.setSpacing(10)
@@ -615,6 +625,11 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 词汇增长曲线
         chartCard = CardWidget(self._metricsTab)
+        chartCard.setMinimumHeight(430)
+        chartCard.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
         chartLayout = QVBoxLayout(chartCard)
         chartLayout.setContentsMargins(16, 12, 16, 12)
         chartLayout.setSpacing(8)
@@ -632,12 +647,18 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         # matplotlib canvas
         self._figure = Figure(figsize=(8, 4), dpi=100)
         self._figure.patch.set_facecolor(shellPalette().surface.name())
+        self._figure.subplots_adjust(left=0.10, right=0.97, top=0.88, bottom=0.16)
         self._ax = self._figure.add_subplot(111)
         self._ax.set_xlabel("Tokens")
         self._ax.set_ylabel("Types")
         self._ax.grid(True, linestyle="--", alpha=0.5)
         self._canvas = FigureCanvasQTAgg(self._figure)
-        chartLayout.addWidget(self._canvas)
+        self._canvas.setMinimumHeight(340)
+        self._canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
+        chartLayout.addWidget(self._canvas, 1)
 
         # 初始提示
         self._ax.text(

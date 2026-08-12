@@ -8,7 +8,7 @@ UI 风格与 collocation_widget.py / word_analysis_widget.py 等子页面保持�
     - Pivot 选项卡 + ScrollArea 包裹
     - CardWidget + StrongBodyLabel 分组
     - ResultSummary 4 列指标卡
-    - 表格交替行 + 数值右对齐 + 显著行高亮
+    - 表格交替行 + 数值右对齐 + MI 强关联行高亮
     - 后台 QThread 异步分析,UI 不阻塞
     - CSV 导出按钮
 
@@ -17,9 +17,9 @@ UI 风格与 collocation_widget.py / word_analysis_widget.py 等子页面保持�
         - POS Pattern 输入框(含示例与提示)
         - 左跨距 / 右跨距 SpinBox
         - 最低频次 / Top-N
-        - MI 显著性阈值 / 构式 G² 阈值
+        - MI 关联强度展示阈值
         - [开始分析] [取消] 按钮
-    [ 结果摘要卡 ] 4 个指标(构式频次 / 显著 slot 数 / 跨距搭配数 / 耗时)
+    [ 结果摘要卡 ] 4 个指标(构式频次 / 强关联 slot 数 / 跨距搭配数 / 耗时)
     [ Pivot 选项卡 ]
         - Slot 填充词表(每个 slot 的高频词 + MI/LogDice/Z)
         - 内部 slot 对贴合度(slot_i vs slot_j 的联合 MI)
@@ -102,8 +102,7 @@ class ConstructionWorker(QThread):
         rightSpan: int,
         minFreq: int,
         topN: int,
-        slotSigThreshold: float,
-        constructionSigThreshold: float,
+        slotMiThreshold: float,
     ):
         super().__init__()
         self._corpusStore = corpusStore
@@ -113,8 +112,7 @@ class ConstructionWorker(QThread):
         self._rightSpan = rightSpan
         self._minFreq = minFreq
         self._topN = topN
-        self._slotSigThreshold = slotSigThreshold
-        self._constructionSigThreshold = constructionSigThreshold
+        self._slotMiThreshold = slotMiThreshold
         self._cancel = False
 
     def cancel(self):
@@ -190,8 +188,7 @@ class ConstructionWorker(QThread):
                 rightSpan=self._rightSpan,
                 minFreq=self._minFreq,
                 topN=self._topN,
-                slotSigThreshold=self._slotSigThreshold,
-                constructionSigThreshold=self._constructionSigThreshold,
+                slotMiThreshold=self._slotMiThreshold,
             )
 
             if self._cancel:
@@ -317,7 +314,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 summary.setMetrics(
                     [
                         ("构式频次", "—", MetricColor.NEUTRAL),
-                        ("显著 slot 词", "—", MetricColor.NEUTRAL),
+                        ("强关联 slot 词", "—", MetricColor.NEUTRAL),
                         ("跨距搭配数", "—", MetricColor.NEUTRAL),
                         ("耗时", "—", MetricColor.NEUTRAL),
                     ]
@@ -502,24 +499,16 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         row2.addStretch(1)
         layout.addLayout(row2)
 
-        # 第 2.5 行:显著性参数
+        # 第 2.5 行:关联强度参数
         row2b = QHBoxLayout()
         row2b.setSpacing(16)
-        row2b.addWidget(BodyLabel("Slot MI 阈值:", card))
-        self.slotSigSpin = DoubleSpinBox(card)
-        self.slotSigSpin.setRange(0.0, 20.0)
-        self.slotSigSpin.setDecimals(1)
-        self.slotSigSpin.setSingleStep(0.5)
-        self.slotSigSpin.setValue(3.0)
-        row2b.addWidget(self.slotSigSpin)
-
-        row2b.addWidget(BodyLabel("构式 G² 阈值:", card))
-        self.g2Spin = DoubleSpinBox(card)
-        self.g2Spin.setRange(0.0, 50.0)
-        self.g2Spin.setDecimals(2)
-        self.g2Spin.setSingleStep(0.5)
-        self.g2Spin.setValue(3.84)  # p<0.05 (df=1)
-        row2b.addWidget(self.g2Spin)
+        row2b.addWidget(BodyLabel("Slot MI 强关联阈值:", card))
+        self.slotMiSpin = DoubleSpinBox(card)
+        self.slotMiSpin.setRange(0.0, 20.0)
+        self.slotMiSpin.setDecimals(1)
+        self.slotMiSpin.setSingleStep(0.5)
+        self.slotMiSpin.setValue(3.0)
+        row2b.addWidget(self.slotMiSpin)
 
         row2b.addStretch(1)
         layout.addLayout(row2b)
@@ -561,7 +550,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         summary.setMetrics(
             [
                 ("构式频次", "—", MetricColor.PRIMARY),
-                ("显著 slot 词", "—", MetricColor.SUCCESS),
+                ("强关联 slot 词", "—", MetricColor.SUCCESS),
                 ("跨距搭配数", "—", MetricColor.ACCENT),
                 ("耗时", "—", MetricColor.NEUTRAL),
             ]
@@ -700,7 +689,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 "搭配词",
                 "词性",
                 "共现 O",
-                "搭配词频 C",
+                "上下文机会 C",
                 "MI",
                 "LogDice",
                 "T-score",
@@ -785,8 +774,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             rightSpan=self.rightSpin.value(),
             minFreq=self.minFreqSpin.value(),
             topN=self.topNSpin.value(),
-            slotSigThreshold=self.slotSigSpin.value(),
-            constructionSigThreshold=self.g2Spin.value(),
+            slotMiThreshold=self.slotMiSpin.value(),
         )
         self._worker.progress.connect(self._onProgress)
         self._worker.finished.connect(self._onFinished)
@@ -856,12 +844,12 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         if r is None or getattr(r, "matchCount", 0) == 0:
             return None
         try:
-            sigSlot = sum(1 for e in r.slotEntries if e.isSignificant)
+            strongSlotCount = sum(1 for e in r.slotEntries if e.meetsMiThreshold)
             topSlots = r.slotEntries[:5]
             topText = "、".join(f"{e.slotLabel}={e.word}({e.mi:.1f})" for e in topSlots)
             summary = (
                 f"构式「{r.patternRaw}」匹配 {r.matchCount} 次,"
-                f"G²={r.logLikelihood:.2f}({'显著' if r.isSignificant else '不显著'}),"
+                f"{strongSlotCount} 个 slot 词达到 MI 强关联阈值,"
                 f"{len(r.collocates)} 个跨距搭配。"
                 f"Top slot:{topText}"
             )
@@ -885,8 +873,8 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "patternRaw": r.patternRaw,
             "matchCount": r.matchCount,
             "constructionFreq": r.constructionFreq,
-            "logLikelihood": r.logLikelihood,
-            "isSignificant": r.isSignificant,
+            "overallInferenceAvailable": r.overallInferenceAvailable,
+            "overallInferenceNote": r.overallInferenceNote,
             "topSlotEntries": topSlots,
             "internalPairsCount": len(r.internalPairs),
             "collocatesCount": len(r.collocates),
@@ -895,8 +883,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "pattern": r.patternRaw,
             "leftSpan": r.leftSpan,
             "rightSpan": r.rightSpan,
-            "slotSigThreshold": r.slotSigThreshold,
-            "significanceThreshold": r.significanceThreshold,
+            "slotMiThreshold": r.slotMiThreshold,
         }
         ts = self._buildDefaultTitle().split(" ", 1)[1]
         return {
@@ -909,7 +896,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
     # ------------------------------------------------------------------
     def _renderResults(self, r: ConstructionResult):
         # 顶部摘要
-        sigSlotCount = sum(1 for e in r.slotEntries if e.isSignificant)
+        strongSlotCount = sum(1 for e in r.slotEntries if e.meetsMiThreshold)
         from app.view.widgets.freq_analyzer.result_summary import (
             MetricColor,
             ResultSummary,
@@ -921,8 +908,8 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 [
                     ("构式频次", f"{r.constructionFreq:,}", MetricColor.PRIMARY),
                     (
-                        f"显著 slot 词(MI≥{r.slotSigThreshold:.1f})",
-                        f"{sigSlotCount}",
+                        f"强关联 slot 词(MI≥{r.slotMiThreshold:.1f})",
+                        f"{strongSlotCount}",
                         MetricColor.SUCCESS,
                     ),
                     ("跨距搭配数", f"{len(r.collocates)}", MetricColor.ACCENT),
@@ -934,24 +921,20 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 [
                     ("构式频次", f"{r.constructionFreq:,}", MetricColor.PRIMARY),
                     (
-                        f"显著 slot 词(MI≥{r.slotSigThreshold:.1f})",
-                        f"{sigSlotCount}",
+                        f"强关联 slot 词(MI≥{r.slotMiThreshold:.1f})",
+                        f"{strongSlotCount}",
                         MetricColor.SUCCESS,
                     ),
                     ("跨距搭配数", f"{len(r.collocates)}", MetricColor.ACCENT),
                     ("耗时", f"{r.elapsedSeconds:.2f}s", MetricColor.NEUTRAL),
                 ]
             )
-        sigTag = (
-            f"G²={r.logLikelihood:.2f} ≥ {r.significanceThreshold:.2f} → 显著"
-            if r.isSignificant
-            else f"G²={r.logLikelihood:.2f} < {r.significanceThreshold:.2f} → 不显著"
-        )
         self._summary.setDetail(
             f"📐 构式 <b>{r.patternRaw}</b> &nbsp;|&nbsp; "
             f"匹配 <b>{r.matchCount:,}</b> 次 &nbsp;|&nbsp; "
             f"语料 <b>{r.totalTokens:,}</b> tokens / <b>{r.uniqueTypes:,}</b> types"
-            f" &nbsp;|&nbsp; {sigTag} &nbsp;|&nbsp; 跨距 L{r.leftSpan}-R{r.rightSpan}"
+            f" &nbsp;|&nbsp; 整体推断:未计算(缺少独立基线)"
+            f" &nbsp;|&nbsp; 跨距 L{r.leftSpan}-R{r.rightSpan}"
         )
 
         # 渲染各表格
@@ -994,8 +977,8 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 )
                 self._slotTable.setItem(idx, col, item)
 
-            # 高亮显著 slot 词
-            if entry.isSignificant:
+            # MI 关联强度达到展示阈值时高亮
+            if entry.meetsMiThreshold:
                 for c in range(8):
                     cell = self._slotTable.item(idx, c)
                     if cell is not None:
@@ -1030,8 +1013,8 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 )
                 self._internalTable.setItem(idx, col, item)
 
-            # 高亮
-            if entry.isSignificant:
+            # MI 关联强度达到展示阈值时高亮
+            if entry.meetsMiThreshold:
                 for c in range(7):
                     cell = self._internalTable.item(idx, c)
                     if cell is not None:
@@ -1084,8 +1067,8 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 )
                 self._collocatesTable.setItem(idx, col, item)
 
-            # 高亮显著搭配词
-            if entry.isSignificant:
+            # MI 关联强度达到展示阈值时高亮
+            if entry.meetsMiThreshold:
                 for c in range(9):
                     cell = self._collocatesTable.item(idx, c)
                     if cell is not None:
@@ -1123,7 +1106,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                         "MI",
                         "LogDice",
                         "Z-score",
-                        "IsSignificant",
+                        "MeetsMiThreshold",
                     ]
                 )
                 for e in self._result.slotEntries:
@@ -1138,7 +1121,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             f"{e.mi:.4f}",
                             f"{e.logDice:.4f}",
                             f"{e.zScore:.4f}",
-                            e.isSignificant,
+                            e.meetsMiThreshold,
                         ]
                     )
             if charge.commit():
@@ -1177,7 +1160,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                         "MI",
                         "LogDice",
                         "Z-score",
-                        "IsSignificant",
+                        "MeetsMiThreshold",
                     ]
                 )
                 for e in self._result.internalPairs:
@@ -1192,7 +1175,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             f"{e.mi:.4f}",
                             f"{e.logDice:.4f}",
                             f"{e.zScore:.4f}",
-                            e.isSignificant,
+                            e.meetsMiThreshold,
                         ]
                     )
             if charge.commit():
@@ -1232,7 +1215,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                         "T-score",
                         "Z-score",
                         "DeltaP1",
-                        "IsSignificant",
+                        "MeetsMiThreshold",
                     ]
                 )
                 for e in self._result.collocates:
@@ -1248,7 +1231,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             f"{e.tScore:.4f}",
                             f"{e.zScore:.4f}",
                             f"{e.deltaP:.4f}",
-                            e.isSignificant,
+                            e.meetsMiThreshold,
                         ]
                     )
             if charge.commit():

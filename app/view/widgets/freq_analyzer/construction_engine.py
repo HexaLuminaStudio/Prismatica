@@ -10,8 +10,10 @@
         * 内部贴合度 (Internal Association, IA):构式内各 slot 间的 MI
         * 跨距贴合度 (Span Association):构式整体与周围词的 MI
         * MI / LogDice / Z-score / T-score / Delta-P(复用列联表计算)
-        * 对数似然比 G²(显著性检验, p < 0.05 阈值 3.84)
-        * 显著构式判定
+        * 构式频次的描述性统计
+
+    注意:没有独立参考概率或构式机会空间时,构式整体 G²/p 值不可识别。
+    MI 仅作为关联强度,不能直接解释为统计显著性。
 
 学术依据:
     - Stefanowitsch, A., & Gries, S. Th. (2003). Collostructions:
@@ -67,7 +69,7 @@ class ConstructionSlotEntry:
     mi: float = 0.0  # 该词与该 slot 的 MI
     logDice: float = 0.0  # LogDice
     zScore: float = 0.0  # Z-score
-    isSignificant: bool = False  # MI ≥ threshold
+    meetsMiThreshold: bool = False  # MI 展示阈值,不是显著性检验
 
 
 @dataclass
@@ -84,7 +86,7 @@ class CollocateEntry:
     deltaP: float = 0.0
     collocateFreq: int = 0
     expectedFreq: float = 0.0
-    isSignificant: bool = False
+    meetsMiThreshold: bool = False
 
 
 @dataclass
@@ -100,7 +102,7 @@ class InternalSlotPair:
     mi: float = 0.0
     logDice: float = 0.0
     zScore: float = 0.0
-    isSignificant: bool = False
+    meetsMiThreshold: bool = False
 
 
 @dataclass
@@ -122,15 +124,16 @@ class ConstructionResult:
     # 跨距搭配词(构式整体作为节点)
     collocates: List[CollocateEntry] = field(default_factory=list)
 
-    # 显著判定
-    logLikelihood: float = 0.0  # G²(构式 vs 语料总体)
-    isSignificant: bool = False
-    significanceThreshold: float = 3.84  # G² ≥ 3.84 → p < 0.05 (df=1)
+    # 没有独立基线时,构式整体的 G²/p 值不可识别。
+    overallInferenceAvailable: bool = False
+    overallInferenceNote: str = (
+        "未设置独立参考概率或构式机会空间,不计算构式整体 G²/p 值。"
+    )
 
     # 元数据
     leftSpan: int = 3
     rightSpan: int = 3
-    slotSigThreshold: float = 3.0  # slot MI 显著性阈值(沿用 Church & Hanks)
+    slotMiThreshold: float = 3.0  # MI 关联强度展示阈值,不是 p 值阈值
     elapsedSeconds: float = 0.0
 
 
@@ -155,8 +158,7 @@ class ConstructionEngine:
         rightSpan: int = 3,
         minFreq: int = 2,
         topN: int = 100,
-        slotSigThreshold: float = 3.0,
-        constructionSigThreshold: float = 3.84,
+        slotMiThreshold: float = 3.0,
     ) -> ConstructionResult:
         """构式搭配强度分析
 
@@ -168,8 +170,7 @@ class ConstructionEngine:
             rightSpan: 右跨距
             minFreq: 最低共现频次
             topN: 搭配词 Top-N
-            slotSigThreshold: slot 词 MI 显著性阈值
-            constructionSigThreshold: 构式本身 G² 显著性阈值(p<0.05→3.84)
+            slotMiThreshold: slot 词 MI 关联强度展示阈值,不表示统计显著性
 
         Returns:
             ConstructionResult
@@ -213,8 +214,7 @@ class ConstructionEngine:
             uniqueTypes=V,
             leftSpan=leftSpan,
             rightSpan=rightSpan,
-            slotSigThreshold=slotSigThreshold,
-            significanceThreshold=constructionSigThreshold,
+            slotMiThreshold=slotMiThreshold,
         )
 
         if matchCount == 0:
@@ -246,33 +246,8 @@ class ConstructionEngine:
                     continue
                 slotFills[slotIdx][word] += 1
 
-        # 6) 构式本身的 G²(对数似然比)
-        #    思路:构式出现 vs 不出现;2×2 列联表
-        #    O = constructionFreq, R = N (相当于所有位置都可出现), C = constructionFreq
-        #    注:经典 collexeme 分析用 Fisher exact / G²,这里给 G² 工程近似
-        #    E = N * O / N = O, 故简化公式不适用;此处改为:
-        #    构式作为整体:二项分布零假设下,期望 = 1 (每位置概率 = constructionFreq/N)
-        #    为工程简便,采用 G²(构式 vs 1/N 期望)的形式:
-        #    G² = 2 * O * log(O / E) + 2 * (N-O) * log((N-O)/(N-E))
-        if N > 0:
-            E_constr = N * (constructionFreq / N) if constructionFreq > 0 else 1.0
-            E_constr = max(E_constr, 1e-9)
-            if constructionFreq > 0:
-                term1 = 2.0 * constructionFreq * math.log(
-                    constructionFreq / E_constr
-                )
-            else:
-                term1 = 0.0
-            if (N - constructionFreq) > 0 and (N - E_constr) > 0:
-                term2 = 2.0 * (N - constructionFreq) * math.log(
-                    (N - constructionFreq) / (N - E_constr)
-                )
-            else:
-                term2 = 0.0
-            G2 = term1 + term2
-            if math.isfinite(G2):
-                result.logLikelihood = round(G2, 4)
-                result.isSignificant = G2 >= constructionSigThreshold
+        # 6) 不对构式整体做 G²。若用样本自身的 constructionFreq / N
+        #    定义零假设期望,则 E 恒等于 O,G² 恒为 0,不能形成推断检验。
 
         # 7) 每个 slot 的填充词 MI / LogDice / Z-score
         for slotIdx, (patIdx, ptoken) in enumerate(slotTokens):
@@ -324,8 +299,8 @@ class ConstructionEngine:
                     sigma = math.sqrt(max(var, 1e-12))
                     if sigma > 0:
                         entry.zScore = round((O_word - E) / sigma, 4)
-                entry.isSignificant = (
-                    math.isfinite(entry.mi) and entry.mi >= slotSigThreshold
+                entry.meetsMiThreshold = (
+                    math.isfinite(entry.mi) and entry.mi >= slotMiThreshold
                 )
                 result.slotEntries.append(entry)
 
@@ -351,11 +326,11 @@ class ConstructionEngine:
                 labelA = f"{posLabelA}{i}"
                 labelB = f"{posLabelB}{j}"
 
-                # 计算每对具体填充词的 MI / LogDice / Z-score(只统计频次 ≥ minFreq)
-                # 集合级 MI: 用全部 (slotA 词, slotB 词) 联合分布在 N 上的强度
-                slotA_total = sum(slotFills[i].values())
-                slotB_total = sum(slotFills[j].values())
-                if slotA_total == 0 or slotB_total == 0:
+                # 每个构式实例提供一个 (slotA, slotB) 观测。边际频次必须来自
+                # 同一 slot-pair 机会总体,不能与全语料 token 频次混用。
+                slotATotal = sum(slotFills[i].values())
+                slotBTotal = sum(slotFills[j].values())
+                if slotATotal == 0 or slotBTotal == 0:
                     continue
 
                 # 收集按 (词A, 词B) 联合频次
@@ -366,11 +341,13 @@ class ConstructionEngine:
                 for (wA, wB), O_pair in pairCounter.items():
                     if O_pair < minFreq:
                         continue
-                    fA = totalFreq.get(wA, 0)
-                    fB = totalFreq.get(wB, 0)
+                    fA = slotFills[i].get(wA, 0)
+                    fB = slotFills[j].get(wB, 0)
                     if fA == 0 or fB == 0:
                         continue
-                    table = ContingencyTable(O=O_pair, R=fA, C=fB, N=N)
+                    table = ContingencyTable(
+                        O=O_pair, R=fA, C=fB, N=pairTotal
+                    )
                     E_pair = table.E
                     if E_pair <= 0:
                         continue
@@ -389,22 +366,22 @@ class ConstructionEngine:
                             14.0 + math.log2((2.0 * O_pair) / denom), 4
                         )
                         pairEntry.logDice = max(0.0, min(14.0, pairEntry.logDice))
-                    if N > 1:
+                    if pairTotal > 1:
                         var = (
                             E_pair
-                            * (N - fA)
-                            / N
-                            * (N - fB)
-                            / (N - 1)
+                            * (pairTotal - fA)
+                            / pairTotal
+                            * (pairTotal - fB)
+                            / (pairTotal - 1)
                         )
                         sigma = math.sqrt(max(var, 1e-12))
                         if sigma > 0:
                             pairEntry.zScore = round(
                                 (O_pair - E_pair) / sigma, 4
                             )
-                    pairEntry.isSignificant = (
+                    pairEntry.meetsMiThreshold = (
                         math.isfinite(pairEntry.mi)
-                        and pairEntry.mi >= slotSigThreshold
+                        and pairEntry.mi >= slotMiThreshold
                     )
                     result.internalPairs.append(pairEntry)
 
@@ -430,7 +407,7 @@ class ConstructionEngine:
                 minFreq=minFreq,
                 topN=topN,
                 caseSensitive=True,  # synthetic token 已带特殊前缀,无需小写
-                significanceThreshold=slotSigThreshold,
+                miThreshold=slotMiThreshold,
             )
             # 转写到 CollocateEntry
             for ce in collResult.collocates:
@@ -448,7 +425,7 @@ class ConstructionEngine:
                     deltaP=ce.deltaP1,  # 用 Delta-P₁ 作为主方向性指标
                     collocateFreq=ce.collocateFreq,
                     expectedFreq=ce.expectedFreq,
-                    isSignificant=ce.isSignificant,
+                    meetsMiThreshold=ce.meetsMiThreshold,
                 )
                 # 尝试获取搭配词的词性(取该词首次出现的 tag)
                 for tok, tag in zip(tokens, posTags):

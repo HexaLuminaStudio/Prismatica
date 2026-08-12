@@ -82,6 +82,8 @@ from app.view.widgets.freq_analyzer.keyword_list_engine import (
     LL_THRESHOLD_P005,
     LL_THRESHOLD_P001_LARGE,
     KeywordListResult,
+    adjustPValuesHolm,
+    significanceAlphaFromLlThreshold,
 )
 from app.view.widgets.freq_analyzer.result_summary import MetricColor, ResultSummary
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
@@ -433,12 +435,8 @@ class KeywordListWorker(CancellableWorker):
     ) -> Optional["KeywordListResult"]:
         """对候选词分块跑 LL/LogRatio/%DIFF,每块 emit partialStats。
 
-        P3-fix 2026-07-19:Top-N 大时的关键性能优化。
-            - 候选集裁剪:Counter.most_common 截取 top(topN*5) 而非遍历全表,
-              topN=2000 时候选集 ≤ 10000,算法阶段算 10000 词而非 80000 词(快 8x)。
-            - 频次数组预缓存:obsFreqsAll/refFreqsAll 一次性建好(向量化查表),
-              算法阶段不再逐 chunk 调 Counter.get(),零 Python 开销。
-            - partialStats 节流:每 50ms 最多 emit 一次,避免高频信号拖累主线程。
+        在完整对称候选族上分块计算，以 Holm 法校正后再做 topN 展示。
+        频次数组一次性缓存，partialStats 每 50ms 最多 emit 一次。
 
         注:为不破坏 keyword_list_engine.analyzeKeywordList 的纯函数签名,
         此处直接调用内部 Counter + numpy 算子,按 chunk 切分 candidateWords。
@@ -453,50 +451,12 @@ class KeywordListWorker(CancellableWorker):
         minFreq = self._minFreq
         topN = self._topN
 
-        # P3-fix 2026-07-19:候选集裁剪为 max(topN*5, 20000)
-        # 旧实现遍历两个 Counter 全表,nB=100万 时 refMinFreq=1000 →
-        # 8万+ 词加入候选,白白跑 LL 后被 topN 截断丢弃,浪费 30+ 倍算力。
-        # 新实现:观察语料取 top(4*topN) 高频词 + 参照语料取 top(topN) 高频词,
-        # 足以覆盖正向 + 反向 keyness,候选集 ≤ 20000(topN=2000 时)。
-        capObs = max(topN * 4, 10000)
-        capRef = max(topN, 5000)
-        capMax = max(topN * 5, 20000)
-
-        # P3-fix 2026-07-19:Counter.most_common 在 cap 接近 vocab 大小时反而比
-        # 简单 dict 迭代慢(heapq 维护开销)。vocab 小时用 most_common 拿 top-k 更快,
-        # vocab 大时直接遍历 + 提前 break 更优。
-        obsVocabSize = len(obsCounter)
-        refVocabSize = len(refCounter)
-
-        candidateWords = set()
-        if capObs * 2 < obsVocabSize:
-            # vocab 大,most_common 拿 top-k 真的更快
-            for w, _c in obsCounter.most_common(capObs):
-                if _c >= minFreq:
-                    candidateWords.add(w)
-                if len(candidateWords) >= capMax:
-                    break
-        else:
-            # vocab 小,most_common 没优势,直接 dict 迭代(等价于旧实现)
-            for w, _c in obsCounter.items():
-                if _c >= minFreq:
-                    candidateWords.add(w)
-                if len(candidateWords) >= capMax:
-                    break
-
-        if len(candidateWords) < capMax:
-            if capRef * 2 < refVocabSize:
-                for w, _c in refCounter.most_common(capRef):
-                    candidateWords.add(w)
-                    if len(candidateWords) >= capMax:
-                        break
-            else:
-                # vocab 小,直接 dict 迭代(跳过已在 candidate 中的)
-                for w, _c in refCounter.items():
-                    if w not in candidateWords and _c >= minFreq:
-                        candidateWords.add(w)
-                    if len(candidateWords) >= capMax:
-                        break
+        # 完整、对称的事先候选族：topN 只限制展示，不得裁剪检验族。
+        candidateWords = {
+            word
+            for word in set(obsCounter) | set(refCounter)
+            if max(obsCounter.get(word, 0), refCounter.get(word, 0)) >= minFreq
+        }
 
         wordList = list(candidateWords)
         n = len(wordList)
@@ -519,7 +479,7 @@ class KeywordListWorker(CancellableWorker):
         logRatioAll = np.empty(n, dtype=np.float64)
         pctDiffAll = np.empty(n, dtype=np.float64)
 
-        # 算法阶段的累积显著词数
+        # Holm 需要完整 p 值族；分块期间不报未校正“显著数”。
         sigSeenSoFar = 0
         smoothedK = 0.5  # Laplace 平滑
         grandTotal = nA + nB
@@ -576,9 +536,6 @@ class KeywordListWorker(CancellableWorker):
             logRatioAll[s:e] = logRatio
             pctDiffAll[s:e] = pctDiff
 
-            # 累计显著词数
-            sigSeenSoFar += int(np.sum(llVals >= significanceLevel))
-
             # 节流的 partialStats — 50ms 最多 emit 一次(最后一个 chunk 强制 emit)
             nowMs = (time.perf_counter() - runStart) * 1000
             if (nowMs - lastEmitMs) >= minEmitIntervalMs or chunkIdx == nChunks - 1:
@@ -586,7 +543,7 @@ class KeywordListWorker(CancellableWorker):
                 pct = 92 + int(4 * (chunkIdx + 1) / nChunks)  # 92% → 96%
                 self.reportProgress(
                     pct,
-                    f"算法: {e:,}/{n:,} 候选词 · 显著 {sigSeenSoFar:,} · "
+                    f"算法: {e:,}/{n:,} 候选词 · 待 Holm 校正 · "
                     f"{int(nowMs)}ms",
                 )
                 self._emitPartialStats(
@@ -603,6 +560,11 @@ class KeywordListWorker(CancellableWorker):
 
         obsRate = obsFreqsAll / nA * 10000.0
         refRate = refFreqsAll / nB * 10000.0
+        rawPValues = np.array(
+            [math.erfc(math.sqrt(value / 2.0)) for value in llAll], dtype=float
+        )
+        adjustedPValues = adjustPValuesHolm(rawPValues)
+        familyWiseAlpha = significanceAlphaFromLlThreshold(significanceLevel)
         df = pd.DataFrame(
             {
                 "Keyword": wordList,
@@ -613,18 +575,26 @@ class KeywordListWorker(CancellableWorker):
                 "LL": llAll,
                 "LogRatio": logRatioAll,
                 "PctDiff": pctDiffAll,
-                "IsKey": llAll >= significanceLevel,
+                "RawP": rawPValues,
+                "AdjustedP": adjustedPValues,
+                "Direction": np.select(
+                    [obsRate > refRate, obsRate < refRate],
+                    ["观察语料过度使用", "参照语料过度使用"],
+                    default="归一化频率相同",
+                ),
+                "IsKey": adjustedPValues <= familyWiseAlpha,
             }
         )
 
         # 排序 + topN + Rank
         df = df.sort_values(["LL"], ascending=[False]).reset_index(drop=True)
+        totalSignificantCount = int(df["IsKey"].sum())
         if topN > 0 and len(df) > topN:
             df = df.head(topN).reset_index(drop=True)
         df.insert(0, "Rank", df.index + 1)
 
         elapsed = time.perf_counter() - runStart
-        significantCount = int(df["IsKey"].sum())
+        significantCount = totalSignificantCount
 
         return KeywordListResult(
             df=df,
@@ -635,7 +605,9 @@ class KeywordListWorker(CancellableWorker):
             elapsedSeconds=elapsed,
             significanceLevel=significanceLevel,
             significantCount=significantCount,
-            method="Log-Likelihood (Dunning 1993)",
+            familyWiseAlpha=familyWiseAlpha,
+            testedHypotheses=n,
+            method="G² (Dunning 1993) + Holm FWER",
         )
 
     def _buildChartData(self, df):
@@ -1216,13 +1188,13 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         row3.addWidget(BodyLabel("显著性:", card))
         self.sigCombo = ComboBox(card)
         self.sigCombo.addItem(
-            "p < 0.05 (LL ≥ 5.02, 较宽松)", userData=LL_THRESHOLD_P005
+            "Holm FWER α=0.05 (G² 单次临界 3.84)", userData=LL_THRESHOLD_P005
         )
         self.sigCombo.addItem(
-            "p < 0.01 (LL ≥ 6.63, 默认推荐)", userData=LL_THRESHOLD_P001
+            "Holm FWER α=0.01 (G² 单次临界 6.63)", userData=LL_THRESHOLD_P001
         )
         self.sigCombo.addItem(
-            "p < 0.001 (LL ≥ 15.13, 大样本严格)",
+            "Holm FWER α=0.001 (G² 单次临界 10.83)",
             userData=LL_THRESHOLD_P001_LARGE,
         )
         self.sigCombo.setCurrentIndex(1)
@@ -1330,7 +1302,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         # 顶部操作行
         actionRow = QHBoxLayout()
         self.keywordsHint = CaptionLabel(
-            "按 Log-Likelihood 降序排列;显著词以浅橙色高亮(Log-Likelihood ≥ 阈值)",
+            "按 G² 降序排列；通过 Holm 家族错误率校正的词以浅橙色高亮",
             self._keywordsTab,
         )
         setThemeRole(self.keywordsHint, "muted", "font-size: 11px;")
@@ -1421,7 +1393,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         layout.setSpacing(8)
 
         # 顶部说明
-        chartTitle = StrongBodyLabel("LL 显著度分布(前 100 个关键词)", self._chartTab)
+        chartTitle = StrongBodyLabel("G² 分布与 Holm 校正结果(前 100 个候选词)", self._chartTab)
         layout.addWidget(chartTitle)
 
         self._figure = Figure(figsize=(10, 5), dpi=100)
@@ -1629,11 +1601,10 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         elif phase == "algorithm":
             msg = (
                 f"算法中:{doneCount:,}/{totalCount:,} 候选词 · "
-                f"已显著 {sigCount:,} 个 · 用时 {elapsedStr}"
+                f"待 Holm 校正 · 用时 {elapsedStr}"
             )
             self.statusLabel.setText(msg)
-            # 算法阶段实时更新「显著词数」预览 — 即使表格还没填好,用户也能看到
-            # 显著词数在涨。
+            # 完整 p 值族齐备前无法给出 Holm 校正后的显著词数。
             if self._summary is not None:
                 try:
                     # 用 setPlaceholder + setMetrics 组合:保持 metrics 行可见
@@ -1651,13 +1622,9 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                                 MetricColor.ACCENT,
                             ),
                             (
-                                "显著词数(预览)",
-                                f"{sigCount:,}",
-                                (
-                                    MetricColor.SUCCESS
-                                    if sigCount > 0
-                                    else MetricColor.NEUTRAL
-                                ),
+                                "Holm 校正",
+                                "待完成",
+                                MetricColor.NEUTRAL,
                             ),
                             (
                                 "耗时",
@@ -1830,7 +1797,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                     MetricColor.ACCENT,
                 ),
                 (
-                    "显著词数",
+                    "全族显著词",
                     f"{r.significantCount}",
                     MetricColor.SUCCESS,
                 ),
@@ -1843,8 +1810,8 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
         )
         self._summary.setDetail(
             f"📊 <b>{r.observedName}</b> vs <b>{r.referenceName}</b> &nbsp;|&nbsp; "
-            f"候选词 {len(r.df)} 个 &nbsp;|&nbsp; "
-            f"LL 阈值 ≥ {r.significanceLevel:.2f} (p&lt;0.01) &nbsp;|&nbsp; "
+            f"完整检验族 {r.testedHypotheses} 个 &nbsp;|&nbsp; "
+            f"Holm FWER α={r.familyWiseAlpha:.3g} &nbsp;|&nbsp; "
             f"算法: {r.method}"
         )
 
@@ -1996,7 +1963,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                 s=24,
                 c="#cccccc",
                 alpha=0.6,
-                label="不显著",
+                label="未通过 Holm 校正",
                 edgecolors="gray",
                 linewidths=0.4,
             )
@@ -2007,25 +1974,15 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                 s=28,
                 c="#fa8c16",
                 alpha=0.85,
-                label="显著",
+                label="通过 Holm 校正",
                 edgecolors="#d4380d",
                 linewidths=0.4,
             )
 
-        # 阈值线
-        self._ax.axhline(
-            y=r.significanceLevel,
-            color="#f5222d",
-            linestyle="--",
-            linewidth=1.0,
-            alpha=0.8,
-            label=f"阈值 = {r.significanceLevel:.2f}",
-        )
-
         self._ax.set_xlabel("排名 (按 LL 降序)", fontsize=10)
-        self._ax.set_ylabel("Log-Likelihood", fontsize=10)
+        self._ax.set_ylabel("G² (Log-Likelihood)", fontsize=10)
         self._ax.set_title(
-            f"LL 显著度分布 (前 {topN} 个 / 共 {len(r.df)} 个候选词)",
+            f"G² 分布 (前 {topN} 个 / 检验族 {r.testedHypotheses} 个)",
             fontsize=12,
         )
         self._ax.grid(True, linestyle="--", alpha=0.3)
@@ -2081,7 +2038,10 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                         "LogLikelihood",
                         "LogRatio",
                         "PctDiff(%)",
-                        "IsKey(p<0.01)",
+                        "RawP",
+                        "HolmAdjustedP",
+                        "Direction",
+                        f"IsKey(Holm FWER alpha={self._result.familyWiseAlpha:.3g})",
                     ]
                 )
                 for _, row in df.iterrows():
@@ -2114,6 +2074,9 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
                             f"{float(row['LL']):.4f}",
                             lrStr,
                             pctStr,
+                            f"{float(row['RawP']):.8g}",
+                            f"{float(row['AdjustedP']):.8g}",
+                            row["Direction"],
                             "是" if bool(row["IsKey"]) else "否",
                         ]
                     )

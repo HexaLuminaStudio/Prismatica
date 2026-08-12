@@ -216,7 +216,7 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
     功能：
         - 后台线程执行聚类分析，UI 全程不阻塞
         - 进度条 + 状态文本展示分析进度
-        - t-SNE 散点图展示聚类结果（颜色区分簇）
+        - t-SNE 散点图仅展示二维嵌入（颜色区分簇,点间全局距离不可解释）
         - 点大小映射 N-gram 频次
         - 悬停提示显示 N-gram 文本
         - 右侧/底部显示每个簇的 Top N-gram 摘要
@@ -477,7 +477,8 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
             topText = "、".join(f"{w}({f})" for w, f in top)
             summary = (
                 f"{ngramLabel} 聚类 {r.ngram_count} 个 n-gram → {r.k} 个簇,"
-                f"轮廓系数={r.silhouette:.3f}。"
+                f"余弦轮廓系数={r.silhouette:.3f};t-SNE 仅用于可视化,"
+                "二维簇间距离和面积不可作定量解释。"
                 f"Top:{topText}"
             )
         except Exception:
@@ -610,7 +611,8 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
 
         # 样式
         ax.set_title(
-            f"{self._n}-gram 聚簇分析（t-SNE 降维，k={k}，轮廓系数={result.silhouette:.3f}）",
+            f"{self._n}-gram 文件分布聚类（k={k}，余弦轮廓系数={result.silhouette:.3f};"
+            "t-SNE 仅作二维可视化）",
             fontsize=11,
             pad=12,
         )

@@ -560,14 +560,15 @@ class FrequencyAnalyzer:
                     wordToSources[t].add(src)
 
         # 4. 按 minFreq 过滤 + 拼装结果
-        # 过滤后重新计算 total,以保证 Pct 仍以"过滤后语料"为分母
+        # minFreq 仅控制展示项；Pct / PMW 的分母始终是过滤词长、词性、
+        # 停用词等分析规则后得到的完整 token 总数，避免展示阈值改变频率定义。
+        total = sum(globalCounter.values())
         if minFreq > 1:
             filteredCounter = Counter(
                 {w: f for w, f in globalCounter.items() if f >= minFreq}
             )
         else:
             filteredCounter = globalCounter
-        total = sum(filteredCounter.values())
 
         rows = []
         for rank, (word, freq) in enumerate(
@@ -591,13 +592,9 @@ class FrequencyAnalyzer:
             )
         df = pd.DataFrame(rows)
         if not df.empty:
-            # Zipf 律参考值(Rank × Freq):
-            #   严格 Zipf 律 freq ∝ 1/Rank^α(α≈1.0),即 log Freq ≈ C - α·log Rank;
-            #   若 α=1,则 Rank × Freq ≈ const(常数 C)。此处直接给出该乘积,
-            #   作为「是否符合 Zipf 律」的快速诊断指标 ——
-            #   若该列近似常数,说明语料接近理想 Zipf 分布。
-            #   严格的 α 估计需对 (log Rank, log Freq) 做线性回归,
-            #   见 computeZipf()。
+            # Rank × Freq 仅作为 α=1 时的描述性参考列。
+            # 不应由其是否近似常数直接判定“符合 Zipf 律”；
+            # log-log OLS 估计及其局限见 computeZipf()。
             df["Zipf"] = df["Freq"] * df["Rank"]
         return df
 
@@ -623,17 +620,17 @@ class FrequencyAnalyzer:
     def computeZipf(self, df: pd.DataFrame) -> pd.DataFrame:
         """计算 Zipf 律参考列
 
-        严格 Zipf 律(Zipf 1935 / 1949):
+        Zipf 律的常见描述形式:
             Freq ∝ Rank^(-α),即 log₁₀ Freq = log₁₀ C - α · log₁₀ Rank
-        其中 α≈1.0 为理想 Zipf 分布(英语/汉语语料经验值 0.9~1.2,
-        Powers 1998 "Applications and explanations of Zipf's law")。
+        本处仅对完整频率表做 log-log OLS 描述性拟合。该估计会受并列频次、
+        语料规模、分词与截断规则影响，不是对 Zipf 分布的正式拟合优度检验。
 
         本方法输出:
             LogRank: log₁₀(Rank)
             LogFreq: log₁₀(Freq)
-            ZipfAlpha: 对 (LogRank, LogFreq) 做 OLS 线性回归的斜率取负
-                —— 即 α 的最小二乘估计;若 |α-1| 较小则语料符合 Zipf 律
-            R2: 拟合优度(R²),越接近 1 表示越符合 Zipf 律
+            ZipfAlpha: log-log OLS 斜率的负值（描述性估计）
+            ZipfR2: 对所用样本的线性拟合 R²，不是分布拟合检验
+            ZipfFitN / ZipfFitLogFreq: 拟合样本数与拟合值
 
         Args:
             df: analyzeCorpus 输出
@@ -646,9 +643,14 @@ class FrequencyAnalyzer:
         df = df.copy()
         df["LogRank"] = df["Rank"].apply(lambda r: math.log10(r) if r > 0 else 0)
         df["LogFreq"] = df["Freq"].apply(lambda f: math.log10(f) if f > 0 else 0)
+        df["ZipfAlpha"] = float("nan")
+        df["ZipfR2"] = float("nan")
+        df["ZipfFitN"] = 0
+        df["ZipfFitLogFreq"] = float("nan")
         # OLS 拟合 log₁₀ Freq = b - α · log₁₀ Rank
         try:
-            valid = df[(df["LogRank"] > 0) & (df["LogFreq"] > 0)]
+            # 包含 rank=1 和频次=1；两者的 log10 为 0，不是缺失值。
+            valid = df[(df["Rank"] > 0) & (df["Freq"] > 0)]
             if len(valid) >= 2:
                 xs = valid["LogRank"].values
                 ys = valid["LogFreq"].values
@@ -667,15 +669,10 @@ class FrequencyAnalyzer:
                     r2 = 1 - ssRes / ssTot if ssTot > 0 else 0.0
                     df["ZipfAlpha"] = alpha
                     df["ZipfR2"] = r2
-                else:
-                    df["ZipfAlpha"] = float("nan")
-                    df["ZipfR2"] = float("nan")
-            else:
-                df["ZipfAlpha"] = float("nan")
-                df["ZipfR2"] = float("nan")
+                    df["ZipfFitN"] = n
+                    df.loc[valid.index, "ZipfFitLogFreq"] = slope * xs + intercept
         except Exception:
-            df["ZipfAlpha"] = float("nan")
-            df["ZipfR2"] = float("nan")
+            pass
         return df
 
     def generateNgrams(self, tokens: List[str], n: int = 2) -> List[Tuple[str, ...]]:

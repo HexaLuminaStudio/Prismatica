@@ -93,7 +93,7 @@ class CollocationWorker(QThread):
         minFreq: int,
         topN: int,
         caseSensitive: bool,
-        significanceThreshold: float = 3.0,
+        miThreshold: float = 3.0,
         continuityCorrection: bool = False,
         crossSentenceBoundary: bool = False,
     ):
@@ -106,7 +106,7 @@ class CollocationWorker(QThread):
         self._minFreq = minFreq
         self._topN = topN
         self._caseSensitive = caseSensitive
-        self._significanceThreshold = significanceThreshold
+        self._miThreshold = miThreshold
         self._continuityCorrection = continuityCorrection
         # P1-2 修复:跨句边界开关
         self._crossSentenceBoundary = crossSentenceBoundary
@@ -142,6 +142,8 @@ class CollocationWorker(QThread):
             # P1-2 修复:跨句边界索引集合,记录「该位置之前存在句边界」
             # 按 allTokens 的全局下标维护,与分词结果一一对应
             allBoundaryIndices: List[int] = []
+            # 文件边界是硬边界；即使用户允许跨句，也不得跨文件统计。
+            allDocumentBoundaryIndices: List[int] = []
 
             # 累计偏移,每读一份文件,偏移为 allTokens 当前长度
             globalOffset = 0
@@ -163,6 +165,9 @@ class CollocationWorker(QThread):
                 else:
                     # P0-fix:同上
                     tokens = self._segmenter.cutJieba(text)
+
+                if allTokens and tokens:
+                    allDocumentBoundaryIndices.append(globalOffset)
 
                 # P1-2 修复:在每份文件的 token 序列里找「句末标点」,
                 # 标点之后第一个 token 的全局下标就是句子边界索引
@@ -197,12 +202,13 @@ class CollocationWorker(QThread):
                 minFreq=self._minFreq,
                 topN=self._topN,
                 caseSensitive=self._caseSensitive,
-                significanceThreshold=self._significanceThreshold,
+                miThreshold=self._miThreshold,
                 continuityCorrection=self._continuityCorrection,
                 crossSentenceBoundary=self._crossSentenceBoundary,
                 sentenceBoundaryIndices=(
                     allBoundaryIndices if not self._crossSentenceBoundary else None
                 ),
+                documentBoundaryIndices=allDocumentBoundaryIndices,
             )
 
             if self._cancel:
@@ -246,7 +252,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             - Top-N
             - 区分大小写 (SwitchButton)
             - [开始分析] [取消] 按钮
-        [ 结果摘要卡 ] 4 个指标(节点词频 / 显著搭配数 / Top1 MI / 耗时)
+        [ 结果摘要卡 ] 4 个指标(节点词频 / 强关联搭配数 / Top1 MI / 耗时)
         [ 选项卡 Pivot ]
             - 搭配词表(MI/T/LogDice 等)
             - 跨距位置分布
@@ -328,7 +334,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 summary.setMetrics(
                     [
                         ("节点词频", "—", MetricColor.NEUTRAL),
-                        ("显著搭配(MI≥3)", "—", MetricColor.NEUTRAL),
+                        ("强关联搭配(MI≥3)", "—", MetricColor.NEUTRAL),
                         ("Top-1 MI", "—", MetricColor.NEUTRAL),
                         ("耗时", "—", MetricColor.NEUTRAL),
                     ]
@@ -488,20 +494,16 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         row2.addStretch(1)
         layout.addLayout(row2)
 
-        # 第 2.5 行:显著性参数(学术严谨性)
+        # 第 2.5 行:关联强度参数
         row2b = QHBoxLayout()
         row2b.setSpacing(16)
-        row2b.addWidget(BodyLabel("MI 显著性阈值:", card))
+        row2b.addWidget(BodyLabel("MI 强关联阈值:", card))
         self.sigSpin = DoubleSpinBox(card)
         self.sigSpin.setRange(0.0, 20.0)
         self.sigSpin.setDecimals(1)
         self.sigSpin.setSingleStep(0.5)
         self.sigSpin.setValue(3.0)
         row2b.addWidget(self.sigSpin)
-
-        self.yatesSwitch = _makeSwitchButton("Yates 连续性修正", card)
-        self.yatesSwitch.setChecked(False)
-        row2b.addWidget(self.yatesSwitch)
 
         # P1-2 修复:跨句边界开关
         self.crossSentSwitch = _makeSwitchButton("跨句边界", card)
@@ -554,7 +556,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         summary.setMetrics(
             [
                 ("节点词频", "—", MetricColor.PRIMARY),
-                ("显著搭配(MI≥3)", "—", MetricColor.SUCCESS),
+                ("强关联搭配(MI≥3)", "—", MetricColor.SUCCESS),
                 ("Top-1 MI", "—", MetricColor.ACCENT),
                 ("耗时", "—", MetricColor.NEUTRAL),
             ]
@@ -570,8 +572,8 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
 
         # 顶部说明
         self._collocatesHint = CaptionLabel(
-            "搭配词按 MI 降序排列;显著搭配(基于设定 MI 阈值)以浅橙色高亮;"
-            "表中包含 O/C/E 三类列联表原始频次,便于学术复核",
+            "搭配词按 MI 降序排列;达到 MI 强关联阈值的行以浅橙色高亮;"
+            "MI 是效应强度而非 p 值。表中 O/C/E 基于同一上下文机会总体",
             self._collocatesTab,
         )
         setThemeRole(self._collocatesHint, "muted", "font-size: 11px;")
@@ -584,7 +586,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             [
                 "搭配词",
                 "共现 O",
-                "搭配词频 C",
+                "上下文机会 C",
                 "期望 E",
                 "MI",
                 "MI3",
@@ -733,8 +735,8 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             minFreq=self.minFreqSpin.value(),
             topN=self.topNSpin.value(),
             caseSensitive=self.caseSwitch.isChecked(),
-            significanceThreshold=self.sigSpin.value(),
-            continuityCorrection=self.yatesSwitch.isChecked(),
+            miThreshold=self.sigSpin.value(),
+            continuityCorrection=False,
             crossSentenceBoundary=self.crossSentSwitch.isChecked(),
         )
         self._worker.progress.connect(self._onProgress)
@@ -795,8 +797,9 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             top = r.collocates[:5]
             topText = "、".join(f"{e.collocate}(MI={e.mi:.2f})" for e in top)
             summary = (
-                f"节点「{r.nodeWord}」(R={r.nodeFreq:,}) 共 {len(r.collocates)} 个搭配词,"
-                f"显著(MI≥{r.significanceThreshold:.1f}) {r.significantCount} 个。"
+                f"节点「{r.nodeWord}」(token 频次={r.nodeFreq:,}) "
+                f"共 {len(r.collocates)} 个搭配词,"
+                f"强关联(MI≥{r.miThreshold:.1f}) {r.strongAssociationCount} 个。"
                 f"Top:{topText}"
             )
         except Exception:
@@ -820,14 +823,14 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             "nodeWord": r.nodeWord,
             "nodeFreq": r.nodeFreq,
             "collocateCount": len(r.collocates),
-            "significantCount": r.significantCount,
+            "strongAssociationCount": r.strongAssociationCount,
             "topCollocates": topRows,
         }
         parameters = {
             "nodeWord": r.nodeWord,
             "leftSpan": r.leftSpan,
             "rightSpan": r.rightSpan,
-            "significanceThreshold": r.significanceThreshold,
+            "miThreshold": r.miThreshold,
             "continuityCorrection": r.continuityCorrection,
         }
         ts = self._buildDefaultTitle().split(" ", 1)[1]
@@ -861,10 +864,10 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             # 简单 fallback:用同名 setter
             self._summary.setMetrics(
                 [
-                    ("节点词频 R", f"{r.nodeFreq:,}", MetricColor.PRIMARY),
+                    ("节点词频", f"{r.nodeFreq:,}", MetricColor.PRIMARY),
                     (
-                        f"显著搭配(MI≥{r.significanceThreshold:.1f})",
-                        f"{r.significantCount}",
+                        f"强关联搭配(MI≥{r.miThreshold:.1f})",
+                        f"{r.strongAssociationCount}",
                         MetricColor.SUCCESS,
                     ),
                     ("Top-1 MI", topMiStr, MetricColor.ACCENT),
@@ -874,21 +877,21 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         else:
             self._summary.setMetrics(
                 [
-                    ("节点词频 R", f"{r.nodeFreq:,}", MetricColor.PRIMARY),
+                    ("节点词频", f"{r.nodeFreq:,}", MetricColor.PRIMARY),
                     (
-                        f"显著搭配(MI≥{r.significanceThreshold:.1f})",
-                        f"{r.significantCount}",
+                        f"强关联搭配(MI≥{r.miThreshold:.1f})",
+                        f"{r.strongAssociationCount}",
                         MetricColor.SUCCESS,
                     ),
                     ("Top-1 MI", topMiStr, MetricColor.ACCENT),
                     ("耗时", f"{r.elapsedSeconds:.2f}s", MetricColor.NEUTRAL),
                 ]
             )
-        yatesTag = "Yates 修正:开" if r.continuityCorrection else "Yates 修正:关"
         self._summary.setDetail(
             f"📊 节点「<b>{r.nodeWord}</b>」 跨距 <b>L{r.leftSpan}-R{r.rightSpan}</b> &nbsp;|&nbsp; "
             f"语料 <b>{r.totalTokens:,}</b> tokens / <b>{r.uniqueTypes:,}</b> types &nbsp;|&nbsp; "
-            f"{yatesTag} &nbsp;|&nbsp; 显著性算法: 2×2 列联表 (Church & Hanks 1990)"
+            f"机会总体 N=<b>{r.contextOpportunityCount:,}</b> / "
+            f"节点机会 R=<b>{r.nodeOpportunityCount:,}</b> &nbsp;|&nbsp; MI 为关联强度"
         )
 
         # 搭配词表
@@ -948,8 +951,8 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 )
                 self._collocatesTable.setItem(idx, col, item)
 
-            # 高亮显著搭配(MI ≥ 用户设定阈值)
-            if entry.isSignificant:
+            # MI 关联强度达到展示阈值时高亮
+            if entry.meetsMiThreshold:
                 for c in range(11):
                     cell = self._collocatesTable.item(idx, c)
                     if cell:
@@ -1051,7 +1054,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                     [
                         "搭配词",
                         "共现频次O",
-                        "搭配词频C",
+                        "上下文机会C",
                         "期望频次E",
                         "MI",
                         "MI3",
@@ -1060,7 +1063,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                         "Z-score",
                         "DeltaP1",
                         "DeltaP2",
-                        "显著搭配(MI>=阈值)",
+                        "达到MI强关联阈值",
                     ]
                 )
                 for e in self._result.collocates:
@@ -1077,7 +1080,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                             f"{e.zScore:.4f}",
                             f"{e.deltaP1:.4f}",
                             f"{e.deltaP2:.4f}",
-                            "是" if e.isSignificant else "否",
+                            "是" if e.meetsMiThreshold else "否",
                         ]
                     )
             if charge.commit():

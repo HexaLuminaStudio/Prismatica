@@ -191,9 +191,10 @@ def buildNetworkPrompt(
     userParts.append("")
     userParts.append(
         "请按以下结构解读：\n"
-        "1. 该网络呈现什么样的语义聚类结构？\n"
+        "1. 该网络呈现什么样的词形共现结构？\n"
         "2. 哪些边 / 节点可能是研究的关键发现？\n"
-        "3. 是否存在异常密集的子图（疑似构式或固定搭配）？"
+        "3. 是否存在异常密集的子图？这只是待回到原文验证的共现线索，"
+        "不得仅据网络直接判定语义类别、构式或固定搭配。"
     )
 
     return {"system": system, "user": "\n".join(userParts)}
@@ -590,7 +591,7 @@ def summarizeCollocationData(result: Any, topN: int = 20) -> Dict[str, Any]:
                 "mi": round(getattr(c, "mi", 0.0) or 0.0, 2),
                 "tScore": round(getattr(c, "tScore", 0.0) or 0.0, 2),
                 "logDice": round(getattr(c, "logDice", 0.0) or 0.0, 2),
-                "isSignificant": getattr(c, "isSignificant", False),
+                "meetsMiThreshold": getattr(c, "meetsMiThreshold", False),
             }
         )
     return {
@@ -600,7 +601,7 @@ def summarizeCollocationData(result: Any, topN: int = 20) -> Dict[str, Any]:
         "rightSpan": getattr(result, "rightSpan", 5),
         "totalTokens": getattr(result, "totalTokens", 0),
         "collocateCount": len(collocates),
-        "significantCount": getattr(result, "significantCount", 0),
+        "strongAssociationCount": getattr(result, "strongAssociationCount", 0),
         "elapsedSeconds": getattr(result, "elapsedSeconds", 0.0),
         "items": items,
     }
@@ -622,14 +623,15 @@ def buildCollocationPrompt(
     )
     parts.append(
         f"共发现 {collocSummary.get('collocateCount', 0)} 个搭配词，"
-        f"其中显著搭配（MI≥阈值）{collocSummary.get('significantCount', 0)} 个。"
+        f"其中达到 MI 强关联阈值的搭配 "
+        f"{collocSummary.get('strongAssociationCount', 0)} 个。"
     )
     parts.append("")
     parts.append("【Top 20 搭配词（按 MI 降序）】")
     for it in collocSummary.get("items", [])[:20]:
-        sig = "★" if it.get("isSignificant") else " "
+        strengthFlag = "★" if it.get("meetsMiThreshold") else " "
         parts.append(
-            f"  {sig} {it.get('collocate', '?')}  "
+            f"  {strengthFlag} {it.get('collocate', '?')}  "
             f"O={it.get('freq', '?')}  MI={it.get('mi', '?')}  "
             f"T={it.get('tScore', '?')}  LogDice={it.get('logDice', '?')}"
         )
@@ -637,8 +639,9 @@ def buildCollocationPrompt(
     parts.append(
         "请按以下结构解读：\n"
         "1. 这些搭配词揭示了节点词的哪些典型语境 / 用法偏好？\n"
-        "2. 显著搭配（带★）中是否有反常或意外的组合？\n"
-        "3. 对语料主题或语体特征有何推断？"
+        "2. 达到 MI 强关联阈值的搭配（带★）中是否有反常或意外的组合？\n"
+        "3. 对语料主题或语体特征有何推断？\n"
+        "注意:MI 是关联强度,不是显著性检验的 p 值。"
     )
     return {"system": system, "user": "\n".join(parts)}
 
@@ -660,15 +663,17 @@ def summarizeConstructionData(result: Any, topSlotN: int = 10) -> Dict[str, Any]
                 "word": getattr(s, "word", ""),
                 "freq": getattr(s, "freq", 0),
                 "mi": round(getattr(s, "mi", 0.0) or 0.0, 2),
-                "isSignificant": getattr(s, "isSignificant", False),
+                "meetsMiThreshold": getattr(s, "meetsMiThreshold", False),
             }
         )
     return {
         "pattern": getattr(result, "patternRaw", ""),
         "freq": getattr(result, "constructionFreq", 0),
         "matchCount": getattr(result, "matchCount", 0),
-        "logLikelihood": round(getattr(result, "logLikelihood", 0.0) or 0.0, 2),
-        "isSignificant": getattr(result, "isSignificant", False),
+        "overallInferenceAvailable": getattr(
+            result, "overallInferenceAvailable", False
+        ),
+        "overallInferenceNote": getattr(result, "overallInferenceNote", ""),
         "slotCount": len(slots),
         "internalPairCount": len(internalPairs),
         "items": items,
@@ -686,18 +691,20 @@ def buildConstructionPrompt(
         f"用户对语料「{corpusMeta.get('corpusName', '未命名')}」"
         f"执行构式「{constructionSummary.get('pattern', '?')}」的填充词分析。"
     )
-    sig = "显著" if constructionSummary.get("isSignificant") else "不显著"
     parts.append(
         f"构式频次={constructionSummary.get('freq', 0)},"
-        f"匹配 {constructionSummary.get('matchCount', 0)} 个区间,"
-        f"Log-Likelihood={constructionSummary.get('logLikelihood', '?')} ({sig})."
+        f"匹配 {constructionSummary.get('matchCount', 0)} 个区间。"
+    )
+    parts.append(
+        "未提供独立参考概率或构式机会空间,因此不报告构式整体 G²/p 值,"
+        "也不得把构式频次解释为统计显著性。"
     )
     parts.append("")
     parts.append("【Top 10 slot 填充词】")
     for it in constructionSummary.get("items", [])[:10]:
-        sigFlag = "★" if it.get("isSignificant") else " "
+        strengthFlag = "★" if it.get("meetsMiThreshold") else " "
         parts.append(
-            f"  {sigFlag} [{it.get('slotLabel', '?')}/{it.get('posTag', '?')}] "
+            f"  {strengthFlag} [{it.get('slotLabel', '?')}/{it.get('posTag', '?')}] "
             f"{it.get('word', '?')}  freq={it.get('freq', '?')}  "
             f"MI={it.get('mi', '?')}"
         )
@@ -706,7 +713,8 @@ def buildConstructionPrompt(
         "请按以下结构解读：\n"
         "1. 构式「{pattern}」的主要填充词反映了什么语义偏好？\n"
         "2. 各 slot 之间的搭配是否揭示了固定搭配倾向？\n"
-        "3. 显著填充词与构式整体语义是否一致？".format(
+        "3. 达到 MI 强关联阈值的填充词与构式整体语义是否一致？"
+        "（MI 是效应强度,不是 p 值。）".format(
             pattern=constructionSummary.get("pattern", "?")
         )
     )
@@ -740,7 +748,26 @@ def summarizeDependencyData(
             samples.append(text[:120])
 
     return {
+        "backends": sorted(
+            {
+                str(getattr(p, "backend", "") or "unknown")
+                for p in (parses or [])
+            }
+        ),
         "sentenceCount": len(parses or []),
+        "backendDetails": sorted(
+            {
+                (
+                    str(getattr(p, "provider", "") or "未报告"),
+                    str(getattr(p, "endpoint", "") or "未报告"),
+                    str(getattr(p, "language", "") or "未报告"),
+                    ",".join(getattr(p, "tasks", []) or []) or "未报告",
+                    str(getattr(p, "modelVersion", "") or "未报告"),
+                    str(getattr(p, "labelScheme", "") or "未报告"),
+                )
+                for p in (parses or [])
+            }
+        ),
         "relationCount": sum(relCounter.values()),
         "topRelations": [
             {"rel": r, "count": c} for r, c in relCounter.most_common(topRelN)
@@ -764,6 +791,22 @@ def buildDependencyPrompt(
         f"的 {dependencySummary.get('sentenceCount', 0)} 个句子执行了依存句法分析,"
         f"共得到 {dependencySummary.get('relationCount', 0)} 条依存边。"
     )
+    backends = ", ".join(dependencySummary.get("backends", [])) or "未知"
+    parts.append(
+        f"实际后端={backends}。必须按后端原始标签体系解释;若为 rule,只能作为教学演示,"
+        "不得据此推断语料的句法复杂度或用于论文定量结论。"
+    )
+    for provider, endpoint, language, tasks, modelVersion, labelScheme in (
+        dependencySummary.get("backendDetails", [])
+    ):
+        parts.append(
+            "复现元数据:"
+            f"provider={provider}, endpoint={endpoint}, language={language}, "
+            f"tasks={tasks}, modelVersion={modelVersion}, labelScheme={labelScheme}。"
+        )
+    parts.append(
+        "若模型版本为“未报告”,必须将其列为复现限制,不得臆测具体模型或标注体系。"
+    )
     parts.append("")
     parts.append("【高频依存关系 Top 10】")
     for r in dependencySummary.get("topRelations", [])[:10]:
@@ -782,7 +825,8 @@ def buildDependencyPrompt(
         "请按以下结构解读：\n"
         "1. 该语料的句法结构呈现什么倾向（简单句 / 复合句 / 主从结构）？\n"
         "2. 高频核心词反映了什么样的论述焦点？\n"
-        "3. 高频依存关系（如 SBV/VOB/ATT）占比是否合理？"
+        "3. 高频依存关系在当前后端标签体系中的描述性分布如何？不得在没有参照组、"
+        "标注准确率与人工核验的情况下判断占比是否“合理”。"
     )
     return {"system": system, "user": "\n".join(parts)}
 
@@ -808,6 +852,8 @@ def summarizeKeywordListData(result: Any, topN: int = 20) -> Dict[str, Any]:
                     "refFreq": r.get("RefFreq", 0),
                     "ll": round(float(r.get("LL", 0) or 0), 2),
                     "logRatio": round(float(r.get("LogRatio", 0) or 0), 2),
+                    "adjustedP": round(float(r.get("AdjustedP", 1) or 1), 6),
+                    "direction": r.get("Direction", ""),
                     "isKey": bool(r.get("IsKey", False)),
                 }
             )
@@ -818,9 +864,11 @@ def summarizeKeywordListData(result: Any, topN: int = 20) -> Dict[str, Any]:
         "referenceName": getattr(result, "referenceName", ""),
         "observedTokens": getattr(result, "observedTokens", 0),
         "referenceTokens": getattr(result, "referenceTokens", 0),
-        "keywordCount": len(df) if df is not None else 0,
+        "keywordCount": getattr(result, "testedHypotheses", len(df)),
         "significantCount": getattr(result, "significantCount", 0),
         "significanceLevel": getattr(result, "significanceLevel", 0.0),
+        "familyWiseAlpha": getattr(result, "familyWiseAlpha", 0.01),
+        "testedHypotheses": getattr(result, "testedHypotheses", 0),
         "items": rows,
     }
 
@@ -841,8 +889,10 @@ def buildKeywordListPrompt(
     )
     parts.append(
         f"共识别 {keywordSummary.get('keywordCount', 0)} 个候选词，"
-        f"其中显著关键词 {keywordSummary.get('significantCount', 0)} 个"
-        f"（LL≥{keywordSummary.get('significanceLevel', '?')}）。"
+        f"其中通过 Holm 校正的关键词 "
+        f"{keywordSummary.get('significantCount', 0)} 个（完整检验族 "
+        f"{keywordSummary.get('testedHypotheses', 0)}，FWER α="
+        f"{keywordSummary.get('familyWiseAlpha', '?')}）。"
     )
     parts.append("")
     parts.append("【Top 20 关键词】")
@@ -851,14 +901,17 @@ def buildKeywordListPrompt(
         parts.append(
             f"  {flag} {it.get('keyword', '?')}  "
             f"obs={it.get('obsFreq', '?')}  ref={it.get('refFreq', '?')}  "
-            f"LL={it.get('ll', '?')}  LogRatio={it.get('logRatio', '?')}"
+            f"G²={it.get('ll', '?')}  LogRatio={it.get('logRatio', '?')}  "
+            f"Holm-p={it.get('adjustedP', '?')}  {it.get('direction', '')}"
         )
     parts.append("")
     parts.append(
         "请按以下结构解读：\n"
         "1. 这些关键词揭示了观察语料的哪些独有特征？\n"
         "2. 高 LogRatio 的词在两个语料中的差异有何含义？\n"
-        "3. 与参照语料相比,观察语料的语体 / 主题有何倾向？"
+        "3. 与参照语料相比,观察语料的语体 / 主题有何倾向？\n"
+        "只将 Holm 校正后的结果称为显著；G² 表示统计证据，"
+        "LogRatio 表示效应方向与大小，不要将显著性等同于实质重要性。"
     )
     return {"system": system, "user": "\n".join(parts)}
 
@@ -893,6 +946,11 @@ def summarizeNgramClusterData(
         "ngramCount": getattr(result, "ngram_count", 0),
         "k": getattr(result, "k", 0),
         "silhouette": round(getattr(result, "silhouette", 0.0) or 0.0, 3),
+        "featureMethod": getattr(result, "feature_method", "file-idf cosine"),
+        "embeddingMethod": getattr(
+            result, "embedding_method", "PCA + t-SNE (visualization only)"
+        ),
+        "isFallback": bool(getattr(result, "is_fallback", False)),
         "clusterCount": len(clusterSizes),
         "clusters": clusters,
     }
@@ -911,8 +969,15 @@ def buildNgramClusterPrompt(
         f"共 {clusterSummary.get('ngramCount', 0)} 个 N-gram 参与,"
         f"聚为 {clusterSummary.get('clusterCount', 0)} 个簇"
         f"（k={clusterSummary.get('k', '?')}），"
-        f"轮廓系数 = {clusterSummary.get('silhouette', '?')}（越接近 1 越好）。"
+        f"余弦距离轮廓系数 = {clusterSummary.get('silhouette', '?')}。"
     )
+    parts.append(
+        f"特征={clusterSummary.get('featureMethod', '?')};"
+        f"二维嵌入={clusterSummary.get('embeddingMethod', '?')}。"
+        "t-SNE 坐标只用于邻域可视化,不得解释簇间全局距离、方向或面积。"
+    )
+    if clusterSummary.get("isFallback"):
+        parts.append("当前为退化/单簇结果,不得据此命名主题或评价聚类质量。")
     parts.append("")
     parts.append("【Top 5 簇的代表性 N-gram】")
     for c in clusterSummary.get("clusters", []):
@@ -921,9 +986,9 @@ def buildNgramClusterPrompt(
     parts.append("")
     parts.append(
         "请按以下结构解读：\n"
-        "1. 这些簇反映了哪些语义 / 主题聚类？\n"
+        "1. 各簇有哪些共享的文件分布模式？不要把文件共现簇直接命名为语义主题。\n"
         "2. 簇间的 N-gram 是否有重叠（暗示边界模糊）？\n"
-        "3. 轮廓系数是否提示聚类质量良好？"
+        "3. 结合余弦轮廓系数描述分离度;不要使用未经校准的好/坏阈值。"
     )
     return {"system": system, "user": "\n".join(parts)}
 

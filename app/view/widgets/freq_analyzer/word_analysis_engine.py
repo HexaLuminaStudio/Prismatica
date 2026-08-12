@@ -419,7 +419,7 @@ class WordAnalysisEngine:
 
         # 6) 词汇丰富度指标(FR-WDA-004)
         metrics.ttr = self._ttr(V, N)
-        metrics.guirauD = self._guiraud(V, N)
+        metrics.guiraud = self._guiraud(V, N)
         metrics.herdAN = self._herdAN(V, N)
         metrics.uber = self._uber(V, N)
         metrics.mattr = self._mattr(tokens_for_count, mattrWindow)
@@ -557,25 +557,23 @@ class WordAnalysisEngine:
             logger.debug(f"[MATTR] tokens={n} < window={windowSize}, " "退化为全局 TTR")
             return self._ttr(len(set(tokens)), n)
 
-        # 滑动窗口:维护当前窗口的 type 集合
+        # 滑动窗口:维护当前窗口中每个 type 的 token 计数
         # 实现:先初始化第一个窗口,然后每次左移一位
         # (移除 tokens[i-1],添加 tokens[i+windowSize-1])
-        # 说明:这里维护的是 type 集合(set),而非 token 计数(multiset) ——
-        # 由于 MATTR 关心的是 type 数(=|set|),集合化即可精确计算每个
-        # 窗口的 unique type 数,不需要 multiset(Covington & McFall 2010)。
-        windowSet: set = set(tokens[:windowSize])
-        ttrSum = len(windowSet) / windowSize
+        # 必须保留重数：若离窗 token 的同一 type 仍在窗口中，该 type 不能被删除。
+        windowCounts = Counter(tokens[:windowSize])
+        ttrSum = len(windowCounts) / windowSize
         # 后续 (N - windowSize) 个窗口
         for i in range(1, n - windowSize + 1):
             # 离开: tokens[i-1]
             leaving = tokens[i - 1]
             # 进入: tokens[i + windowSize - 1]
             entering = tokens[i + windowSize - 1]
-            # 先移除离开的 type(可能只是某 type 的最后一个 token,需清出)
-            windowSet.discard(leaving)
-            # 再加入进入的 type(若已在集合中则 no-op,否则新增)
-            windowSet.add(entering)
-            ttrSum += len(windowSet) / windowSize
+            windowCounts[leaving] -= 1
+            if windowCounts[leaving] == 0:
+                del windowCounts[leaving]
+            windowCounts[entering] += 1
+            ttrSum += len(windowCounts) / windowSize
 
         nWindows = n - windowSize + 1
         return ttrSum / nWindows if nWindows > 0 else 0.0
@@ -699,7 +697,7 @@ class WordAnalysisEngine:
         seen: set = set()
         for i in range(step, n + 1, step):
             segment = tokens[i - step : i]
-            newTypesInSegment = sum(1 for w in segment if w not in seen)
+            newTypesInSegment = len(set(segment).difference(seen))
             seen.update(segment)
             currentTypes = len(seen)
             growthRate = newTypesInSegment / step if step > 0 else 0.0
@@ -715,7 +713,7 @@ class WordAnalysisEngine:
         # 补充终点(若未对齐)
         if curve[-1].tokenCount < n:
             tail = tokens[curve[-1].tokenCount :]
-            newTypesInTail = sum(1 for w in tail if w not in seen)
+            newTypesInTail = len(set(tail).difference(seen))
             seen.update(tail)
             curve.append(
                 CurvePoint(

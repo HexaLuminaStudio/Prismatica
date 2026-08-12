@@ -261,7 +261,7 @@ class CooccurrenceEngine:
         # 3) 在 token 流上滑动窗口,统计共现
         if progressCallback:
             progressCallback(f"扫描共现窗口 (候选词 {len(candidates)} 个)...")
-        coMatrix: Dict[Tuple[str, int], int] = defaultdict(int)
+        coMatrix: Dict[Tuple[str, str], int] = defaultdict(int)
         totalStreams = len(tokenStreams)
         for streamIdx, tokens in enumerate(tokenStreams, start=1):
             self._scanCooccurrence(tokens, candidates, params.windowSize, coMatrix)
@@ -528,26 +528,18 @@ class CooccurrenceEngine:
         windowSize: int,
         coMatrix: Dict[Tuple[str, str], int],
     ) -> None:
-        """共现扫描 — 滑动窗口双指针 + Counter(O(K · W))
+        """共现扫描 — 按原始 token 距离枚举无向位置对(O(K · W))
 
         设计依据(FR-CON-001 共现矩阵,学术规范参考 Church & Hanks 1990):
 
-        P0-fix 2026-07-20【窗口语义修正】:
-            旧实现使用「候选词在原始 token 流中的位置差」(tokens[i] 与 tokens[j]
-            之间可跨任意多个非候选词),导致用户输入「窗口 ±5 词」时,
-            若窗口内被大量停用词/标点/低频词填充,实际跨越的自然词数远超 5,
-            违反 Church & Hanks 1990 的「±N tokens」语义。
-            新实现改为「窗口内候选词下标差」:右侧最多 windowSize 个候选词、
-            左侧最多 windowSize 个候选词,与 AntConc / Sketch Engine 默认一致。
+        窗口语义:
+            ``windowSize=N`` 表示两个候选词在原始 token 流中的位置差不超过 N。
+            停用词、低频词等非候选 token 仍占据窗口位置,不能在筛选后被折叠。
 
         滑动窗口主循环:
             1. K = candidateIndices 长度(命中候选集的 token 位置数)
-            2. 对每对 (i, j) i<j 且 j - i <= windowSize(下标差,不是位置差),
-               在 [i, j] 区间内所有候选词两两配对一次,边权 += 1(无向)
-            3. 关键优化:对每个 i,用 left/right 双指针维护 [i, i+W] 区间内的
-               候选集,右指针单调不回退 → 总时间 O(K · W)
-            4. 内层用 Counter 临时累积配对,批量写回 coMatrix,
-               避免 dict 频繁访问
+            2. 仅枚举 j > i,保证每个实际无向位置对恰好计数一次
+            3. 当原始位置差大于 windowSize 时停止向右扫描
 
         学术依据:
             - Church, K. W., & Hanks, P. (1990). Word association norms,
@@ -563,49 +555,20 @@ class CooccurrenceEngine:
         if k < 2:
             return
 
-        # 2. 双指针主循环
-        #    【P0-fix 2026-07-20】窗口语义修正:
-        #    - 旧实现: right - i_pos 在原始 token 位置空间度量(语义错误)
-        #    - 新实现: right - i_idx 在候选词下标空间度量(±N 个候选词)
-        #    right 始终指向「j_idx - i_idx <= windowSize 的最大 j+1」
-        #    left  在新 i 推进时,从左向右单调推进到「j_idx - i_idx >= -windowSize」
-        #    对每个 i,扫描 [left, right) 区间(排除 i 自身)内的候选 j,
-        #    每对 (i, j) 恰好被计入一次
-        right = 0
-        left = 0
-        for i_idx in range(k):
-            wi = tokens[candidateIndices[i_idx]]
-
-            # 推进 left 到首个 j 满足 j_idx - i_idx >= -windowSize
-            # 即 j_idx >= i_idx - windowSize(下标差,不是位置差)
-            if left < i_idx - windowSize:
-                left = i_idx - windowSize
-
-            # 推进 right 到首个 j 不满足 j_idx - i_idx <= windowSize
-            if right < i_idx + 1:
-                right = i_idx + 1
-            while right < k and (right - i_idx) <= windowSize:
-                right += 1
-            # 边界条件修正:确保 right 至少是 i_idx + 1
-            if right < i_idx + 1:
-                right = i_idx + 1
-
-            # 累加 [left, right) 区间内所有 j != i_idx 的配对
-            innerCounter: Counter = Counter()
-            for j_idx in range(left, right):
-                if j_idx == i_idx:
-                    continue
-                wj = tokens[candidateIndices[j_idx]]
-                # 【P0-fix 2026-07-20】自配对过滤:
-                # 同词配对一律跳过(避免自环/虚假重复计数)
+        # 2. 只向右枚举后继候选位置。原始 token 位置有序,超过窗口即可停止。
+        for iIdx in range(k - 1):
+            iPosition = candidateIndices[iIdx]
+            wi = tokens[iPosition]
+            for jIdx in range(iIdx + 1, k):
+                jPosition = candidateIndices[jIdx]
+                if jPosition - iPosition > windowSize:
+                    break
+                wj = tokens[jPosition]
+                # 同词位置对不生成自环,但不同词的位置对只计一次。
                 if wi == wj:
                     continue
                 a, b = (wi, wj) if wi < wj else (wj, wi)
-                innerCounter[(a, b)] += 1
-
-            # 批量写回 coMatrix
-            for pair, cnt in innerCounter.items():
-                coMatrix[pair] = coMatrix.get(pair, 0) + cnt
+                coMatrix[(a, b)] = coMatrix.get((a, b), 0) + 1
 
     def _normalizeEdgeWeights(
         self,
@@ -617,7 +580,7 @@ class CooccurrenceEngine:
 
         Args:
             coMatrix: 原始共现矩阵 {(a, b): O_{ij}}
-            candidates: 候选词及其词频 {word: freq}
+            candidates: 候选词及其原始 token 频次(仅用于校验节点存在)
             method: 归一化方案
 
         Returns:
@@ -629,31 +592,38 @@ class CooccurrenceEngine:
             # 直接返回频次
             return {pair: float(cnt) for pair, cnt in coMatrix.items()}
 
-        # 计算总 token 数 N(用于 PMI 的概率分母)
-        # N 取候选词 token 总数,与候选集自洽
-        totalTokens = sum(candidates.values())
-        if totalTokens <= 0:
+        # 抽样单位是“候选词无向位置对事件”。对每个词,边际频数是
+        # 包含该词的事件数；这使 O<=f_a,f_b,并让 PMI/NPMI/Dice/
+        # LogDice/Jaccard 全部使用同一机会空间。
+        totalPairEvents = sum(coMatrix.values())
+        if totalPairEvents <= 0:
             return {}
+        eventMarginals: Counter = Counter()
+        for (a, b), eventCount in coMatrix.items():
+            eventMarginals[a] += eventCount
+            eventMarginals[b] += eventCount
 
         for (a, b), o_ij in coMatrix.items():
-            f_a = candidates.get(a, 0)
-            f_b = candidates.get(b, 0)
+            if a not in candidates or b not in candidates:
+                continue
+            f_a = eventMarginals.get(a, 0)
+            f_b = eventMarginals.get(b, 0)
             if f_a == 0 or f_b == 0 or o_ij == 0:
                 continue
 
             if method == EdgeWeight.PMI:
                 # PMI = log₂ P(a,b) / (P(a)·P(b))
-                #     = log₂ (O_{ij}/N) / ((f_a/N)·(f_b/N))
-                #     = log₂ (O_{ij}·N) / (f_a·f_b)
-                denom = (f_a * f_b) / totalTokens
+                #     = log₂ (O_{ij}/E) / ((f_a/E)·(f_b/E))
+                #     = log₂ (O_{ij}·E) / (f_a·f_b)
+                denom = f_a * f_b
                 if denom <= 0:
                     continue
-                w = math.log2((o_ij * totalTokens) / denom)
+                w = math.log2((o_ij * totalPairEvents) / denom)
             elif method == EdgeWeight.NPMI:
                 # NPMI = PMI / -log₂ P(a,b) (Bouma 2009)
                 #     归一化到 [-1, +1]
-                p_ab = o_ij / totalTokens
-                denom = (f_a * f_b) / (totalTokens**2)
+                p_ab = o_ij / totalPairEvents
+                denom = (f_a * f_b) / (totalPairEvents**2)
                 if p_ab <= 0 or denom <= 0:
                     continue
                 pmi = math.log2(p_ab / denom)

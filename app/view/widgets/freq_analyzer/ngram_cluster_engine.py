@@ -3,10 +3,10 @@
 
 对 N≥3 的 N-gram 进行基于文件共现的聚簇分析：
     1. 从 N-gram DataFrame 解析 Files 列，构建 N-gram×文件 的二元共现矩阵
-    2. 计算 N-gram 之间的余弦相似度
+    2. 对文件列做 IDF 加权并按行 L2 归一化,形成文件分布特征
     3. 使用 PCA → t-SNE 降维到 2D 用于可视化
-    4. 使用 KMeans（肘部法则 + 轮廓系数自动选 k）进行聚类
-    5. 按 TF-IDF 加权的簇内高频词提取每个簇的代表性 N-gram
+    4. 使用 KMeans + 余弦距离轮廓系数自动选 k
+    5. 按频次提取每个簇的代表性 N-gram
 
 设计：
     - 所有计算在后台线程执行，通过 progress 回调报告进度
@@ -35,7 +35,7 @@ try:
         pairwise_distances,
         silhouette_score,
     )
-    from sklearn.preprocessing import StandardScaler
+    from sklearn.preprocessing import normalize
 
     SKLEARN_AVAILABLE = True
 except ImportError:
@@ -69,6 +69,9 @@ class NgramClusterResult:
     cluster_sizes: Dict[int, int]  # 每个簇的成员数量
     k: int  # 使用的簇数
     silhouette: float  # 轮廓系数（-1~1，越大越好）
+    feature_method: str = "file-idf cosine"
+    embedding_method: str = "PCA + t-SNE (visualization only)"
+    is_fallback: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -145,17 +148,19 @@ class NgramClusterEngine:
         self._report(progressCallback, 15, "解析文件共现...")
 
         # 2. 构建特征矩阵
+        self._filteredDf = None
         matrix, fileList = self._buildFileCooccurrenceMatrix(df)
         if matrix is None:
             return None
+        if self._filteredDf is not None:
+            df = self._filteredDf
 
         nRows, nCols = matrix.shape
         logger.info(f"[NgramClusterEngine] 特征矩阵: {nRows} N-grams × {nCols} 文件")
 
         # 3. 标准化
-        self._report(progressCallback, 25, "标准化特征...")
-        scaler = StandardScaler()
-        matrixScaled = scaler.fit_transform(matrix.astype(np.float64))
+        self._report(progressCallback, 25, "构建文件 IDF 分布特征...")
+        matrixScaled = self._buildFileDistributionFeatures(matrix)
 
         # 4. 降维：PCA(最多 50 维) → t-SNE(2 维)
         self._report(progressCallback, 35, "PCA 降维...")
@@ -190,6 +195,7 @@ class NgramClusterEngine:
             cluster_sizes=self._countSizes(clusterIds, k),
             k=k,
             silhouette=sil,
+            is_fallback=not SKLEARN_AVAILABLE or k <= 1,
         )
 
     # ------------------------------------------------------------------
@@ -267,6 +273,23 @@ class NgramClusterEngine:
             self._filteredDf = df
 
         return matrix, fileList
+
+    @staticmethod
+    def _buildFileDistributionFeatures(matrix: np.ndarray) -> np.ndarray:
+        """为文件出现列计算 IDF 权重并做行 L2 归一化。
+
+        二元列直接做 StandardScaler 会把缺失值变为负数,使欧氏几何难以解释。
+        这里按稀有文件提高权重,再把每条 N-gram 表示为文件分布方向。
+        """
+        values = matrix.astype(np.float64)
+        fileCounts = np.count_nonzero(values, axis=0)
+        idf = np.log((1.0 + values.shape[0]) / (1.0 + fileCounts)) + 1.0
+        weighted = values * idf
+        if SKLEARN_AVAILABLE:
+            return normalize(weighted, norm="l2", axis=1)
+        norms = np.linalg.norm(weighted, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        return weighted / norms
 
     def _reduceDimensions(
         self,
@@ -375,7 +398,7 @@ class NgramClusterEngine:
             if kmeans is None:
                 return 1, np.zeros(nSamples, dtype=int), 0.0
             labels = kmeans.fit_predict(matrix)
-            sil = silhouette_score(matrix, labels) if k > 1 else 0.0
+            sil = silhouette_score(matrix, labels, metric="cosine") if k > 1 else 0.0
             return k, labels, sil
 
         # 检测退化数据：矩阵方差接近零（所有数据点几乎相同）
@@ -402,7 +425,7 @@ class NgramClusterEngine:
             try:
                 kmeans = KMeans(n_clusters=k, random_state=42, n_init="auto")
                 labels = kmeans.fit_predict(matrix)
-                sil = silhouette_score(matrix, labels)
+                sil = silhouette_score(matrix, labels, metric="cosine")
                 if sil > bestSilhouette:
                     bestSilhouette = sil
                     bestK = k
@@ -416,7 +439,7 @@ class NgramClusterEngine:
             try:
                 kmeans = KMeans(n_clusters=bestK, random_state=42, n_init="auto")
                 bestLabels = kmeans.fit_predict(matrix)
-                bestSilhouette = silhouette_score(matrix, bestLabels)
+                bestSilhouette = silhouette_score(matrix, bestLabels, metric="cosine")
             except Exception as e:
                 logger.warning(
                     f"[NgramClusterEngine] 最终 fallback 聚类失败: {e}，所有点归为 1 个簇"

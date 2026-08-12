@@ -114,7 +114,7 @@ app/
 
 ### 关键第三方依赖
 - `PySide6` + `qfluentwidgetspro`（本地 whl）—— UI
-- `hanlp-restful` —— 中文 NLP（分词 / 词性 / 依存）
+- `hanlp-restful` —— 桌面端直连 HanLP（当前凭据按产品决策硬编码）
 - `jieba` —— 备用分词（fallback）
 - `pandas`, `openpyxl`, `python-docx` —— 语料导入
 - `matplotlib`, `networkx`, `wordcloud` —— 可视化
