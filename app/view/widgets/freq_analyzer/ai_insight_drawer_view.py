@@ -64,6 +64,7 @@ from qfluentwidgets import (
 )
 
 from app.core.utils import cfg, logger, qconfig
+from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 
 
 # 风格选项（与 cfg.AiInsightStyle 选项保持一致）
@@ -276,9 +277,11 @@ class AiInsightDrawerView(QWidget):
         self._initWidget()
         self._initLayout()
         self._connectSignals()
+        self._applyTheme()
 
         # 监听主题切换:刷新 Markdown 样式
         qconfig.themeChanged.connect(self._refreshMarkdownStyle)
+        qconfig.themeChanged.connect(self._applyTheme)
 
         # 初始:空闲态
         self._setRunning(False)
@@ -371,6 +374,7 @@ class AiInsightDrawerView(QWidget):
 
         # ====== 工具栏 ======
         toolbar = QWidget(self)
+        toolbar.setObjectName("insightToolbar")
         toolbarLayout = QHBoxLayout(toolbar)
         toolbarLayout.setContentsMargins(20, 10, 20, 10)
         toolbarLayout.setSpacing(10)
@@ -387,6 +391,7 @@ class AiInsightDrawerView(QWidget):
 
         # ====== 内容区 ======
         content = QWidget(self)
+        content.setObjectName("insightContent")
         contentLayout = QVBoxLayout(content)
         contentLayout.setContentsMargins(20, 12, 20, 12)
         contentLayout.setSpacing(6)
@@ -407,6 +412,7 @@ class AiInsightDrawerView(QWidget):
 
         # ====== 状态条 ======
         statusBar = QWidget(self)
+        statusBar.setObjectName("insightStatusBar")
         statusLayout = QHBoxLayout(statusBar)
         statusLayout.setContentsMargins(20, 8, 20, 8)
         statusLayout.setSpacing(6)
@@ -416,6 +422,7 @@ class AiInsightDrawerView(QWidget):
 
         # ====== 操作栏 ======
         actionBar = QWidget(self)
+        actionBar.setObjectName("insightActionBar")
         actionLayout = QHBoxLayout(actionBar)
         actionLayout.setContentsMargins(16, 12, 16, 16)
         actionLayout.setSpacing(8)
@@ -435,14 +442,40 @@ class AiInsightDrawerView(QWidget):
     def _buildSeparator(self) -> QFrame:
         """构造低对比度水平分割线(类 Fluent 1px)"""
         line = QFrame(self)
+        line.setObjectName("insightSeparator")
         line.setFrameShape(QFrame.Shape.HLine)
         line.setFixedHeight(1)
-        line.setStyleSheet(
-            "QFrame{background:rgba(0,0,0,8%); border:none;}"
-            if not isDarkTheme()
-            else "QFrame{background:rgba(255,255,255,8%); border:none;}"
-        )
         return line
+
+    def _applyTheme(self) -> None:
+        """刷新抽屉全部表面，保证同实例主题切换后仍具备可读对比度。"""
+        dark = isDarkTheme()
+        palette = shellPalette(dark)
+        page = pageBackgroundColor(dark).name()
+        surface = palette.surface.name()
+        border = palette.border.name()
+        text = palette.text.name()
+        muted = palette.mutedText.name()
+        self.setStyleSheet(
+            f"""
+            QWidget#AiInsightDrawerView {{ background: {page}; color: {text}; }}
+            QWidget#insightHeader, QWidget#insightToolbar,
+            QWidget#insightStatusBar, QWidget#insightActionBar {{
+                background: {surface}; color: {text};
+            }}
+            QWidget#insightContent {{ background: {page}; color: {text}; }}
+            QFrame#insightSeparator {{ background: {border}; border: none; }}
+            QTextBrowser {{
+                background: {surface}; color: {text}; border: 1px solid {border};
+                border-radius: 8px;
+            }}
+            """
+        )
+        self.titleLabel.setStyleSheet(f"color: {text};")
+        self.subtitleLabel.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        self.styleLabel.setStyleSheet(f"color: {text};")
+        self.streamingHintLabel.setStyleSheet(f"color: {muted};")
+        self._refreshMarkdownStyle()
 
     def _refreshMarkdownStyle(self) -> None:
         """刷新 QTextBrowser 的 Markdown CSS,使其主题感知"""
@@ -514,6 +547,16 @@ class AiInsightDrawerView(QWidget):
             self._visibleBuffer = newVisible
             self._scrollToEnd()
 
+    def setProgress(self, _stage: str, percent: int, message: str) -> None:
+        """显示服务端返回的流程阶段；百分比不表示模型 Token 完成比例。"""
+        safePercent = max(0, min(100, int(percent)))
+        statusText = message or "AI 正在处理解读"
+        if 0 < safePercent < 100:
+            self.streamingHintLabel.setText(f"{statusText} · 流程 {safePercent}%")
+        else:
+            self.streamingHintLabel.setText(statusText)
+        self._applyStatusStyle("info", statusText)
+
     def setFinalText(self, text: str) -> None:
         """流式结束后:统一做 think 剥离 + Markdown 渲染"""
         if text is None:
@@ -584,6 +627,7 @@ class AiInsightDrawerView(QWidget):
             self.progressRing.show()
             self.progressRing.start()
             self.streamingHintLabel.show()
+            self.streamingHintLabel.setText("正在连接 AI 服务…")
             self.confidenceBadge.setLevel(_ConfidenceBadge.LEVEL_RUNNING)
             self._applyStatusStyle("info", "AI 正在基于本次分析生成解读…")
             self.regenerateBtn.setEnabled(False)

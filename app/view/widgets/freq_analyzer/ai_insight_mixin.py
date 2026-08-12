@@ -159,6 +159,7 @@ class AiInsightMixin:
         self._aiInsightView.styleChanged.connect(self._onAiInsightStyleChanged)
 
         self._aiInsightService.textReceived.connect(self._aiInsightView.setStreamText)
+        self._aiInsightService.progressChanged.connect(self._aiInsightView.setProgress)
         self._aiInsightService.streamFinished.connect(self._onAiInsightFinished)
         self._aiInsightService.failed.connect(self._aiInsightView.setError)
 

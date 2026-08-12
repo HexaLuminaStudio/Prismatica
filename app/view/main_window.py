@@ -753,7 +753,7 @@ class MainWindow(MSFluentWindow):
                     "AI 报告生成中",
                     "当前正在生成 AI 报告,关闭程序会中断生成过程。\n\n"
                     "确定要强制关闭吗?",
-                    self,
+                    self.window(),
                 )
                 mb.yesButton.setText("强制关闭")
                 mb.cancelButton.setText("继续等待")
@@ -791,7 +791,7 @@ class MainWindow(MSFluentWindow):
             msgBox = MessageBox(
                 "确认退出",
                 f"有 {totalTasks} 个下载任务尚未完成\n\n{detailText}\n\n退出将取消这些任务，确定退出吗？",
-                self,
+                self.window(),
             )
             msgBox.yesButton.setText("退出")
             msgBox.cancelButton.setText("取消")

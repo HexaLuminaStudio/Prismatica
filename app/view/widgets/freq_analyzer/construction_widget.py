@@ -1106,7 +1106,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, "导出构式 Slot 填充词表")
+        charge = beginPaidAnalysisExport(self.window(), "导出构式 Slot 填充词表")
         if charge is None:
             return
         try:
@@ -1160,7 +1160,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, "导出构式内部贴合表")
+        charge = beginPaidAnalysisExport(self.window(), "导出构式内部贴合表")
         if charge is None:
             return
         try:
@@ -1214,7 +1214,7 @@ class ConstructionWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, "导出构式跨距搭配表")
+        charge = beginPaidAnalysisExport(self.window(), "导出构式跨距搭配表")
         if charge is None:
             return
         try:

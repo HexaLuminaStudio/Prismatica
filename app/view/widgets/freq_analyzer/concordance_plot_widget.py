@@ -378,7 +378,7 @@ class ConcordancePlotCanvas(QWidget):
         )
         if not filePath:
             return
-        charge = beginPaidAnalysisExport(self, f"导出 KWIC 分布图 {fmt.upper()}")
+        charge = beginPaidAnalysisExport(self.window(), f"导出 KWIC 分布图 {fmt.upper()}")
         if charge is None:
             return
         try:

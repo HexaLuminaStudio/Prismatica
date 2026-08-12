@@ -837,7 +837,7 @@ class WordCloudWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         if not path.lower().endswith(ext):
             path += ext
 
-        transaction = beginPaidAnalysisExport(self, f"词云图 {fmt.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"词云图 {fmt.upper()}")
         if transaction is None:
             return
         try:

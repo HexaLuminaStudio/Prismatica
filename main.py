@@ -3,6 +3,13 @@ import os
 import sys
 import warnings
 
+from app.core.bootstrap.single_instance import SingleInstanceGuard
+
+_singleInstanceGuard = SingleInstanceGuard()
+if not _singleInstanceGuard.acquire():
+    _singleInstanceGuard.notifyAlreadyRunning()
+    raise SystemExit(0)
+
 warnings.filterwarnings(
     "ignore",
     category=FutureWarning,

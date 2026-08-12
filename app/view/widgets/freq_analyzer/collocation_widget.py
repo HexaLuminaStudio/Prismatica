@@ -1041,7 +1041,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, "导出搭配词表")
+        charge = beginPaidAnalysisExport(self.window(), "导出搭配词表")
         if charge is None:
             return
         try:
@@ -1099,7 +1099,7 @@ class CollocationWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, "导出搭配网络边列表")
+        charge = beginPaidAnalysisExport(self.window(), "导出搭配网络边列表")
         if charge is None:
             return
         try:

@@ -134,12 +134,14 @@ class ResearchReportService(QObject):
 
     Signals:
         reportStarted(): 开始生成(用于 UI 切到 busy 态)
+        reportProgress(str, int, str): 阶段、流程进度、中文状态文案
         reportStreamReceived(str): 流式收到一段文本
         reportFinished(str, str): 完成(参数: insight_id, 完整正文)
         reportFailed(str): 失败(参数: 错误描述)
     """
 
     reportStarted = Signal()
+    reportProgress = Signal(str, int, str)
     reportStreamReceived = Signal(str)
     reportFinished = Signal(str, str)
     reportFailed = Signal(str)
@@ -156,6 +158,7 @@ class ResearchReportService(QObject):
         # 持有一份本地 ChatService — 与 chat_interface 等独立,不共享 thread。
         self._chat = ChatService(self)
         self._chat.textReceived.connect(self._onChatTextReceived)
+        self._chat.progressChanged.connect(self.reportProgress)
         self._chat.streamFinished.connect(self._onChatStreamFinished)
         self._chat.failed.connect(self._onChatFailed)
 

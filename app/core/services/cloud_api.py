@@ -73,6 +73,72 @@ class CloudApiError(Exception):
         return f"[{self.code}] {self.message}"
 
 
+class CloudEventStream:
+    """可取消的 SSE 响应句柄；由后台线程迭代事件。"""
+
+    def __init__(self, response) -> None:
+        self._response = response
+        self._closed = False
+        self._closeLock = threading.Lock()
+        self._response.encoding = "utf-8"
+
+    def iterEvents(self):
+        eventName = "message"
+        dataLines: list[str] = []
+        try:
+            for rawLine in self._response.iter_lines(decode_unicode=True):
+                if self._closed:
+                    return
+                line = str(rawLine or "")
+                if not line:
+                    if dataLines:
+                        rawData = "\n".join(dataLines)
+                        try:
+                            data = json.loads(rawData)
+                        except (ValueError, json.JSONDecodeError) as exc:
+                            raise CloudApiError(
+                                "BAD_RESPONSE",
+                                f"流式响应不是合法 JSON: {exc}",
+                            ) from exc
+                        yield {
+                            "event": eventName,
+                            "data": data if isinstance(data, dict) else {},
+                        }
+                    eventName = "message"
+                    dataLines = []
+                    continue
+                if line.startswith(":"):
+                    continue
+                if line.startswith("event:"):
+                    eventName = line[6:].strip() or "message"
+                elif line.startswith("data:"):
+                    dataLines.append(line[5:].lstrip())
+            if dataLines and not self._closed:
+                try:
+                    data = json.loads("\n".join(dataLines))
+                except (ValueError, json.JSONDecodeError) as exc:
+                    raise CloudApiError(
+                        "BAD_RESPONSE",
+                        f"流式响应不是合法 JSON: {exc}",
+                    ) from exc
+                yield {
+                    "event": eventName,
+                    "data": data if isinstance(data, dict) else {},
+                }
+        except RequestException as exc:
+            if not self._closed:
+                raise CloudApiError("NETWORK_ERROR", f"流式连接异常: {exc}") from exc
+        finally:
+            self.close()
+
+    def close(self) -> None:
+        with self._closeLock:
+            if self._closed:
+                return
+            self._closed = True
+            self._response.close()
+
+
 class CloudApi:
     """云端 API 客户端(单例)。"""
 
@@ -229,6 +295,7 @@ class CloudApi:
         headers: Dict[str, str],
         body: Dict[str, Any] | None,
         timeout: float | tuple[float, float],
+        stream: bool = False,
     ):
         """执行一次 HTTP 请求，并在网络异常时清理当前线程连接池。"""
         try:
@@ -238,6 +305,7 @@ class CloudApi:
                 headers=headers,
                 json=body,
                 timeout=timeout,
+                stream=stream,
             )
         except (ConnectionError, Timeout, socket.gaierror) as exc:
             self._discardHttpClient()
@@ -307,6 +375,70 @@ class CloudApi:
 
         return self._unwrapEnvelope(data)
 
+    def openEventStream(
+        self,
+        path: str,
+        *,
+        body: Dict[str, Any] | None = None,
+        withAuth: bool = True,
+        idempotencyKey: str | None = None,
+        timeout: float | tuple[float, float] = DEFAULT_REQUEST_TIMEOUT,
+    ) -> CloudEventStream:
+        """阻塞打开 SSE；调用方必须在后台线程迭代并在取消时关闭。"""
+        url = f"{self._baseUrl()}{path}"
+        headers = self._headers(
+            withAuth=withAuth,
+            idempotencyKey=idempotencyKey,
+        )
+        headers["Accept"] = "text/event-stream"
+        response = self._requestOnce(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            timeout=timeout,
+            stream=True,
+        )
+        if response.status_code == 401 and withAuth and self._refreshCallback:
+            failedAccessToken = headers.get("Authorization", "").removeprefix("Bearer ")
+            if self._refreshCallback(failedAccessToken):
+                response.close()
+                headers["Authorization"] = f"Bearer {self._session.accessToken}"
+                response = self._requestOnce(
+                    "POST",
+                    url,
+                    headers=headers,
+                    body=body,
+                    timeout=timeout,
+                    stream=True,
+                )
+        if response.status_code >= 400:
+            try:
+                payload = response.json()
+            except (ValueError, json.JSONDecodeError) as exc:
+                response.close()
+                raise CloudApiError(
+                    "BAD_RESPONSE",
+                    f"流式接口返回无效响应: {exc}",
+                    httpStatus=response.status_code,
+                ) from exc
+            response.close()
+            try:
+                self._unwrapEnvelope(payload)
+            except CloudApiError as error:
+                error.httpStatus = response.status_code
+                raise
+            raise CloudApiError(
+                "BAD_RESPONSE",
+                "流式接口返回错误",
+                httpStatus=response.status_code,
+            )
+        contentType = response.headers.get("Content-Type", "").lower()
+        if "text/event-stream" not in contentType:
+            response.close()
+            raise CloudApiError("BAD_RESPONSE", "云端未返回事件流")
+        return CloudEventStream(response)
+
     # ------------------------------------------------------------------
     # 便捷方法
     # ------------------------------------------------------------------
@@ -329,6 +461,7 @@ def getCloudApi() -> CloudApi:
 
 
 __all__ = [
+    "CloudEventStream",
     "CloudSession",
     "CloudApi",
     "CloudApiError",

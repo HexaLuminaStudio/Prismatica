@@ -79,6 +79,7 @@ class AiInsightService(QObject):
     """
 
     textReceived = Signal(str, int)
+    progressChanged = Signal(str, int, str)
     streamFinished = Signal()
     failed = Signal(str)
 
@@ -87,6 +88,7 @@ class AiInsightService(QObject):
         # 复用 ChatService 的 LLM 流式调用
         self._chat = ChatService(self)
         self._chat.textReceived.connect(self.textReceived)
+        self._chat.progressChanged.connect(self.progressChanged)
         self._chat.streamFinished.connect(self._onChatFinished)
         self._chat.failed.connect(self._onChatFailed)
 

@@ -2063,7 +2063,7 @@ class KeywordListWidget(AiInsightMixin, ResourceSinkMixin, QWidget, WorkerMixin)
             return
         if not path.endswith(".csv"):
             path += ".csv"
-        transaction = beginPaidAnalysisExport(self, "主题词表 CSV")
+        transaction = beginPaidAnalysisExport(self.window(), "主题词表 CSV")
         if transaction is None:
             return
         try:

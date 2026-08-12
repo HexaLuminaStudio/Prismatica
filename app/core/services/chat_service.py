@@ -17,14 +17,26 @@
 
 from __future__ import annotations
 
+import threading
+import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal
 
 from app.core.utils import cfg, logger, qconfig, signalBus
 
-from .cloud_api import CloudApiError, getCloudApi
+from .cloud_api import CloudApiError, CloudEventStream, getCloudApi
+
+
+# 后端 AI_READ_TIMEOUT_SEC 允许的最大值是 600 秒。客户端必须比后端多留
+# 一段响应封装与网络传输余量，避免慢模型仍在生成时由客户端先行断开。
+AI_CHAT_CONNECT_TIMEOUT_SECONDS = 10.0
+AI_CHAT_READ_TIMEOUT_SECONDS = 630.0
+AI_CHAT_REQUEST_TIMEOUT = (
+    AI_CHAT_CONNECT_TIMEOUT_SECONDS,
+    AI_CHAT_READ_TIMEOUT_SECONDS,
+)
 
 
 class LLMThread(QThread):
@@ -39,6 +51,7 @@ class LLMThread(QThread):
     """
 
     textReceived = Signal(str, int)
+    progressChanged = Signal(str, int, str)
     chatFinished = Signal()
     failed = Signal(str)
 
@@ -57,6 +70,8 @@ class LLMThread(QThread):
         self._tokenUsage: int = 0
         self._history: List[dict] = []
         self._maxHistory: int = qconfig.get(cfg.AiMaxHistory) or 10
+        self._activeStream: CloudEventStream | None = None
+        self._streamLock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 公共 API
@@ -151,49 +166,81 @@ class LLMThread(QThread):
                 *self._history,
                 {"role": "user", "content": self._message + self._fileText},
             ]
-            import uuid
-
-            response = getCloudApi().post(
-                "/v1/ai/chat",
-                body={
-                    "featureCode": self._featureCode,
-                    "messages": messages,
-                    "temperature": 0.3,
-                },
-                idempotencyKey=str(uuid.uuid4()),
-                timeout=180.0,
-            )
-            if self.isInterruptionRequested():
-                self.chatFinished.emit()
-                return
-            text = str((response or {}).get("message", ""))
-            if not text:
-                raise CloudApiError("BAD_RESPONSE", "平台 AI 未返回有效文本")
-            usage = (response or {}).get("usage") or {}
-            billing = (response or {}).get("billing") or {}
-            self._model = str((response or {}).get("model", "平台模型"))
-            self._responseText = text
-            self._tokenUsage = int(usage.get("totalTokens", 0) or 0)
-            self.textReceived.emit(text, self._tokenUsage)
+            requestBody = {
+                "featureCode": self._featureCode,
+                "messages": messages,
+                "temperature": 0.3,
+            }
+            idempotencyKey = str(uuid.uuid4())
             try:
-                signalBus.balanceChanged.emit(int(billing.get("balanceAfter", 0) or 0))
-            except Exception:
-                pass
+                eventStream = getCloudApi().openEventStream(
+                    "/v1/ai/chat/stream",
+                    body=requestBody,
+                    idempotencyKey=idempotencyKey,
+                    timeout=AI_CHAT_REQUEST_TIMEOUT,
+                )
+            except CloudApiError as error:
+                if error.httpStatus not in (404, 405):
+                    raise
+                self.progressChanged.emit(
+                    "compatibility",
+                    15,
+                    "服务器暂不支持流式返回，正在使用兼容模式",
+                )
+                response = getCloudApi().post(
+                    "/v1/ai/chat",
+                    body=requestBody,
+                    idempotencyKey=idempotencyKey,
+                    timeout=AI_CHAT_REQUEST_TIMEOUT,
+                )
+                self._completeResponse(response, emitText=True)
+                return
 
-            # 保存历史(剪裁到 maxHistory * 2 条)
-            self._history.append({"role": "user", "content": self._message})
-            self._history.append({"role": "assistant", "content": self._responseText})
-            if len(self._history) > self._maxHistory * 2:
-                self._history = self._history[
-                    len(self._history) - self._maxHistory * 2 :
-                ]
+            self._setActiveStream(eventStream)
+            isCompleted = False
+            try:
+                for item in eventStream.iterEvents():
+                    if self.isInterruptionRequested():
+                        return
+                    eventName = str(item.get("event", ""))
+                    data = item.get("data") or {}
+                    if eventName == "progress":
+                        self.progressChanged.emit(
+                            str(data.get("stage", "")),
+                            int(data.get("percent", 0) or 0),
+                            str(data.get("message", "")),
+                        )
+                    elif eventName == "delta":
+                        text = str(data.get("text", ""))
+                        if text:
+                            self._responseText += text
+                            self.textReceived.emit(text, 0)
+                    elif eventName == "completed":
+                        self._completeResponse(data, emitText=False)
+                        isCompleted = True
+                        break
+                    elif eventName == "error":
+                        raise CloudApiError(
+                            str(data.get("code", "INTERNAL_ERROR")),
+                            str(data.get("message", "AI 服务暂时不可用")),
+                            details=data.get("details") or {},
+                        )
+            finally:
+                eventStream.close()
+            if not isCompleted and not self.isInterruptionRequested():
+                raise CloudApiError("BAD_RESPONSE", "AI 流式响应提前结束")
 
-            logger.info(
-                f"[LLMThread] 对话完成, model={self._model}, "
-                f"responseChars={len(self._responseText)}, tokens={self._tokenUsage}"
+        except CloudApiError as e:
+            if e.code == "NETWORK_ERROR" and "Read timed out" in e.message:
+                errorMsg = "AI 生成等待超时，请稍后重试。"
+            else:
+                errorMsg = e.message or str(e)
+            logger.warning(
+                f"[LLMThread] 云端调用失败, model={self._model}, "
+                f"historyLen={len(self._history)}, code={e.code}: {e.message}"
             )
-            self.chatFinished.emit()
-
+            self._responseText += f"\n\n[请求发生错误：{errorMsg}]"
+            self.failed.emit(errorMsg)
         except Exception as e:
             errorMsg = str(e) or type(e).__name__
             logger.exception(
@@ -203,6 +250,46 @@ class LLMThread(QThread):
             # 不覆盖用户已看到的内容,只追加错误标记
             self._responseText += "\n\n[请求发生错误,请稍后再试]"
             self.failed.emit(errorMsg)
+        finally:
+            self._setActiveStream(None)
+
+    def _completeResponse(self, response: Any, *, emitText: bool) -> None:
+        text = str((response or {}).get("message", ""))
+        if not text:
+            raise CloudApiError("BAD_RESPONSE", "平台 AI 未返回有效文本")
+        usage = (response or {}).get("usage") or {}
+        billing = (response or {}).get("billing") or {}
+        self._model = str((response or {}).get("model", "平台模型"))
+        if emitText:
+            self._responseText = text
+            self.textReceived.emit(text, int(usage.get("totalTokens", 0) or 0))
+        elif not self._responseText:
+            self._responseText = text
+            self.textReceived.emit(text, 0)
+        self._tokenUsage = int(usage.get("totalTokens", 0) or 0)
+        try:
+            signalBus.balanceChanged.emit(int(billing.get("balanceAfter", 0) or 0))
+        except Exception:
+            pass
+        self._history.append({"role": "user", "content": self._message})
+        self._history.append({"role": "assistant", "content": self._responseText})
+        if len(self._history) > self._maxHistory * 2:
+            self._history = self._history[len(self._history) - self._maxHistory * 2 :]
+        logger.info(
+            f"[LLMThread] 对话完成, model={self._model}, "
+            f"responseChars={len(self._responseText)}, tokens={self._tokenUsage}"
+        )
+        self.chatFinished.emit()
+
+    def _setActiveStream(self, eventStream: CloudEventStream | None) -> None:
+        with self._streamLock:
+            self._activeStream = eventStream
+
+    def cancelActiveRequest(self) -> None:
+        with self._streamLock:
+            eventStream = self._activeStream
+        if eventStream is not None:
+            eventStream.close()
 
 
 class ChatService(QObject):
@@ -216,6 +303,7 @@ class ChatService(QObject):
     """
 
     textReceived = Signal(str, int)
+    progressChanged = Signal(str, int, str)
     streamFinished = Signal()
     failed = Signal(str)
 
@@ -223,6 +311,7 @@ class ChatService(QObject):
         super().__init__(parent=parent)
         self._thread = LLMThread(self)
         self._thread.textReceived.connect(self.textReceived)
+        self._thread.progressChanged.connect(self.progressChanged)
         self._thread.chatFinished.connect(self._onThreadFinished)
         self._thread.failed.connect(self.failed)
 
@@ -266,6 +355,7 @@ class ChatService(QObject):
         """
         if self._thread.isRunning():
             self._thread.requestInterruption()
+            self._thread.cancelActiveRequest()
             if not self._thread.wait(3000):
                 logger.warning("[ChatService] LLMThread 在 3s 内未退出,强制 terminate")
                 self._thread.terminate()
@@ -274,3 +364,13 @@ class ChatService(QObject):
 
     def _onThreadFinished(self) -> None:
         self.streamFinished.emit()
+
+
+__all__ = [
+    "AI_CHAT_CONNECT_TIMEOUT_SECONDS",
+    "AI_CHAT_READ_TIMEOUT_SECONDS",
+    "AI_CHAT_REQUEST_TIMEOUT",
+    "ChatService",
+    "CloudEventStream",
+    "LLMThread",
+]

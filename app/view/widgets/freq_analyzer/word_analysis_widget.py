@@ -1030,7 +1030,7 @@ class WordAnalysisWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        transaction = beginPaidAnalysisExport(self, "高频词表 CSV")
+        transaction = beginPaidAnalysisExport(self.window(), "高频词表 CSV")
         if transaction is None:
             return
         try:

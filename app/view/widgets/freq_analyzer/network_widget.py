@@ -954,7 +954,7 @@ class NetworkWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             return
         if not path.lower().endswith(f".{ext}"):
             path += f".{ext}"
-        transaction = beginPaidAnalysisExport(self, f"共现网络 {fmt.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"共现网络 {fmt.upper()}")
         if transaction is None:
             return
         try:

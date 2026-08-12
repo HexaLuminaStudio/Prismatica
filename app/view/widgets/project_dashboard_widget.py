@@ -451,6 +451,7 @@ class ProjectDashboardWidget(QWidget):
         projectManager.activeProjectChanged.connect(self._onActiveProjectChanged)
         projectManager.projectListChanged.connect(self._syncFromManager)
         researchReportService.reportStarted.connect(self._onReportStarted)
+        researchReportService.reportProgress.connect(self._onReportProgress)
         researchReportService.reportFinished.connect(self._onReportFinished)
         researchReportService.reportFailed.connect(self._onReportFailed)
         qconfig.themeChanged.connect(self._applyTheme)
@@ -743,6 +744,15 @@ class ProjectDashboardWidget(QWidget):
 
     def _onReportStarted(self) -> None:
         self._setBusy(True)
+
+    def _onReportProgress(self, _stage: str, percent: int, message: str) -> None:
+        if not self._busy:
+            return
+        safePercent = max(0, min(100, int(percent)))
+        self.generateButton.setText(
+            f"正在生成 · {safePercent}%" if safePercent < 100 else "正在完成…"
+        )
+        self.generateButton.setToolTip(message or "正在生成研究报告")
 
     def _onReportFinished(self, _insightId: str, _content: str) -> None:
         self._setBusy(False)

@@ -697,7 +697,7 @@ class ChartDialog(MessageBoxBase):
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
 
-        transaction = beginPaidAnalysisExport(self, f"偏误统计图 {fmt.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"偏误统计图 {fmt.upper()}")
         if transaction is None:
             return
         try:
@@ -1182,7 +1182,7 @@ class HeatmapDialog(MessageBoxBase):
             return
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
-        transaction = beginPaidAnalysisExport(self, f"偏误热力图 {fmt.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"偏误热力图 {fmt.upper()}")
         if transaction is None:
             return
         try:
@@ -1910,7 +1910,7 @@ class AssociationRulesDialog(MessageBoxBase):
         if not path.endswith(".csv"):
             path += ".csv"
 
-        transaction = beginPaidAnalysisExport(self, "偏误关联规则 CSV")
+        transaction = beginPaidAnalysisExport(self.window(), "偏误关联规则 CSV")
         if transaction is None:
             return
         try:
@@ -1961,7 +1961,7 @@ class AssociationRulesDialog(MessageBoxBase):
             return
         if not path.endswith(".png"):
             path += ".png"
-        transaction = beginPaidAnalysisExport(self, "偏误关联规则图 PNG")
+        transaction = beginPaidAnalysisExport(self.window(), "偏误关联规则图 PNG")
         if transaction is None:
             return
         try:
@@ -3559,7 +3559,7 @@ class BiasInterface(QWidget):
             columns=["文件", "行号", "句子", "偏误类型", "标记内容", "等级", "国籍"],
         )
 
-        transaction = beginPaidAnalysisExport(self, "偏误分析结果 Excel")
+        transaction = beginPaidAnalysisExport(self.window(), "偏误分析结果 Excel")
         if transaction is None:
             return
         try:

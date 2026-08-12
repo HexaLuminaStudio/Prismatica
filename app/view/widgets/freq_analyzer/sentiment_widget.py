@@ -864,7 +864,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         if not path.lower().endswith(ext):
             path += ext
 
-        transaction = beginPaidAnalysisExport(self, f"情感分析报告 {kind.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"情感分析报告 {kind.upper()}")
         if transaction is None:
             return
         try:

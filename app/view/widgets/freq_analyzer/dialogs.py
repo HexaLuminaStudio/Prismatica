@@ -129,7 +129,7 @@ class ZipfDialog(MessageBoxBase):
             return
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
-        transaction = beginPaidAnalysisExport(self, f"Zipf 曲线 {fmt.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"Zipf 曲线 {fmt.upper()}")
         if transaction is None:
             return
         try:
@@ -236,7 +236,7 @@ class NgramDialog(MessageBoxBase):
             return
         if not path.endswith(".csv"):
             path += ".csv"
-        transaction = beginPaidAnalysisExport(self, f"{self.label} 频率表 CSV")
+        transaction = beginPaidAnalysisExport(self.window(), f"{self.label} 频率表 CSV")
         if transaction is None:
             return
         try:

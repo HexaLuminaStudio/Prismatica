@@ -539,7 +539,24 @@ class FreqAnalyzerInterface(QWidget):
             "dependency": "句法依存图",
         }
         self._panels["corpusImport"].finishedRequested.connect(self.showDesktop)
+        # CorpusStore 会在面板创建前从 SQLite 恢复语料与清洗状态。首次装配时
+        # 不会自然产生 textsChanged / cleanRuleChanged，因此必须主动把当前
+        # store 重新分发一次，避免分析页停留在构造时的“未加载语料”状态。
+        self._synchronizePanelsWithCorpusStore()
         self._panelShell.hide()
+
+    def _synchronizePanelsWithCorpusStore(self) -> None:
+        """将当前语料状态同步到所有已创建的分析面板。"""
+        for routeKey, panel in self._panels.items():
+            if not hasattr(panel, "setCorpusStore"):
+                continue
+            try:
+                panel.setCorpusStore(self.corpusStore)
+            except Exception as e:
+                logger.error(
+                    f"[FreqAnalyzerInterface] 同步 {routeKey} 语料状态失败: {e}"
+                )
+        self.desktop.setCorpusStore(self.corpusStore)
 
     def showDesktop(self) -> None:
         """返回功能桌面，并刷新真实语料状态。"""
@@ -630,16 +647,7 @@ class FreqAnalyzerInterface(QWidget):
                         )
                 except Exception:
                     pass
-            for panel in self._panels.values():
-                if hasattr(panel, "setCorpusStore"):
-                    try:
-                        panel.setCorpusStore(self.corpusStore)
-                    except Exception as e:
-                        logger.error(
-                            f"[FreqAnalyzerInterface] "
-                            f"重绑 {type(panel).__name__} 失败: {e}"
-                        )
-            self.desktop.setCorpusStore(self.corpusStore)
+            self._synchronizePanelsWithCorpusStore()
             return
 
         # 0) 取消在途的清洗任务(防止脏数据跨语料库)
@@ -671,15 +679,7 @@ class FreqAnalyzerInterface(QWidget):
             logger.warning(f"[FreqAnalyzerInterface] 重置 coordinator 失败: {e}")
 
         # 3) 重新分发到所有子面板(子面板的 _bindCorpusStore 已实现)
-        for panel in self._panels.values():
-            if hasattr(panel, "setCorpusStore"):
-                try:
-                    panel.setCorpusStore(self.corpusStore)
-                except Exception as e:
-                    logger.error(
-                        f"[FreqAnalyzerInterface] 重绑 {type(panel).__name__} 失败: {e}"
-                    )
-        self.desktop.setCorpusStore(self.corpusStore)
+        self._synchronizePanelsWithCorpusStore()
 
         # 4) 通知 manager 统计已变更(用于 UI 列表展示)
         self.corpusManager.updateStats(

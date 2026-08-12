@@ -516,7 +516,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         elif "Invalid tasks" in err or "Available tasks" in err:
             msg += "\n\n提示:HanLP 任务名非法。请检查 dependency_engine.py 中"
             msg += " HanLPDependencyParser.HANLP_TASKS 是否为官方支持的任务名。"
-        MessageBox("分析失败", msg, self).exec()
+        MessageBox("分析失败", msg, self.window()).exec()
 
     def _onSentenceChanged(self, index: int) -> None:
         self._currentIndex = index
@@ -845,7 +845,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         path = self._currentFigureSavePath(ext)
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, f"导出句法依存图 {ext.upper()}")
+        charge = beginPaidAnalysisExport(self.window(), f"导出句法依存图 {ext.upper()}")
         if charge is None:
             return
         try:
@@ -871,7 +871,7 @@ class DependencyWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         )
         if not path:
             return
-        charge = beginPaidAnalysisExport(self, "导出句法依存 CoNLL-U")
+        charge = beginPaidAnalysisExport(self.window(), "导出句法依存 CoNLL-U")
         if charge is None:
             return
         try:

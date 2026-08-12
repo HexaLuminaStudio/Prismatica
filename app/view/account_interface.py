@@ -323,7 +323,7 @@ class _OverviewPage(QWidget):
         if not accepted:
             return
         if newPassword != confirmation:
-            MessageBox("两次输入不一致", "请重新输入并确认新密码。", self).exec()
+            MessageBox("两次输入不一致", "请重新输入并确认新密码。", self.window()).exec()
             return
         self._changePasswordButton.setEnabled(False)
         self._changePasswordButton.setText("正在修改…")
@@ -337,13 +337,13 @@ class _OverviewPage(QWidget):
     def _onChangePasswordSucceeded(self, _result) -> None:
         self._changePasswordButton.setEnabled(True)
         self._changePasswordButton.setText("修改密码")
-        MessageBox("密码已更新", "其他设备需要重新登录。", self).exec()
+        MessageBox("密码已更新", "其他设备需要重新登录。", self.window()).exec()
 
     @Slot(str)
     def _onChangePasswordFailed(self, message: str) -> None:
         self._changePasswordButton.setEnabled(True)
         self._changePasswordButton.setText("修改密码")
-        MessageBox("修改失败", message, self).exec()
+        MessageBox("修改失败", message, self.window()).exec()
 
     def _onDeleteAccount(self) -> None:
         if (
@@ -375,13 +375,13 @@ class _OverviewPage(QWidget):
         self._deleteAccountButton.setEnabled(True)
         self._deleteAccountButton.setText("注销账号")
         scheduled = result.get("scheduledHardDeleteAt", "30 天后")
-        MessageBox("已提交注销", f"账号预计于 {scheduled} 永久删除。", self).exec()
+        MessageBox("已提交注销", f"账号预计于 {scheduled} 永久删除。", self.window()).exec()
 
     @Slot(str)
     def _onDeleteAccountFailed(self, message: str) -> None:
         self._deleteAccountButton.setEnabled(True)
         self._deleteAccountButton.setText("注销账号")
-        MessageBox("注销失败", message, self).exec()
+        MessageBox("注销失败", message, self.window()).exec()
 
 
 class _SubscriptionRow(_SurfaceCard):
@@ -923,7 +923,7 @@ class AccountInterface(ScrollArea):
     def _onLogoutFailed(self, message: str) -> None:
         self._logoutButton.setEnabled(True)
         self._logoutButton.setText("退出登录")
-        MessageBox("退出失败", message, self).exec()
+        MessageBox("退出失败", message, self.window()).exec()
 
     def _applyTheme(self) -> None:
         dark = isDarkTheme()

@@ -752,7 +752,7 @@ class NgramClusterDialog(AiInsightMixin, ResourceSinkMixin, MessageBoxBase):
             return
         if not path.endswith(f".{fmt}"):
             path += f".{fmt}"
-        transaction = beginPaidAnalysisExport(self, f"N-gram 聚簇图 {fmt.upper()}")
+        transaction = beginPaidAnalysisExport(self.window(), f"N-gram 聚簇图 {fmt.upper()}")
         if transaction is None:
             return
         try:

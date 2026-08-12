@@ -509,7 +509,10 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         pass
 
     def _runAnalysis(self):
-        if not self.rawTexts:
+        # 每次点击都从权威 CorpusStore 获取当前文本。这样即使面板在
+        # CorpusStore 恢复完成后才创建，也不会依赖一次可能错过的 Qt 信号。
+        effective = self.effectiveTexts
+        if not effective:
             _showInfoBar("warning", "提示", "请先加载语料文件", self, duration=2000)
             return
 
@@ -525,7 +528,6 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         else:
             rule = CleanRule()
             cleanEnabled = False
-        effective = self.effectiveTexts
         logger.info(
             f"[FreqAnalyzerWidget] 开始分析,文件数={len(effective)}, "
             f"N={self.ngramN}, cleanEnabled={cleanEnabled}"
@@ -801,7 +803,7 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
             return
         if not path.endswith(".csv"):
             path += ".csv"
-        transaction = beginPaidAnalysisExport(self, "词频表 CSV")
+        transaction = beginPaidAnalysisExport(self.window(), "词频表 CSV")
         if transaction is None:
             return
         try:

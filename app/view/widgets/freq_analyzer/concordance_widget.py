@@ -1192,7 +1192,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 return
             if not path.lower().endswith(".txt"):
                 path += ".txt"
-            charge = beginPaidAnalysisExport(self, "导出 KWIC TXT")
+            charge = beginPaidAnalysisExport(self.window(), "导出 KWIC TXT")
             if charge is None:
                 return
             try:
@@ -1231,7 +1231,7 @@ class ConcordanceWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
                 return
             if not path.lower().endswith(".csv"):
                 path += ".csv"
-            charge = beginPaidAnalysisExport(self, "导出 KWIC CSV")
+            charge = beginPaidAnalysisExport(self.window(), "导出 KWIC CSV")
             if charge is None:
                 return
             try:

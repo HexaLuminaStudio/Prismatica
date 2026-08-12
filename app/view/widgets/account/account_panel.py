@@ -193,9 +193,9 @@ class _OverviewPage(QWidget):
         try:
             getCloudAuth().changePassword(old, new)
         except CloudApiError as exc:
-            MessageBox("修改失败", exc.message, self).exec()
+            MessageBox("修改失败", exc.message, self.window()).exec()
             return
-        MessageBox("完成", "密码已修改,其他设备需重新登录。", self).exec()
+        MessageBox("完成", "密码已修改,其他设备需重新登录。", self.window()).exec()
 
     def _onDeleteAccount(self) -> None:
         confirm = QMessageBox.warning(
@@ -214,13 +214,13 @@ class _OverviewPage(QWidget):
         try:
             result = getCloudAccount().deleteAccount(password)
         except CloudApiError as exc:
-            MessageBox("注销失败", exc.message, self).exec()
+            MessageBox("注销失败", exc.message, self.window()).exec()
             return
         scheduled = result.get("scheduledHardDeleteAt", "30 天后")
         MessageBox(
             "已提交注销",
             f"账号已置为 deleted 状态,{scheduled} 将被硬删。\n所有 refresh_token 已撤销。",
-            self,
+            self.window(),
         ).exec()
 
 
@@ -346,7 +346,7 @@ class _DevicesPage(QWidget):
             return
         deviceRecordId = int(item.data(Qt.UserRole) or 0)
         if item.data(Qt.UserRole + 1):
-            MessageBox("无法撤销", "不能撤销当前正在使用的设备。", self).exec()
+            MessageBox("无法撤销", "不能撤销当前正在使用的设备。", self.window()).exec()
             return
         ok = QMessageBox.question(self, "撤销设备", "确认撤销该设备?它的 refresh_token 将立即失效。")
         if ok != QMessageBox.Yes:
@@ -354,12 +354,12 @@ class _DevicesPage(QWidget):
         try:
             result = getCloudAccount().revokeDevice(deviceRecordId)
         except CloudApiError as exc:
-            MessageBox("撤销失败", exc.message, self).exec()
+            MessageBox("撤销失败", exc.message, self.window()).exec()
             return
         MessageBox(
             "已撤销",
             f"该设备的 {result.get('revokedRefreshTokens', 0)} 个 refresh_token 已被撤销。",
-            self,
+            self.window(),
         ).exec()
         self.refresh()
         self.devicesChanged.emit()
