@@ -14,7 +14,7 @@ from typing import Optional
 from PySide6.QtCore import QThread, Signal
 
 from app.core.utils import logger, signalBus
-from app.core.utils.encryption import AESCipherGCM, deriveKey, hash256
+from app.core.utils.encryption import AESCipherGCM
 
 from .cloud_api import CloudApiError, CloudSession, getCloudApi
 
@@ -72,21 +72,25 @@ class CloudAuth:
         return self._sessionFile
 
     def _encryptionKey(self) -> bytes | None:
-        """从设备特征派生加密密钥(失败则不加密,只留本地可读)。"""
+        """从稳定机器身份特征派生会话加密密钥。"""
         try:
             from app.core.utils.device_id import generateOrLoadDeviceId, getDeviceIdentifier
 
             generateOrLoadDeviceId()
             device = getDeviceIdentifier()
-            combined = "|".join(
-                f"{k}:{v}" for k, v in sorted(device.deviceFeatures.items())
-            )
-            saltSource = combined
-            fixedSalt = hash256(saltSource).encode()[:32]
-            key, _ = deriveKey(combined, iterations=100000, keyLength=32, salt=fixedSalt)
-            return key
+            return device.deriveEncryptionKey()
         except Exception as exc:
             logger.debug(f"[CloudAuth] 设备特征不可用,会话将以明文存储: {exc}")
+            return None
+
+    def _legacyEncryptionKey(self) -> bytes | None:
+        """读取升级前由全部易变设备特征加密的会话文件。"""
+        try:
+            from app.core.utils.device_id import generateOrLoadDeviceId, getDeviceIdentifier
+
+            generateOrLoadDeviceId()
+            return getDeviceIdentifier().deriveLegacyEncryptionKey()
+        except Exception:
             return None
 
     def _saveSession(self) -> None:
@@ -109,12 +113,25 @@ class CloudAuth:
             path = self._getSessionFile()
             if not path.exists():
                 return False
-            raw = path.read_bytes().decode("utf-8")
-            key = self._encryptionKey()
-            if key is not None:
-                cipher = AESCipherGCM(key)
-                raw = cipher.decrypt(raw)
-            payload = json.loads(raw)
+            storedRaw = path.read_bytes().decode("utf-8")
+            payload = None
+            usedLegacyFormat = False
+            candidates = [
+                (self._encryptionKey(), False),
+                (self._legacyEncryptionKey(), True),
+            ]
+            for key, isLegacy in candidates:
+                if key is None:
+                    continue
+                try:
+                    payload = json.loads(AESCipherGCM(key).decrypt(storedRaw))
+                    usedLegacyFormat = isLegacy
+                    break
+                except Exception:
+                    continue
+            if payload is None:
+                payload = json.loads(storedRaw)
+                usedLegacyFormat = True
             if payload.get("__v") != SESSION_FILE_VERSION:
                 logger.warning("[CloudAuth] 会话文件版本不匹配,丢弃")
                 return False
@@ -131,6 +148,8 @@ class CloudAuth:
                 )
             )
             logger.info("[CloudAuth] 会话已恢复")
+            if usedLegacyFormat:
+                self._saveSession()
             return True
         except Exception:
             logger.exception("[CloudAuth] 加载会话失败")

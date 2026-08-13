@@ -47,7 +47,7 @@ from installer.frontend.core import (
     InstallWorker,
     buildInstallerArguments,
     defaultInstallDir,
-    parseProgressState,
+    readProgressState,
 )
 
 
@@ -135,6 +135,7 @@ class InstallerWindow(FramelessWindow):
         self._installFailed = False
         self._progressPath: Path | None = None
         self._logPath: Path | None = None
+        self._lastProgressPercent = 0
         self._installedDir = defaultInstallDir()
 
         self.setWindowTitle(f"安装 {APP_NAME}")
@@ -552,6 +553,7 @@ class InstallerWindow(FramelessWindow):
 
         self._installFailed = False
         self._isInstalling = True
+        self._lastProgressPercent = 1
         self._progressBar.setValue(1)
         self._progressStatusLabel.setText("等待管理员授权")
         self._progressDetailLabel.setText("请在 Windows 提示中选择“是”以继续")
@@ -569,12 +571,14 @@ class InstallerWindow(FramelessWindow):
     def _pollProgress(self) -> None:
         if self._progressPath is None or not self._progressPath.is_file():
             return
-        try:
-            rawState = self._progressPath.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+        progressState = readProgressState(self._progressPath)
+        if progressState is None:
             return
-        percent, statusText = parseProgressState(rawState)
-        self._progressBar.setValue(max(1, percent))
+        percent, statusText = progressState
+        if percent < self._lastProgressPercent:
+            return
+        self._lastProgressPercent = percent
+        self._progressBar.setValue(percent)
         self._progressStatusLabel.setText(statusText)
         self._progressDetailLabel.setText(f"安装进度 {percent}%")
 
@@ -582,6 +586,7 @@ class InstallerWindow(FramelessWindow):
         self._progressTimer.stop()
         self._isInstalling = False
         if exitCode == 0:
+            self._lastProgressPercent = 100
             self._progressBar.setValue(100)
             self._progressStatusLabel.setText("安装完成")
             self._progressDetailLabel.setText("Prismatica 已成功写入系统")

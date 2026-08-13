@@ -32,7 +32,7 @@ class CloudResource:
     def bootstrap(self) -> list[CloudResourceManifest]:
         """获取并严格校验后端资源清单。"""
         if not self._api.isLoggedIn():
-            raise CloudApiError("UNAUTHORIZED", "请先登录已订阅的 Prismatica 账号")
+            raise CloudApiError("UNAUTHORIZED", "请先登录 Prismatica 账号")
         payload = self._api.post(
             "/v1/resources/bootstrap",
             body={},

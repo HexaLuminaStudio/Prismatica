@@ -29,6 +29,7 @@ from app.view.widgets.prismatica_theme import ACCENT
 # 切换器中的特殊项数据(用字符串 sentinel 与正常项目 id 区分)
 _SENTINEL_MANAGE = "__manage__"
 _SENTINEL_NEW = "__new__"
+_SENTINEL_SEPARATOR = "__separator__"
 _SENTINEL_NO_ACTIVE = "__no_active__"  # 无激活项目时的占位项,不可选
 
 # 「未选择项目」占位文本(同时用作 ComboBox 当前显示文本)
@@ -68,6 +69,10 @@ class ProjectSwitcher(QWidget):
         self._comboBox.setMinimumWidth(180)
         self._comboBox.setMaximumWidth(220)
         self._comboBox.setToolTip("切换当前研究项目")
+        self._comboBox.setAccessibleName("当前研究项目")
+        self._comboBox.setAccessibleDescription(
+            "切换研究项目，或进入项目管理和新建项目"
+        )
         layout.addWidget(self._comboBox)
 
     # ------------------------------------------------------------------
@@ -121,6 +126,9 @@ class ProjectSwitcher(QWidget):
                     self._comboBox.addItem(
                         _PLACEHOLDER_NO_ACTIVE, userData=_SENTINEL_NO_ACTIVE
                     )
+                    self._comboBox.setItemEnabled(
+                        self._comboBox.count() - 1, False
+                    )
                 for p in visibleProjects:
                     self._comboBox.addItem(p.name, userData=p.id)
                 # 当前激活项目的显示文本
@@ -130,7 +138,12 @@ class ProjectSwitcher(QWidget):
                     else _PLACEHOLDER_NO_ACTIVE
                 )
                 # 末尾追加两个特殊入口
-                self._comboBox.addItem("──────────────", userData="__sep__")
+                self._comboBox.addItem(
+                    "──────────────", userData=_SENTINEL_SEPARATOR
+                )
+                self._comboBox.setItemEnabled(
+                    self._comboBox.count() - 1, False
+                )
                 self._comboItemManage = self._comboBox.addItem(
                     "项目管理…",
                     icon=FluentIcon.FOLDER,
@@ -174,10 +187,12 @@ class ProjectSwitcher(QWidget):
             data = self._comboBox.itemData(index)
         except Exception:
             data = None
-        if data is None or data == "__sep__":
+        if data is None:
             return
-        if data == _SENTINEL_NO_ACTIVE:
-            # 「未选择项目」占位项,不可选,直接忽略
+        if data in (_SENTINEL_SEPARATOR, _SENTINEL_NO_ACTIVE):
+            # 禁用项理论上不会触发选择；这里仍恢复真实状态，防止外部代码
+            # 或控件行为变化把分隔线 / 占位项设成标题栏当前值。
+            self.refresh()
             return
         if data == _SENTINEL_MANAGE:
             # 「项目管理」入口:发信号后保持当前选择(避免下拉空白)

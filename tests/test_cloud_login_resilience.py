@@ -35,6 +35,21 @@ class _HttpClient:
         return _Response()
 
 
+def testCloudApiNeverFallsBackToRandomDeviceId(monkeypatch) -> None:
+    from app.core.utils import device_id as deviceIdModule
+
+    monkeypatch.setattr(
+        deviceIdModule,
+        "generateOrLoadDeviceId",
+        lambda: (_ for _ in ()).throw(RuntimeError("无法持久化")),
+    )
+
+    with pytest.raises(cloudApiModule.CloudApiError) as captured:
+        cloudApiModule.CloudApi()._deviceId()
+
+    assert captured.value.code == "DEVICE_ID_UNAVAILABLE"
+
+
 def testCloudApiDefaultsToDirectThreadLocalSession(monkeypatch) -> None:
     clients = []
 

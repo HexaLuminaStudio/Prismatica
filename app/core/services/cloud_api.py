@@ -210,14 +210,17 @@ class CloudApi:
             del self._httpClients.client
 
     def _deviceId(self) -> str:
-        # device_id 在项目根目录的 device.bin 中持久化
+        # device_id 在用户数据目录的 device.bin 中稳定持久化。
         try:
             from app.core.utils.device_id import generateOrLoadDeviceId
 
             return generateOrLoadDeviceId()
-        except Exception:
-            # 测试/异常环境退化为随机 ID(仍能让请求通过;登录会被后端按设备绑)
-            return f"dev-{uuid.uuid4().hex[:16]}"
+        except Exception as exc:
+            # 绝不能按请求随机生成设备码，否则同一台机器会持续占用新的设备名额。
+            raise CloudApiError(
+                "DEVICE_ID_UNAVAILABLE",
+                "无法读取稳定设备标识，请检查本机用户数据目录权限后重试",
+            ) from exc
 
     def _headers(
         self,

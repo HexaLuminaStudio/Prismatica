@@ -147,19 +147,18 @@ begin
     Exit;
   LastProgressPercent := Percent;
   if Percent < 8 then
-    StatusText := '正在准备程序文件'
+    StatusText := 'preparing-files'
   else if Percent < 94 then
-    StatusText := '正在安装 Prismatica'
+    StatusText := 'installing'
   else
-    StatusText := '正在完成系统配置';
+    StatusText := 'finishing';
   WriteProgressState(Percent, StatusText);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
-    WriteProgressState(1, '正在准备安装')
+    WriteProgressState(1, 'preparing')
   else if CurStep = ssPostInstall then
-    WriteProgressState(100, '安装完成');
+    WriteProgressState(100, 'completed');
 end;
-

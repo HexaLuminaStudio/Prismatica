@@ -262,107 +262,12 @@ if qconfig.get(cfg.FirstLaunch):
     except Exception as _guideErr:
         log.exception(f"[Main] 引导窗口初始化失败,跳过引导: {_guideErr}")
 
-# ============================================================
-# HSK 作文数据库启动准备
-# - 深度校验、缺失下载、下载进度与复检全部留在启动窗口内
-# - 校验失败时可重试或暂时继续，不再弹出独立窗口或提供退出选项
-# - 必须早于 MainWindow 构造，避免业务层先创建空数据库
-# ============================================================
-from app.core.services.startup_database_service import (
-    StartupDatabaseService,
-    StartupResourcePreparationThread,
-)
-
-_databaseService = StartupDatabaseService()
-_resourcePreparationThread = None
-_mainWindowLoadingStarted = False
-
-
-def _startMainWindowLoading() -> None:
-    """资源流程结束后，只启动一次主窗口构造。"""
-    global _mainWindowLoadingStarted
-    if _mainWindowLoadingStarted:
-        return
-    _mainWindowLoadingStarted = True
-    _splashWindow.clearRecovery()
-    _splashWindow.setProgress(57, "正在准备主界面…")
-    _splashWindow.setDetail("正在加载界面、服务与项目状态")
-    _splashLoader.start()
-
-
-def _onResourceProgress(progress: int, stage: str, detail: str) -> None:
-    _splashWindow.setProgress(progress, stage)
-    _splashWindow.setDetail(detail)
-
-
-def _onResourcePreparationFinished(results) -> None:
-    totalRows = sum(result.rowCount for result in results)
-    log.info(
-        "[Main] HSK 作文资源启动校验完成，{} 个数据库，共 {} 条数据",
-        len(results),
-        totalRows,
-    )
-    _startMainWindowLoading()
-
-
-def _onResourcePreparationFailed(code: str, message: str) -> None:
-    errorMessage = message or "无法校验或下载 HSK 作文资源"
-    log.warning("[Main] HSK 作文资源启动准备失败: {}", errorMessage)
-    if code == "RESOURCE_SUBSCRIPTION_REQUIRED":
-        _splashWindow.showRecovery(
-            "当前账号没有可用于下载 HSK 作文资源的有效订阅。你可以直接跳过，"
-            "但在资源修复完成前，相关 HSK 作文功能可能无法使用。",
-            stage="当前订阅暂无资源下载权限",
-            continueText="直接跳过",
-            retryText="重新验证",
-        )
-        return
-    _splashWindow.showRecovery(
-        f"{errorMessage}。请检查网络后重新尝试，或暂时继续启动。"
-    )
-
-
-def _onResourcePreparationThreadFinished() -> None:
-    global _resourcePreparationThread
-    thread = _resourcePreparationThread
-    _resourcePreparationThread = None
-    if thread is not None:
-        thread.deleteLater()
-
-
-def _startResourcePreparation() -> None:
-    """在后台执行启动资源准备，并将全部状态映射到启动窗口。"""
-    global _resourcePreparationThread
-    if _mainWindowLoadingStarted:
-        return
-    if _resourcePreparationThread is not None:
-        if _resourcePreparationThread.isRunning():
-            return
-        _resourcePreparationThread.deleteLater()
-
-    _splashWindow.clearRecovery()
-    _splashWindow.setProgress(27, "正在检查 HSK 作文资源…")
-    _splashWindow.setDetail("检查数据库文件、SQLite 完整性与数据记录")
-    _resourcePreparationThread = StartupResourcePreparationThread(
-        _databaseService,
-        app,
-    )
-    _resourcePreparationThread.progressChanged.connect(_onResourceProgress)
-    _resourcePreparationThread.preparationFinished.connect(
-        _onResourcePreparationFinished
-    )
-    _resourcePreparationThread.preparationFailed.connect(
-        _onResourcePreparationFailed
-    )
-    _resourcePreparationThread.finished.connect(
-        _onResourcePreparationThreadFinished
-    )
-    _resourcePreparationThread.start()
-
-
-_splashWindow.retryRequested.connect(_startResourcePreparation)
-_splashWindow.continueRequested.connect(_startMainWindowLoading)
-_startResourcePreparation()
+# 启动页不检查、不鉴权也不下载数据库资源，直接加载主界面。
+# 用户可在设置页主动执行资源检查与修复。
+_splashWindow.clearRecovery()
+_splashWindow.setProgress(27, "正在加载 Prismatica…")
+_splashWindow.setDetail("正在准备界面、服务与项目状态")
+_splashLoader.start()
 
 # 应用程序退出处理
 result = app.exec()

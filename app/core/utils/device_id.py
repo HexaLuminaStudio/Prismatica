@@ -20,6 +20,7 @@ _IS_WINDOWS = sys.platform.startswith("win")
 # Windows: 隐藏子进程控制台窗口,防止 GUI 进程启动 wmic 时弹出 conhost 终端
 _CREATE_NO_WINDOW = 0x08000000
 _deviceIdentifierLock = threading.RLock()
+_STORAGE_VERSION = 2
 
 
 def _runHidden(cmd, timeout=5):
@@ -94,6 +95,45 @@ class DeviceIdentifier:
                 type(exc).__name__,
             )
             return ""
+
+    def _collectMachineId(self) -> str:
+        """采集不受 IP、VPN、网卡顺序影响的操作系统安装标识。"""
+        try:
+            systemName = platform.system()
+            if systemName == "Windows":
+                import winreg
+
+                access = winreg.KEY_READ
+                if hasattr(winreg, "KEY_WOW64_64KEY"):
+                    access |= winreg.KEY_WOW64_64KEY
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Cryptography",
+                    0,
+                    access,
+                ) as key:
+                    value, _ = winreg.QueryValueEx(key, "MachineGuid")
+                    return str(value).strip().lower()
+            if systemName == "Linux":
+                for path in (Path("/etc/machine-id"), Path("/var/lib/dbus/machine-id")):
+                    if path.exists():
+                        value = path.read_text(encoding="utf-8").strip()
+                        if value:
+                            return value.lower()
+            if systemName == "Darwin":
+                result = _runHidden(
+                    ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                    timeout=5,
+                )
+                for line in result.stdout.splitlines():
+                    if "IOPlatformUUID" in line and "=" in line:
+                        return line.split("=", 1)[1].strip().strip('"').lower()
+        except Exception as exc:
+            logger.debug(
+                "[DeviceID] 稳定机器标识采集失败: errorType={}",
+                type(exc).__name__,
+            )
+        return ""
 
     def _collectMotherboardSerial(self) -> str:
         """
@@ -206,6 +246,7 @@ class DeviceIdentifier:
         后续激活会被错误地批量匹配到同一设备,客服侧难以定位。
         """
         features = {
+            "machineId": self._collectMachineId(),
             "mac": self._collectMacAddress(),
             "motherboard": self._collectMotherboardSerial(),
             "disk": self._collectDiskSerial(),
@@ -239,6 +280,45 @@ class DeviceIdentifier:
         )
         return self.deviceFeatures
 
+    def _identityFeatureItems(self) -> list[tuple[str, str]]:
+        """返回只包含稳定硬件/系统信息的设备身份特征。"""
+        machineId = str(self.deviceFeatures.get("machineId") or "").strip().lower()
+        if machineId:
+            return [("machineId", machineId)]
+
+        fallback = [
+            (key, str(self.deviceFeatures.get(key) or "").strip())
+            for key in ("motherboard", "disk")
+            if self.deviceFeatures.get(key)
+        ]
+        if len(fallback) >= 2:
+            return sorted(fallback)
+        raise RuntimeError("无法取得稳定机器标识，设备身份不会使用易变的网络信息降级生成")
+
+    def _legacyFeatureItems(self) -> list[tuple[str, str]]:
+        return sorted(
+            (key, str(value))
+            for key, value in self.deviceFeatures.items()
+            if key != "machineId" and value
+        )
+
+    @staticmethod
+    def _hashFeatureItems(featureItems: list[tuple[str, str]]) -> str:
+        combined = "|".join(f"{key}:{value}" for key, value in featureItems)
+        return hash256(combined)
+
+    @staticmethod
+    def _deriveFeatureKey(featureItems: list[tuple[str, str]]) -> bytes:
+        combined = "|".join(f"{key}:{value}" for key, value in featureItems)
+        fixedSalt = hash256(combined).encode()[:32]
+        key, _ = deriveKey(
+            combined,
+            iterations=100000,
+            keyLength=32,
+            salt=fixedSalt,
+        )
+        return key
+
     def generateDeviceId(self) -> str:
         """
         生成设备唯一标识（DFID）
@@ -249,12 +329,8 @@ class DeviceIdentifier:
         if not self.deviceFeatures:
             self.collectDeviceFeatures()
 
-        # 按键排序确保一致性
-        sortedFeatures = sorted(self.deviceFeatures.items())
-        combined = "|".join(f"{k}:{v}" for k, v in sortedFeatures)
-
-        # SHA-256哈希
-        deviceId = hash256(combined)
+        # 设备码不能受 IP、VPN、MAC 或系统版本变化影响。
+        deviceId = self._hashFeatureItems(self._identityFeatureItems())
         self.deviceId = deviceId
         return deviceId
 
@@ -267,18 +343,13 @@ class DeviceIdentifier:
         if not self.deviceFeatures:
             self.collectDeviceFeatures()
 
-        # 组合设备特征作为密码
-        sortedFeatures = sorted(self.deviceFeatures.items())
-        combined = "|".join(f"{k}:{v}" for k, v in sortedFeatures)
+        return self._deriveFeatureKey(self._identityFeatureItems())
 
-        # 使用固定的盐（基于设备特征的哈希）确保每次派生相同密钥
-        saltSource = "|".join(f"{k}:{v}" for k, v in sortedFeatures)
-        fixedSalt = hash256(saltSource).encode()[:32]
-
-        # 使用PBKDF2派生密钥（迭代100000次）
-        key, _ = deriveKey(combined, iterations=100000, keyLength=32, salt=fixedSalt)
-
-        return key
+    def deriveLegacyEncryptionKey(self) -> bytes:
+        """仅用于读取升级前由全部易变特征加密的本地文件。"""
+        if not self.deviceFeatures:
+            self.collectDeviceFeatures()
+        return self._deriveFeatureKey(self._legacyFeatureItems())
 
     def save(self, salt: bytes = None) -> bool:
         """
@@ -299,6 +370,7 @@ class DeviceIdentifier:
 
             # 准备存储数据
             storageData = {
+                "version": _STORAGE_VERSION,
                 "deviceId": self.deviceId,
                 "features": self.deviceFeatures,
                 "platform": platform.system(),
@@ -313,7 +385,10 @@ class DeviceIdentifier:
 
             # 保存到文件
             storagePath = self._getAppDataPath()
-            storagePath.write_bytes(encryptedData.encode("utf-8"))
+            storagePath.parent.mkdir(parents=True, exist_ok=True)
+            temporaryPath = storagePath.with_name(f"{storagePath.name}.tmp")
+            temporaryPath.write_bytes(encryptedData.encode("utf-8"))
+            temporaryPath.replace(storagePath)
 
             logger.info(
                 "[DeviceID] 设备标识已保存: storage={} featureCount={}",
@@ -345,34 +420,48 @@ class DeviceIdentifier:
             # 先采集当前设备特征用于派生密钥
             self.collectDeviceFeatures()
 
-            # 派生解密密钥
-            key = self.deriveEncryptionKey()
-
-            # 创建GCM解密器
-            self._cipher = AESCipherGCM(key)
-
-            # 解密数据
-            decryptedData = self._cipher.decrypt(encryptedData)
-
-            # 解析JSON
             import json
 
-            storageData = json.loads(decryptedData)
+            storageData = None
+            usedLegacyKey = False
+            for key, isLegacy in (
+                (self.deriveEncryptionKey(), False),
+                (self.deriveLegacyEncryptionKey(), True),
+            ):
+                try:
+                    self._cipher = AESCipherGCM(key)
+                    storageData = json.loads(self._cipher.decrypt(encryptedData))
+                    usedLegacyKey = isLegacy
+                    break
+                except Exception:
+                    continue
 
-            # 验证设备ID一致性
-            currentDeviceId = self.generateDeviceId()
-            if storageData.get("deviceId") == currentDeviceId:
-                self.deviceId = storageData["deviceId"]
-                self.deviceFeatures = storageData.get("features", {})
-                logger.info(
-                    "[DeviceID] 已加载并验证本地设备标识: featureCount={}",
-                    len(self.deviceFeatures),
-                )
-                return True
-            else:
-                # 设备特征不匹配，可能是硬件变更
-                logger.warning("[DeviceID] 设备特征已变更,本地设备标识失效")
+            if not isinstance(storageData, dict):
+                logger.warning("[DeviceID] 本地设备标识无法解密或格式无效")
                 return False
+
+            storedDeviceId = str(storageData.get("deviceId") or "").strip()
+            if not storedDeviceId or len(storedDeviceId) > 64:
+                logger.warning("[DeviceID] 本地设备标识内容无效")
+                return False
+
+            if int(storageData.get("version", 1) or 1) < _STORAGE_VERSION:
+                legacyDeviceId = self._hashFeatureItems(self._legacyFeatureItems())
+                if storedDeviceId != legacyDeviceId:
+                    logger.warning("[DeviceID] 旧版设备标识校验失败")
+                    return False
+                usedLegacyKey = True
+
+            # 保留服务端已识别的旧 deviceId，只把本地密钥迁移到稳定机器标识。
+            self.deviceId = storedDeviceId
+            if usedLegacyKey and not self.save():
+                logger.warning("[DeviceID] 旧版设备标识迁移失败，将在下次启动重试")
+            logger.info(
+                "[DeviceID] 已加载本地设备标识: featureCount={} migrated={}",
+                len(self.deviceFeatures),
+                usedLegacyKey,
+            )
+            return True
 
         except Exception:
             logger.exception("[DeviceID] 加载或解密本地设备标识失败")
@@ -387,9 +476,8 @@ class DeviceIdentifier:
         if not self.deviceId:
             return self.load()
 
-        # 重新生成并比对
-        currentId = self.generateDeviceId()
-        return currentId == self.deviceId
+        # v2 设备码可沿用服务端已识别的旧值；稳定密钥已承担本机绑定校验。
+        return bool(self.deviceId)
 
     def reset(self) -> bool:
         """
@@ -462,6 +550,8 @@ def generateOrLoadDeviceId() -> str:
         saved = device.save()
         if not saved:
             logger.error("[DeviceID] 新设备标识已生成,但持久化失败")
+            device.deviceId = None
+            raise RuntimeError("设备标识持久化失败，请检查用户数据目录权限")
 
         return deviceId
 

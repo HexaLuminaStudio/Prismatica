@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ctypes
+import locale
 import os
 import subprocess
 import sys
@@ -22,6 +23,13 @@ SW_SHOWNORMAL = 1
 WAIT_OBJECT_0 = 0
 INFINITE = 0xFFFFFFFF
 ERROR_CANCELLED = 1223
+PROGRESS_STATUS_TEXT = {
+    "preparing": "正在准备安装",
+    "preparing-files": "正在准备程序文件",
+    "installing": "正在安装 Prismatica",
+    "finishing": "正在完成系统配置",
+    "completed": "安装完成",
+}
 
 
 @dataclass(frozen=True)
@@ -85,7 +93,42 @@ def parseProgressState(rawState: str) -> tuple[int, str]:
         percent = 0
     if not separator or not statusText.strip():
         statusText = "正在写入程序文件"
-    return percent, statusText.strip()
+    normalizedStatus = statusText.strip()
+    return percent, PROGRESS_STATUS_TEXT.get(normalizedStatus, normalizedStatus)
+
+
+def decodeProgressData(rawData: bytes) -> str:
+    """解码 Inno 进度文件，并兼容旧版本使用的 Windows ANSI 编码。"""
+    if not rawData:
+        return ""
+    if rawData.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return rawData.decode("utf-16")
+
+    encodings = ["utf-8-sig"]
+    if os.name == "nt":
+        encodings.append("mbcs")
+    encodings.extend((locale.getpreferredencoding(False), "gb18030"))
+    for encoding in dict.fromkeys(encodings):
+        try:
+            return rawData.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return rawData.decode("utf-8", errors="replace")
+
+
+def readProgressState(progressPath: Path) -> tuple[int, str] | None:
+    """读取一份完整进度快照；文件并发写入时留待下一次轮询。"""
+    try:
+        rawState = decodeProgressData(progressPath.read_bytes()).strip()
+    except (OSError, UnicodeError):
+        return None
+    if not rawState:
+        return None
+
+    percentText, separator, statusText = rawState.partition("|")
+    if not separator or not percentText.isdecimal() or not statusText.strip():
+        return None
+    return parseProgressState(rawState)
 
 
 class ShellExecuteInfoW(ctypes.Structure):
@@ -192,8 +235,9 @@ __all__ = [
     "InstallWorker",
     "buildInstallerArguments",
     "bundledPath",
+    "decodeProgressData",
     "defaultInstallDir",
     "parseProgressState",
+    "readProgressState",
     "runElevatedAndWait",
 ]
-

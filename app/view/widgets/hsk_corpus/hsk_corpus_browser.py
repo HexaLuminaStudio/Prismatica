@@ -25,7 +25,7 @@ HSK 语料检索主面板(现代化简洁 UI · 多条件组合检索)
 每行筛选条件:
     - 国籍        → ComboBox(从 constant.hskCountryDict 取)
     - 证书级别    → ComboBox(A / B / C / 无)
-    - 作文题目    → 文本(关键词模糊)
+    - 作文题目    → ComboBox(从 constant.hskEssayList 取)
     - 分数列(5 列) → SpinBox 区间输入(无下界/无上界勾选)
 
 条件之间为 AND 关系(全部满足才命中)。
@@ -90,7 +90,7 @@ from app.core.services.hsk_corpus_service import HskCorpusService
 from app.view.widgets.prismatica_theme import pageBackgroundColor
 from app.core.services.hsk_local_corpus_service import hskLocalCorpusService
 from app.core.utils.data_paths import HSK_CORPUS_DB
-from app.core.utils.constant import hskCountryDict
+from app.core.utils.constant import hskCountryDict, hskEssayList
 from app.view.widgets.freq_analyzer.worker_utils import WorkerMixin
 from app.view.widgets.hsk_corpus.hsk_corpus_model import HskCorpusModel
 from app.view.widgets.hsk_corpus.hsk_corpus_detail_drawer import (
@@ -133,7 +133,7 @@ BOUND_HSK_DB_PATH = HSK_CORPUS_DB
 class _ConditionRow(QWidget):
     """单条筛选条件行。
 
-    内部根据当前列类型显示不同的输入区(关键词 / 国籍 / 证书级别 / 分数区间)。
+    内部根据当前列类型显示不同的输入区(关键词 / 作文题目 / 国籍 / 证书级别 / 分数区间)。
     切列时,旧输入区被销毁,新输入区被创建。
 
     Signals:
@@ -146,6 +146,7 @@ class _ConditionRow(QWidget):
 
     # ----- 列类型枚举 -----
     COL_TYPE_TEXT = "text"
+    COL_TYPE_ESSAY = "essay"
     COL_TYPE_COUNTRY = "country"
     COL_TYPE_CERT = "cert"
     COL_TYPE_SCORE = "score"
@@ -168,6 +169,7 @@ class _ConditionRow(QWidget):
         self.keywordEdit: Optional[LineEdit] = None
         # 国籍已改为 LineEdit,与 keywordEdit 共用同一控件引用
         self.countryNames: List[str] = []
+        self.essayCombo: Optional[ComboBox] = None
         self.certCombo: Optional[ComboBox] = None
         self.scoreMinBox: Optional[CompactSpinBox] = None
         self.scoreMaxBox: Optional[CompactSpinBox] = None
@@ -233,6 +235,8 @@ class _ConditionRow(QWidget):
     # 列类型判定
     # ------------------------------------------------------------------
     def _getColumnType(self, col: str) -> str:
+        if col == "作文题目":
+            return self.COL_TYPE_ESSAY
         if col == "国籍":
             return self.COL_TYPE_COUNTRY
         if col == "证书级别":
@@ -275,6 +279,7 @@ class _ConditionRow(QWidget):
         # 清空引用
         self.keywordEdit = None
         self.countryNames = []
+        self.essayCombo = None
         self.certCombo = None
         self.scoreMinBox = None
         self.scoreMaxBox = None
@@ -292,6 +297,12 @@ class _ConditionRow(QWidget):
             self.keywordEdit.setClearButtonEnabled(True)
             self.keywordEdit.setAccessibleName(f"{self._currentColumn}关键词")
             layout.addWidget(self.keywordEdit)
+        elif colType == self.COL_TYPE_ESSAY:
+            self.essayCombo = ComboBox(self._inputContainer)
+            self.essayCombo.addItems(hskEssayList)
+            self.essayCombo.setAccessibleName("作文题目")
+            self.essayCombo.setAccessibleDescription("从软件内置的 HSK 作文题目中选择")
+            layout.addWidget(self.essayCombo)
         elif colType == self.COL_TYPE_COUNTRY:
             # 国籍改为自由文本输入(模糊匹配)
             # placeholder 展示前若干国家名作为可输入提示,但不限制选项
@@ -396,11 +407,15 @@ class _ConditionRow(QWidget):
                 "min": lo,
                 "max": hi,
             }
-        # 文本 / 国籍 / 证书级别 → 都用 keyword 字段(LIKE 模糊)
+        # 文本 / 作文题目 / 国籍 / 证书级别 → 都用 keyword 字段(LIKE 模糊)
         # 国籍已改为自由文本(LineEdit),走 keywordEdit 读取;
-        # 证书级别保留 ComboBox 选项。
+        # 作文题目与证书级别使用 ComboBox 选项。
         if ctype == self.COL_TYPE_CERT and self.certCombo:
             keyword = self.certCombo.currentText().strip()
+        elif ctype == self.COL_TYPE_ESSAY and self.essayCombo:
+            keyword = self.essayCombo.currentText().strip()
+            if keyword == "不限":
+                return None
         elif self.keywordEdit:
             keyword = (self.keywordEdit.text() or "").strip()
         else:
@@ -410,7 +425,7 @@ class _ConditionRow(QWidget):
         if not keyword:
             return None  # 空条件跳过
         return {
-            "type": ctype,
+            "type": self.COL_TYPE_TEXT if ctype == self.COL_TYPE_ESSAY else ctype,
             "column": col,
             "keyword": keyword,
         }

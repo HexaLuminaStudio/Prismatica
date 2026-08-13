@@ -417,12 +417,8 @@ class ResourceVerificationDialog(MessageBoxBase):
             self._downloadThread.quit()
 
     @Slot(str, str)
-    def _onDownloadFailed(self, code: str, message: str) -> None:
-        self._state = (
-            "subscriptionRequired"
-            if code == "RESOURCE_SUBSCRIPTION_REQUIRED"
-            else "repairFailed"
-        )
+    def _onDownloadFailed(self, _code: str, message: str) -> None:
+        self._state = "repairFailed"
         self._lastRepairError = message or "资源下载失败，请稍后重试。"
         if self._downloadThread is not None:
             self._downloadThread.quit()
@@ -449,32 +445,18 @@ class ResourceVerificationDialog(MessageBoxBase):
             return
 
         self._state = "needsRepair"
-        isSubscriptionRequired = state == "subscriptionRequired"
-        if isSubscriptionRequired:
-            self.overviewLabel.setText("当前订阅暂无资源下载权限")
-            self.progressDetailLabel.setText(
-                "有效的试用、Pro 或 Team 订阅均可下载。请开通订阅后重新验证权限。"
-            )
-        else:
-            self.overviewLabel.setText(
-                getattr(self, "_lastRepairError", "资源修复失败。")
-            )
+        self.overviewLabel.setText(
+            getattr(self, "_lastRepairError", "资源修复失败。")
+        )
         self.progressBar.setValue(0)
-        self.progressBar.setFormat(
-            "等待订阅授权" if isSubscriptionRequired else "修复失败"
-        )
+        self.progressBar.setFormat("修复失败")
         self.yesButton.setEnabled(True)
-        self.yesButton.setText(
-            "重新验证权限" if isSubscriptionRequired else "重试修复"
-        )
+        self.yesButton.setText("重试修复")
         self.cancelButton.setText("关闭")
         for resource in self._invalidResources:
             row = self._rows.get(resource.key)
             if row is not None:
-                if isSubscriptionRequired:
-                    row.setState("error", "需要订阅", "开通后可重新下载")
-                else:
-                    row.setState("error", "修复失败", "请检查网络后重试")
+                row.setState("error", "修复失败", "请检查网络后重试")
 
     def validate(self) -> bool:
         """拦截主按钮，将校验与修复留在同一个 MessageBoxBase 内。"""
