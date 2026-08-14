@@ -6,6 +6,13 @@
 
 from .ai_insight_service import AiInsightService
 from .batch_apply_service import BatchApplyService, BatchItem, batchApplyService
+from .bias_document_service import (
+    BIAS_TEXT_COLUMN,
+    SUPPORTED_BIAS_SOURCE_EXTENSIONS,
+    BiasDocumentLoadError,
+    BiasDocumentService,
+    biasDocumentService,
+)
 from .chat_service import ChatService, LLMThread
 from .cloud_account import CloudAccount, getCloudAccount
 from .cloud_api import CloudApi, CloudApiError, CloudSession, getCloudApi
@@ -63,6 +70,11 @@ __all__ = [
     "BatchApplyService",
     "BatchItem",
     "batchApplyService",
+    "BIAS_TEXT_COLUMN",
+    "SUPPORTED_BIAS_SOURCE_EXTENSIONS",
+    "BiasDocumentLoadError",
+    "BiasDocumentService",
+    "biasDocumentService",
     "CloudApi",
     "CloudApiError",
     "CloudSession",

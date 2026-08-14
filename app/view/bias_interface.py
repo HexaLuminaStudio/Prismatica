@@ -8,7 +8,11 @@ import io
 
 import numpy as np
 import pandas as pd
-from app.core.services import beginPaidAnalysisExport
+from app.core.services import (
+    BIAS_TEXT_COLUMN,
+    biasDocumentService,
+    beginPaidAnalysisExport,
+)
 from app.core.services.association_rule_service import mineAssociationRules
 from app.core.utils import logger
 from PySide6.QtCore import Qt, QThread, Signal, QSize
@@ -280,49 +284,25 @@ class BiasEmptyState(QWidget):
 
 
 class FileLoaderThread(QThread):
-    """文件加载线程"""
+    """偏误分析文件加载线程。"""
 
     progress = Signal(int, int, str, float)
     fileLoaded = Signal(str, object, int)
     error = Signal(str)
     finished = Signal()
 
-    def __init__(self, filePaths, chunkSize: int = 20000):
+    def __init__(self, filePaths, documentService=None):
         super().__init__()
         self.filePaths = filePaths
-        self.chunkSize = chunkSize
+        self.documentService = documentService or biasDocumentService
         self._isCanceled = False
 
     def cancel(self):
         self._isCanceled = True
 
     def _loadFile(self, filePath: str) -> tuple:
-        """加载文件"""
-        import openpyxl
-
-        try:
-            df = pd.read_excel(
-                filePath,
-                engine="openpyxl",
-                header=0,
-                dtype=str,
-                na_filter=False,
-            )
-            return df, len(df)
-        except Exception as e:
-            logger.warning(f"[Bias] 降级到 openpyxl: {e}")
-            wb = openpyxl.load_workbook(filePath, read_only=True, data_only=True)
-            sheet = wb.worksheets[0]
-            rows = list(sheet.values)
-            wb.close()
-
-            if not rows:
-                return pd.DataFrame(), 0
-
-            columns = rows[0]
-            dataRows = rows[1:]
-            df = pd.DataFrame(dataRows, columns=columns)
-            return df, len(df)
+        """通过服务层加载并标准化文件。"""
+        return self.documentService.loadFile(filePath)
 
     def run(self):
         totalFiles = len(self.filePaths)
@@ -775,7 +755,7 @@ class ColumnConfigDialog(MessageBoxBase):
 
         # 说明
         hintLabel = CaptionLabel(
-            "为「等级」「国籍」分别指定 Excel 表头列。\n"
+            "为「等级」「国籍」分别指定表格字段。\n"
             "未设置时将根据列名自动识别（包含 level/hsk/等级 等关键词）。",
             self,
         )
@@ -1341,7 +1321,7 @@ class AssociationRulesDialog(MessageBoxBase):
         paramLayout.setColumnStretch(1, 1)
 
         self.methodLabel = CaptionLabel(
-            "句子级事务(每个有效 Excel 行/句子一个事务,含零命中事务) · "
+            "句子级事务(每个有效表格行或文档段落一个事务,含零命中事务) · "
             "方向规则族单侧 Fisher 精确检验 · Holm 校正 α=0.05 · 仅保留提升度 > 1。"
             "同一作者或篇章内句子可能相关，结果用于探索而非因果推断。",
             self,
@@ -2120,6 +2100,7 @@ class BiasInterface(QWidget):
         self.dfs = {}
         self.loadThread = None
         self._pendingFileCount = 0
+        self._failedFileCount = 0
         self._isAnalysisRunning = False
         self.selectedColumn = None
         self.levelColumn = None
@@ -2195,13 +2176,15 @@ class BiasInterface(QWidget):
         conditionTitle = SubtitleLabel("分析条件", self.conditionCard)
         conditionLayout.addWidget(conditionTitle)
 
-        self.chooseFileBtn = PushButton("选择 Excel", self.conditionCard)
+        self.chooseFileBtn = PushButton("选择文件", self.conditionCard)
         self.chooseFileBtn.setIcon(FluentIcon.FOLDER)
+        self.chooseFileBtn.setAccessibleName("选择偏误分析文件")
+        self.chooseFileBtn.setToolTip("支持 XLSX、TXT、DOCX 和 DOC")
         self.chooseFileBtn.clicked.connect(self._onChooseFile)
         conditionLayout.addWidget(self.chooseFileBtn)
 
         self.sourceStatusLabel = CaptionLabel(
-            "尚未加载 Excel 文件",
+            "尚未加载文件 · 支持 XLSX、TXT、DOCX、DOC",
             self.conditionCard,
         )
         self.sourceStatusLabel.setWordWrap(True)
@@ -2391,7 +2374,7 @@ class BiasInterface(QWidget):
         self.detailStack = QStackedWidget(detailPage)
         self.detailEmptyState = BiasEmptyState(
             "等待分析",
-            "选择 Excel 文件、统计列和至少一种偏误类型后开始分析。",
+            "选择 XLSX、TXT 或 Word 文件、分析字段和至少一种偏误类型后开始分析。",
             ":app/icons/Check.svg",
             self.detailStack,
         )
@@ -2764,7 +2747,7 @@ class BiasInterface(QWidget):
             self._showResultMessage(
                 "heatmap",
                 "暂无热力图数据",
-                "请确认 Excel 中存在等级或国籍列，也可以通过“配置”手动指定。",
+                "热力图需要 Excel 中的等级或国籍字段；TXT 与 Word 文档仍可进行偏误明细、计数和关联分析。",
             )
             return
 
@@ -2835,9 +2818,10 @@ class BiasInterface(QWidget):
         """选择一个或多个文件，并根据数量自动确定处理模式。"""
         files, _ = QFileDialog.getOpenFileNames(
             self,
-            "选择一个或多个 Excel 文件",
+            "选择一个或多个偏误分析文件",
             "",
-            "Excel Files (*.xlsx)",
+            "支持的文件 (*.xlsx *.txt *.docx *.doc);;"
+            "Excel (*.xlsx);;TXT 文本 (*.txt);;Word 文档 (*.docx *.doc)",
         )
         if not files:
             return
@@ -2853,7 +2837,8 @@ class BiasInterface(QWidget):
 
         self.chooseFileBtn.setEnabled(False)
         self._pendingFileCount = len(filePaths)
-        self.sourceStatusLabel.setText(f"正在加载 {len(filePaths)} 个 Excel 文件…")
+        self._failedFileCount = 0
+        self.sourceStatusLabel.setText(f"正在加载 {len(filePaths)} 个文件…")
         self.statusLabel.setText("正在读取数据，请稍候")
 
         self.loadThread = FileLoaderThread(filePaths)
@@ -2875,12 +2860,13 @@ class BiasInterface(QWidget):
         totalRowsLoaded = sum(len(dataFrame) for dataFrame in self.dfs.values())
         modeLabel = "多文件" if self._isMultiFileMode() else "单文件"
         self.sourceStatusLabel.setText(
-            f"{modeLabel} · {len(self.filesList)} 个文件 · {totalRowsLoaded:,} 行"
+            f"{modeLabel} · {len(self.filesList)} 个文件 · {totalRowsLoaded:,} 条文本"
         )
 
     def _onError(self, errMsg: str):
+        self._failedFileCount += 1
         InfoBar.error(
-            "错误",
+            "文件读取失败",
             errMsg,
             Qt.Orientation.Horizontal,
             True,
@@ -2893,13 +2879,23 @@ class BiasInterface(QWidget):
         self.loadThread = None
         self._pendingFileCount = 0
         self.chooseFileBtn.setEnabled(True)
+        self._refreshAnalyzeState()
+
+        if not self.filesList:
+            self.statusLabel.setText("没有成功加载文件，请检查格式或文件内容")
+            self.sourceStatusLabel.setText("未加载成功 · 支持 XLSX、TXT、DOCX、DOC")
+            self.chooseFileBtn.setText("选择文件")
+            return
+
         self.statusLabel.setText("数据已就绪，请选择偏误类型后开始分析")
         self.chooseFileBtn.setText("重新选择")
-        self._refreshAnalyzeState()
         modeLabel = "多文件" if self._isMultiFileMode() else "单文件"
+        failureText = (
+            f" · {self._failedFileCount} 个失败" if self._failedFileCount else ""
+        )
         InfoBar.success(
             "加载成功",
-            f"已自动识别为{modeLabel}模式 · {len(self.filesList)} 个文件",
+            f"已自动识别为{modeLabel}模式 · {len(self.filesList)} 个文件{failureText}",
             Qt.Orientation.Horizontal,
             True,
             2000,
@@ -2915,6 +2911,11 @@ class BiasInterface(QWidget):
             self.columnConfigBtn.setEnabled(False)
             self._refreshAnalyzeState()
             return
+
+        hasExcelSource = any(
+            dataFrame.attrs.get("sourceKind") == "excel"
+            for dataFrame in self.dfs.values()
+        )
 
         if self._isMultiFileMode():
             columnSets = [set(df.columns) for df in self.dfs.values()]
@@ -2935,7 +2936,7 @@ class BiasInterface(QWidget):
             self.columnCombobox.clear()
             self.columnCombobox.addItems(commonColumns)
             self.columnCombobox.setEnabled(True)
-            self.columnConfigBtn.setEnabled(True)
+            self.columnConfigBtn.setEnabled(hasExcelSource)
         else:
             if self.filesList:
                 lastFile = self.filesList[-1]
@@ -2944,7 +2945,11 @@ class BiasInterface(QWidget):
                     self.columnCombobox.clear()
                     self.columnCombobox.addItems(columns)
                     self.columnCombobox.setEnabled(True)
-                    self.columnConfigBtn.setEnabled(True)
+                    self.columnConfigBtn.setEnabled(hasExcelSource)
+
+        if self.columnCombobox.findText(BIAS_TEXT_COLUMN) >= 0:
+            self.columnCombobox.setCurrentText(BIAS_TEXT_COLUMN)
+        self.selectedColumn = self.columnCombobox.currentText() or None
 
         # 自动识别等级/国籍列（用于热力图）
         self._detectGroupColumns()
@@ -2999,10 +3004,25 @@ class BiasInterface(QWidget):
         if not self.dfs:
             InfoBar.warning(
                 "提示",
-                "请先加载 Excel 文件",
+                "请先加载文件",
                 Qt.Orientation.Horizontal,
                 True,
                 2000,
+                InfoBarPosition.TOP_RIGHT,
+                self,
+            )
+            return
+
+        if not any(
+            dataFrame.attrs.get("sourceKind") == "excel"
+            for dataFrame in self.dfs.values()
+        ):
+            InfoBar.info(
+                "无需配置",
+                "TXT 与 Word 文档只有“文本”字段，不包含等级或国籍元数据",
+                Qt.Orientation.Horizontal,
+                True,
+                3000,
                 InfoBarPosition.TOP_RIGHT,
                 self,
             )
@@ -3109,6 +3129,7 @@ class BiasInterface(QWidget):
         self.filesList = []
         self.dfs = {}
         self._pendingFileCount = 0
+        self._failedFileCount = 0
         self.selectedColumn = None
         self.levelColumn = None
         self.countryColumn = None
@@ -3126,13 +3147,13 @@ class BiasInterface(QWidget):
         self.detailStack.setCurrentWidget(self.detailEmptyState)
         self.detailEmptyState.setContent(
             "等待分析",
-            "选择 Excel 文件、统计列和至少一种偏误类型后开始分析。",
+            "选择 XLSX、TXT 或 Word 文件、分析字段和至少一种偏误类型后开始分析。",
         )
         self.columnCombobox.clear()
         self.columnCombobox.setEnabled(False)
         self.columnConfigBtn.setEnabled(False)
-        self.chooseFileBtn.setText("选择 Excel")
-        self.sourceStatusLabel.setText("尚未加载 Excel 文件")
+        self.chooseFileBtn.setText("选择文件")
+        self.sourceStatusLabel.setText("尚未加载文件 · 支持 XLSX、TXT、DOCX、DOC")
         self.statusLabel.setText("等待加载数据")
         self.exportBtn.setEnabled(False)
         self.analyzeBtn.setText("开始分析")
@@ -3262,6 +3283,7 @@ class BiasInterface(QWidget):
                 continue
 
             fileName = os.path.basename(filePath)
+            sourcePositions = df.attrs.get("sourcePositions", [])
             try:
                 textSeries = df[self.selectedColumn].astype(str).fillna("")
                 levelSeries = (
@@ -3303,7 +3325,14 @@ class BiasInterface(QWidget):
                     rowCountry if rowCountry and rowCountry != "nan" else "未知"
                 )
 
-                rows.append((fileName, idx + 2, text, rowLevel, rowCountry))
+                sourcePosition = (
+                    sourcePositions[idx]
+                    if idx < len(sourcePositions)
+                    else idx + (2 if df.attrs.get("sourceKind") == "excel" else 1)
+                )
+                rows.append(
+                    (fileName, sourcePosition, text, rowLevel, rowCountry)
+                )
 
         if skippedFiles:
             InfoBar.warning(
@@ -3322,7 +3351,7 @@ class BiasInterface(QWidget):
             self.statusLabel.setText("所选统计列中没有可分析的文本")
             self.detailEmptyState.setContent(
                 "没有可分析文本",
-                "请检查统计列是否选择正确，或更换 Excel 文件。",
+                "请检查分析字段是否选择正确，或更换文件。",
             )
             InfoBar.warning(
                 "提示",
