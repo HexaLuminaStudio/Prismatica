@@ -20,6 +20,7 @@ from app.core.services import (
     getPricingCatalog,
 )
 from app.core.utils import logger, signalBus
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.download_workbench import DownloadMode, DownloadTaskWorkbench
 from app.view.widgets.hsk_search_widget import (
     AdvancedSettingCardWidget,
@@ -282,26 +283,33 @@ class HskInterface(QWidget):
         items = batchApplyService.getItems(HSK_DOWNLOAD_TASK_TYPE)
         from app.core.services import taskManager
 
-        catalog = getPricingCatalog()
-        costs = [catalog.meteredCost(HSK_DOWNLOAD_FEATURE, item.total) for item in items]
-        if any(cost is None for cost in costs):
+        catalog = None if INTERNAL_TEST_MODE else getPricingCatalog()
+        costs = (
+            [0 for _item in items]
+            if INTERNAL_TEST_MODE
+            else [catalog.meteredCost(HSK_DOWNLOAD_FEATURE, item.total) for item in items]
+        )
+        if not INTERNAL_TEST_MODE and any(cost is None for cost in costs):
             try:
                 catalog.refreshResponsive()
             except Exception as error:
                 MessageBox("价格加载失败", str(error), self.window()).exec()
                 return
             costs = [catalog.meteredCost(HSK_DOWNLOAD_FEATURE, item.total) for item in items]
-        if any(cost is None for cost in costs):
+        if not INTERNAL_TEST_MODE and any(cost is None for cost in costs):
             MessageBox("暂不可下载", "管理员尚未发布 HSK 下载价格。", self.window()).exec()
             return
         totalCost = sum(int(cost or 0) for cost in costs)
-        confirm = MessageBox(
-            "确认提交批量下载",
-            f"将创建 {len(items)} 个 HSK 下载任务，合计预计预占 {totalCost} 点。\n"
-            "各任务成功后分别结算，失败或取消会分别退还。",
-            self.window(),
+        confirmContent = (
+            f"将创建 {len(items)} 个 HSK 下载任务。"
+            if INTERNAL_TEST_MODE
+            else f"将创建 {len(items)} 个 HSK 下载任务，合计预计预占 {totalCost} 点。\n"
+            "各任务成功后分别结算，失败或取消会分别退还。"
         )
-        confirm.yesButton.setText(f"提交并预占 {totalCost} 点")
+        confirm = MessageBox("确认提交批量下载", confirmContent, self.window())
+        confirm.yesButton.setText(
+            "提交" if INTERNAL_TEST_MODE else f"提交并预占 {totalCost} 点"
+        )
         confirm.cancelButton.setText("取消")
         if not confirm.exec():
             return

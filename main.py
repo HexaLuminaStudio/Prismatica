@@ -37,7 +37,7 @@ from qfluentwidgetspro import setLicense
 
 from app.core.utils import cfg, configureLogging, log, qconfig
 from app.core.utils.application_lifecycle import beginApplicationShutdown
-from app.core.utils.setting import MODE
+from app.core.utils.setting import INTERNAL_TEST_MODE, MODE
 
 # Qt 6 默认启用逐显示器高 DPI；保留小数缩放，避免 125%/150% 被取整后尺寸跳变。
 QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -190,15 +190,20 @@ except Exception as _pmWarmupErr:
 # - bootstrap() 内部会后台异步调 /v1/auth/refresh,不阻塞启动期
 # - 必须先于 MainWindow 构造,否则 AccountNavWidget 初次渲染拿不到会话
 # =====================================================================
-try:
-    from app.core.services import getCloudAuth
-
-    _splashWindow.setProgress(16, "恢复云端会话…")
+if INTERNAL_TEST_MODE:
+    _splashWindow.setProgress(16, "正在准备本地模式…")
     QApplication.processEvents()
-    ok = getCloudAuth().bootstrap()
-    log.info(f"[Main] 云端会话恢复结果: {'已恢复' if ok else '无历史会话'}")
-except Exception as _bootErr:
-    log.warning(f"[Main] 云端会话恢复失败(非致命,继续): {_bootErr}")
+    log.info("[Main] 内测本地模式已启用，跳过 Prismatica 云端会话恢复")
+else:
+    try:
+        from app.core.services import getCloudAuth
+
+        _splashWindow.setProgress(16, "恢复云端会话…")
+        QApplication.processEvents()
+        ok = getCloudAuth().bootstrap()
+        log.info(f"[Main] 云端会话恢复结果: {'已恢复' if ok else '无历史会话'}")
+    except Exception as _bootErr:
+        log.warning(f"[Main] 云端会话恢复失败(非致命,继续): {_bootErr}")
 
 # ============================================================
 # 首次启动引导(2026-07-21 新增)

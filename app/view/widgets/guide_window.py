@@ -47,6 +47,7 @@ from qfluentwidgets import (
 from PySide6.QtWidgets import QSizePolicy
 
 from app.core.utils import cfg, logger, qconfig
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import setThemeRole
 from app.view.widgets.window_geometry import fitWindowToAvailableScreen
 
@@ -391,6 +392,7 @@ class _TokenGuideBase(_BaseGuidePage):
         buttonRow.addWidget(self.refreshButton)
         buttonRow.addStretch(1)
         self.contentLayout.addLayout(buttonRow)
+        self.officialAccountButton.setVisible(not INTERNAL_TEST_MODE)
 
         # ---- 状态 / 安全说明 ----
         self.statusLabel = CaptionLabel("")
@@ -398,7 +400,9 @@ class _TokenGuideBase(_BaseGuidePage):
         self.contentLayout.addWidget(self.statusLabel)
 
         noticeLabel = CaptionLabel(
-            "使用自己的账号时，密码仅由本机发送给对应语料平台；"
+            "账号密码仅由本机发送给对应语料平台。"
+            if INTERNAL_TEST_MODE
+            else "使用自己的账号时，密码仅由本机发送给对应语料平台；"
             "使用官方账号时，客户端不会获取或保存官方密码。"
         )
         noticeLabel.setTextColor(_TEXT_COLOR_LIGHT, _TEXT_COLOR_DARK)
@@ -409,7 +413,8 @@ class _TokenGuideBase(_BaseGuidePage):
         if self._validated:
             accountLabel = (
                 "官方账号"
-                if qconfig.get(getattr(cfg, self._useOfficialConfigKey))
+                if not INTERNAL_TEST_MODE
+                and qconfig.get(getattr(cfg, self._useOfficialConfigKey))
                 else "自己的账号"
             )
             self._setStatus(
@@ -418,7 +423,11 @@ class _TokenGuideBase(_BaseGuidePage):
             )
         else:
             self._setStatus(
-                "尚未配置 Token。推荐直接使用官方账号，也可以填写自己的账号。",
+                (
+                    "尚未配置 Token，请填写对应语料平台的账号与密码。"
+                    if INTERNAL_TEST_MODE
+                    else "尚未配置 Token。推荐直接使用官方账号，也可以填写自己的账号。"
+                ),
                 neutral=True,
             )
 
@@ -479,6 +488,8 @@ class _TokenGuideBase(_BaseGuidePage):
         self._refreshThread.start()
 
     def _onOfficialAccountClicked(self):
+        if INTERNAL_TEST_MODE:
+            return
         logger.info(f"[Guide] 用户选择官方账号 ({self._tokenConfigKey})")
         self._setStatus("正在连接 Prismatica 官方账号，请稍候...", warn=True)
         self._startRefresh(self._createOfficialRefreshThread(), "official")
@@ -563,10 +574,14 @@ class HskTokenGuideInterface(_TokenGuideBase):
         super().__init__(
             iconPath=":/app/icons/Hsk.svg",
             title="HSK 令牌配置",
-            introLines=[
-                "推荐使用 Prismatica 提供的官方账号，一键获取并保存 HSK Token。",
-                "也可以填写自己的 HSK 账号；后续可在设置中重新配置。",
-            ],
+            introLines=(
+                ["填写自己的 HSK 账号，仅直连 HSK 语料平台获取 Token。"]
+                if INTERNAL_TEST_MODE
+                else [
+                    "推荐使用 Prismatica 提供的官方账号，一键获取并保存 HSK Token。",
+                    "也可以填写自己的 HSK 账号；后续可在设置中重新配置。",
+                ]
+            ),
             usernamePlaceholder="请输入 HSK 账号(邮箱)",
             passwordPlaceholder="请输入 HSK 密码",
             usernameConfigKey="HSKLoginUsername",
@@ -597,10 +612,14 @@ class GlobalTokenGuideInterface(_TokenGuideBase):
         super().__init__(
             iconPath=":/app/icons/Global.svg",
             title="Global 令牌配置",
-            introLines=[
-                "推荐使用 Prismatica 提供的官方账号，一键获取并保存 Global Token。",
-                "也可以填写自己的 Global 账号；后续可在设置中重新配置。",
-            ],
+            introLines=(
+                ["填写自己的 Global 账号，仅直连 Global 语料平台获取 Token。"]
+                if INTERNAL_TEST_MODE
+                else [
+                    "推荐使用 Prismatica 提供的官方账号，一键获取并保存 Global Token。",
+                    "也可以填写自己的 Global 账号；后续可在设置中重新配置。",
+                ]
+            ),
             usernamePlaceholder="请输入 Global UserID",
             passwordPlaceholder="请输入 Global Password",
             usernameConfigKey="GlobalLoginUsername",
@@ -787,12 +806,14 @@ class FinalInterface(_BaseGuidePage):
         tipsLayout = QVBoxLayout()
         tipsLayout.setContentsMargins(0, 4, 0, 0)
         tipsLayout.setSpacing(4)
-        for tip in [
+        tips = [
             "• Token 后续可在「设置 → 下载功能设置」中随时修改",
-            "• AI 聊天相关参数后续可在「设置 → AI 聊天设置」中修改",
-            "• 内测版用户无需激活码,所有功能默认开放",
+            "• 内测版用户无需激活码,所有本地功能默认开放",
             "• 如遇问题,可在「设置 → 关于软件」中提交反馈",
-        ]:
+        ]
+        if not INTERNAL_TEST_MODE:
+            tips.insert(1, "• AI 聊天相关参数后续可在「设置 → AI 聊天设置」中修改")
+        for tip in tips:
             tipLbl = CaptionLabel(tip)
             tipLbl.setTextColor(_TEXT_COLOR_LIGHT, _TEXT_COLOR_DARK)
             tipLbl.setWordWrap(True)
@@ -931,10 +952,11 @@ class GuideWindow(QObject):
         self._window.addPage(self._hskTokenPage)
         self._window.addPage(self._globalTokenPage)
 
-        # AI 聊天配置页(在 Global 之后,Final 之前)
-        self._aiGuidePage = AiChatGuideInterface()
-        self._window.addPage(self._aiGuidePage)
-        self._savablePages.append(self._aiGuidePage)
+        if not INTERNAL_TEST_MODE:
+            # AI 聊天配置页(在 Global 之后,Final 之前)
+            self._aiGuidePage = AiChatGuideInterface()
+            self._window.addPage(self._aiGuidePage)
+            self._savablePages.append(self._aiGuidePage)
 
         self._window.addPage(FinalInterface())
 

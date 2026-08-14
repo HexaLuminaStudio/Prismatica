@@ -10,6 +10,7 @@ from dataclasses import dataclass
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
 from app.core.services import getPricingCatalog
 from app.core.utils import logger
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
@@ -207,9 +208,11 @@ class AnalysisDesktopWidget(QWidget):
         self._emptyState: QWidget = None  # type: ignore[assignment]
         self._emptyIconWidget: IconWidget = None  # type: ignore[assignment]
         self._buildUi()
-        self._pricingCatalog = getPricingCatalog()
-        self._pricingCatalog.catalogChanged.connect(self._updatePricingNotice)
-        self._updatePricingNotice()
+        self._pricingCatalog = None
+        if not INTERNAL_TEST_MODE:
+            self._pricingCatalog = getPricingCatalog()
+            self._pricingCatalog.catalogChanged.connect(self._updatePricingNotice)
+            self._updatePricingNotice()
         self.setCorpusStore(corpusStore)
         if corpusManager is not None:
             corpusManager.activeCorpusChanged.connect(self.refresh)
@@ -253,22 +256,25 @@ class AnalysisDesktopWidget(QWidget):
         header.addWidget(self.corpusNameLabel, 0, Qt.AlignmentFlag.AlignTop)
         pageLayout.addLayout(header)
 
-        self.pricingNotice = QFrame(self.page)
-        self.pricingNotice.setObjectName("analysisPricingNotice")
-        pricingLayout = QHBoxLayout(self.pricingNotice)
-        pricingLayout.setContentsMargins(14, 10, 14, 10)
-        pricingLayout.setSpacing(10)
-        pricingIcon = IconWidget(FluentIcon.INFO, self.pricingNotice)
-        pricingIcon.setFixedSize(18, 18)
-        pricingLayout.addWidget(pricingIcon, 0, Qt.AlignmentFlag.AlignTop)
-        self.pricingNoticeLabel = BodyLabel(
-            "本地分析免费 · 正在加载导出与 AI 的公开价格…",
-            self.pricingNotice,
-        )
-        self.pricingNoticeLabel.setObjectName("analysisPricingNoticeLabel")
-        self.pricingNoticeLabel.setWordWrap(True)
-        pricingLayout.addWidget(self.pricingNoticeLabel, 1)
-        pageLayout.addWidget(self.pricingNotice)
+        self.pricingNotice = None
+        self.pricingNoticeLabel = None
+        if not INTERNAL_TEST_MODE:
+            self.pricingNotice = QFrame(self.page)
+            self.pricingNotice.setObjectName("analysisPricingNotice")
+            pricingLayout = QHBoxLayout(self.pricingNotice)
+            pricingLayout.setContentsMargins(14, 10, 14, 10)
+            pricingLayout.setSpacing(10)
+            pricingIcon = IconWidget(FluentIcon.INFO, self.pricingNotice)
+            pricingIcon.setFixedSize(18, 18)
+            pricingLayout.addWidget(pricingIcon, 0, Qt.AlignmentFlag.AlignTop)
+            self.pricingNoticeLabel = BodyLabel(
+                "本地分析免费 · 正在加载导出与 AI 的公开价格…",
+                self.pricingNotice,
+            )
+            self.pricingNoticeLabel.setObjectName("analysisPricingNoticeLabel")
+            self.pricingNoticeLabel.setWordWrap(True)
+            pricingLayout.addWidget(self.pricingNoticeLabel, 1)
+            pageLayout.addWidget(self.pricingNotice)
 
         self.summaryPanel = QFrame(self.page)
         self.summaryPanel.setObjectName("analysisSummaryPanel")
@@ -333,7 +339,7 @@ class AnalysisDesktopWidget(QWidget):
         return frame
 
     def _updatePricingNotice(self, _catalog=None) -> None:
-        if not hasattr(self, "pricingNoticeLabel"):
+        if self.pricingNoticeLabel is None:
             return
         catalog = getattr(self, "_pricingCatalog", None)
         if catalog is None:

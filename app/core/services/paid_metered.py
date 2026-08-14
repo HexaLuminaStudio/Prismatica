@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QWidget
 from qfluentwidgets import MessageBox
 
 from app.core.utils import logger, signalBus
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 from .cloud_api import CloudApiError
 from .cloud_billing import getCloudBilling
@@ -47,6 +48,8 @@ class PaidMeteredTransaction:
         return str((self._result.context.get("preauth") or {}).get("billId", ""))
 
     def attachToTaskInfo(self, taskInfo: Dict[str, Any]) -> None:
+        if self._result.context.get("localMode"):
+            return
         taskInfo["_billing"] = {
             "billId": self.billId,
             "featureCode": str(self._result.context.get("featureCode", "")),
@@ -63,6 +66,10 @@ class PaidMeteredTransaction:
     def commit(self) -> bool:
         if self._finished or self._handedOff:
             return False
+        if self._result.context.get("localMode"):
+            self._finished = True
+            self._actionLease.release()
+            return True
         if not self.billId:
             self.refund()
             return False
@@ -130,6 +137,20 @@ def beginPaidMeteredAction(
 
     transaction: PaidMeteredTransaction | None = None
     try:
+        if INTERNAL_TEST_MODE:
+            result = GateResult(
+                ok=True,
+                reason="local_mode",
+                message="内测本地模式不计费",
+                context={
+                    "featureCode": featureCode,
+                    "estimatedCost": 0,
+                    "resourceUsed": resourceUsed,
+                    "localMode": True,
+                },
+            )
+            transaction = PaidMeteredTransaction(result, actionLease)
+            return transaction
         catalogCost = _catalogCost(featureCode, resourceUsed)
         if catalogCost is None:
             MessageBox("价格加载失败", "管理员尚未发布该功能价格，请稍后重试。", parent).exec()

@@ -42,6 +42,7 @@ from typing import Any, Dict, Optional, Tuple
 from PySide6.QtWidgets import QWidget
 
 from app.core.utils import cfg, logger, qconfig
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 
 class AiInsightMixin:
@@ -105,6 +106,10 @@ class AiInsightMixin:
         - 按当前 _aiHasResult 自动启用/禁用
         """
         self._aiInsightBtn = button
+        if INTERNAL_TEST_MODE:
+            button.setEnabled(False)
+            button.hide()
+            return
         button.setEnabled(self._aiHasResult())
         # 避免重复连接:先判断信号是否已包含本 slot(PySide6 在「未连接」时
         # disconnect 会从 C++ 侧打印 `qWarning: Failed to disconnect`,且无 Python
@@ -121,7 +126,8 @@ class AiInsightMixin:
     def enableAiInsightButton(self) -> None:
         btn = getattr(self, "_aiInsightBtn", None)
         if btn is not None:
-            btn.setEnabled(True)
+            btn.setEnabled(not INTERNAL_TEST_MODE)
+            btn.setVisible(not INTERNAL_TEST_MODE)
 
     def disableAiInsightButton(self) -> None:
         btn = getattr(self, "_aiInsightBtn", None)

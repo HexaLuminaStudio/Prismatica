@@ -10,6 +10,7 @@ from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 
 from app.core.utils import logger
 from app.core.utils.application_lifecycle import isApplicationShuttingDown
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 from .cloud_api import getCloudApi
 from .responsive_call import runResponsiveCall
@@ -41,7 +42,8 @@ class PricingCatalog(QObject):
         application = QCoreApplication.instance()
         if application is not None:
             application.aboutToQuit.connect(self.shutdown)
-        self.refreshAsync()
+        if not INTERNAL_TEST_MODE:
+            self.refreshAsync()
 
     @property
     def version(self) -> str:
@@ -83,6 +85,8 @@ class PricingCatalog(QObject):
         return max(minimum, min(maximum, cost))
 
     def refreshBlocking(self) -> dict[str, Any]:
+        if INTERNAL_TEST_MODE:
+            return {}
         data = getCloudApi().get("/v1/pricing/catalog", withAuth=False, timeout=5.0) or {}
         if isinstance(data, dict):
             self._applyCatalog(data)
@@ -90,6 +94,8 @@ class PricingCatalog(QObject):
 
     def refreshResponsive(self) -> dict[str, Any]:
         """后台获取价格目录，并在调用线程安全地应用新快照。"""
+        if INTERNAL_TEST_MODE:
+            return {}
         data = runResponsiveCall(
             lambda: (
                 getCloudApi().get(
@@ -105,6 +111,8 @@ class PricingCatalog(QObject):
         return dict(self._catalog)
 
     def refreshAsync(self) -> None:
+        if INTERNAL_TEST_MODE:
+            return
         if self._refreshing or self._shuttingDown or isApplicationShuttingDown():
             return
         self._timer.stop()

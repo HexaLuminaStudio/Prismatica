@@ -29,6 +29,7 @@ from app.core.services.startup_database_service import (
 )
 from app.core.services.cloud_api import CloudApiError
 from app.core.utils import logger
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import shellPalette
 
 
@@ -201,7 +202,7 @@ class ResourceVerificationDialog(MessageBoxBase):
     ) -> None:
         super().__init__(parent)
         self._service = service or StartupDatabaseService()
-        self._autoRepair = bool(autoRepair)
+        self._autoRepair = bool(autoRepair) and not INTERNAL_TEST_MODE
         self._readyEmitted = False
         self._verificationThread: Optional[DatabaseVerificationThread] = None
         self._downloadThread: Optional[QThread] = None
@@ -230,14 +231,13 @@ class ResourceVerificationDialog(MessageBoxBase):
             self,
         )
         self.viewLayout.addWidget(titleLabel)
-        descriptionLabel = BodyLabel(
-            (
-                "首次使用会自动检查并下载所需数据，完成后即可直接检索。"
-                if self._autoRepair
-                else "检查作文数据表与正文库的 SQLite 完整性。发现异常时可在此直接重新下载修复。"
-            ),
-            self,
-        )
+        if INTERNAL_TEST_MODE:
+            description = "仅检查本地 SQLite 完整性；内测本地模式不提供在线下载或修复。"
+        elif self._autoRepair:
+            description = "首次使用会自动检查并下载所需数据，完成后即可直接检索。"
+        else:
+            description = "检查作文数据表与正文库的 SQLite 完整性。发现异常时可在此直接重新下载修复。"
+        descriptionLabel = BodyLabel(description, self)
         descriptionLabel.setWordWrap(True)
         self.viewLayout.addWidget(descriptionLabel)
 
@@ -305,6 +305,14 @@ class ResourceVerificationDialog(MessageBoxBase):
         self.allResourcesValid = not invalidResults
         self.yesButton.setEnabled(True)
         if invalidResults:
+            if INTERNAL_TEST_MODE:
+                self._state = "localUnavailable"
+                self.overviewLabel.setText(
+                    f"发现 {len(invalidResults)} 个异常资源；内测本地模式不会连接资源服务器。"
+                )
+                self.yesButton.setText("关闭")
+                self.cancelButton.hide()
+                return
             self._state = "needsRepair"
             self.overviewLabel.setText(
                 (
@@ -490,6 +498,8 @@ class ResourceVerificationDialog(MessageBoxBase):
     def validate(self) -> bool:
         """拦截主按钮，将校验与修复留在同一个 MessageBoxBase 内。"""
         if self._state == "completed":
+            return True
+        if self._state == "localUnavailable":
             return True
         if self._state in {"pending", "verificationFailed"}:
             self._startVerification()

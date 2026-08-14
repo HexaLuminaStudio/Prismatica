@@ -16,6 +16,13 @@ from app.core.services.paid_action_guard import PaidActionRegistry
 from app.core.services.responsive_call import runResponsiveCall
 
 
+@pytest.fixture(autouse=True)
+def _useOnlineBillingMode(monkeypatch):
+    """本文件验证正式版计费链，显式关闭内测本地旁路。"""
+    monkeypatch.setattr(paidExportModule, "INTERNAL_TEST_MODE", False)
+    monkeypatch.setattr(paidMeteredModule, "INTERNAL_TEST_MODE", False)
+
+
 class _FakeButton:
     def __init__(self) -> None:
         self.text = ""

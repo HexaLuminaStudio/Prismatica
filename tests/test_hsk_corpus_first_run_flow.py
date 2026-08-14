@@ -5,12 +5,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
 from qfluentwidgets import PushButton
 
 import app.view.main_window as mainWindowModule
 import app.view.widgets.account.login_dialog as loginDialogModule
+import app.view.widgets.hsk_corpus.hsk_corpus_browser as hskCorpusModule
+import app.view.widgets.resource_verification_dialog as resourceDialogModule
 from app.core.services.startup_database_service import (
     DatabaseResource,
     DatabaseVerificationResult,
@@ -19,6 +22,14 @@ from app.view.main_window import MainWindow
 from app.view.widgets.account.login_dialog import LoginInterface
 from app.view.widgets.hsk_corpus.hsk_corpus_browser import HskCorpusBrowser
 from app.view.widgets.resource_verification_dialog import ResourceVerificationDialog
+
+
+@pytest.fixture(autouse=True)
+def _useOnlineResourceMode(monkeypatch):
+    """本文件验证正式版在线资源修复链，显式关闭内测本地裁剪。"""
+    monkeypatch.setattr(mainWindowModule, "INTERNAL_TEST_MODE", False)
+    monkeypatch.setattr(hskCorpusModule, "INTERNAL_TEST_MODE", False)
+    monkeypatch.setattr(resourceDialogModule, "INTERNAL_TEST_MODE", False)
 
 
 def testUnavailableCorpusShowsOneInPagePreparationAction(qtbot, tmp_path) -> None:

@@ -18,6 +18,13 @@ from app.view.widgets.account import login_dialog as loginDialogModule
 from app.view.widgets.freq_analyzer import clean_coordinator as cleanCoordinatorModule
 
 
+@pytest.fixture(autouse=True)
+def _useOnlineCloudMode(monkeypatch):
+    """本文件验证正式版云端韧性，显式关闭内测本地硬阻断。"""
+    monkeypatch.setattr(cloudApiModule, "INTERNAL_TEST_MODE", False)
+    monkeypatch.setattr(pricingCatalogModule, "INTERNAL_TEST_MODE", False)
+
+
 class _Response:
     status_code = 200
 

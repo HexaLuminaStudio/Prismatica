@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QWidget
 from qfluentwidgets import MessageBox
 
 from app.core.utils import logger, signalBus
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 from .cloud_api import CloudApiError, getCloudApi
 from .cloud_billing import getCloudBilling
@@ -38,6 +39,10 @@ class PaidExportTransaction:
     def commit(self) -> bool:
         if self._finished:
             return False
+        if self._result.context.get("localMode"):
+            self._finished = True
+            self._actionLease.release()
+            return True
         billId = str((self._result.context.get("preauth") or {}).get("billId", ""))
         for attempt in range(2):
             try:
@@ -83,6 +88,20 @@ def beginPaidAnalysisExport(
 
     transaction: PaidExportTransaction | None = None
     try:
+        if INTERNAL_TEST_MODE:
+            result = GateResult(
+                ok=True,
+                reason="local_mode",
+                message="内测本地模式不计费",
+                context={
+                    "featureCode": ANALYSIS_EXPORT_FEATURE,
+                    "estimatedCost": 0,
+                    "resourceUsed": 1,
+                    "localMode": True,
+                },
+            )
+            transaction = PaidExportTransaction(result, actionLease)
+            return transaction
         catalog = getPricingCatalog()
         cost = catalog.fixedCost(ANALYSIS_EXPORT_FEATURE)
         if cost is None:

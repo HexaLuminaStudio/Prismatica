@@ -41,6 +41,7 @@ from qfluentwidgets import (
 from app.core.models.project import Project
 from app.core.services import projectManager
 from app.core.utils import logger
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.project_manager_dialogs import NewProjectDialog, RenameProjectDialog
 from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
 from app.view.widgets.prismatica_theme import pageBackgroundColor
@@ -143,12 +144,10 @@ class _ProjectCard(QFrame):
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
-        footer.addWidget(
-            CaptionLabel(
-                f"{len(self.project.resources)} 个资源  ·  "
-                f"{len(self.project.aiInsights)} 个 AI 解读"
-            )
-        )
+        summaryText = f"{len(self.project.resources)} 个资源"
+        if not INTERNAL_TEST_MODE:
+            summaryText += f"  ·  {len(self.project.aiInsights)} 个 AI 解读"
+        footer.addWidget(CaptionLabel(summaryText))
         footer.addStretch(1)
         footer.addWidget(CaptionLabel(_compactDate(self.project.updatedAt)))
         openButton = PushButton(FluentIcon.CHEVRON_RIGHT_MED, "打开", self)
@@ -230,18 +229,23 @@ class _EmptyProjectState(QFrame):
         title = TitleLabel("还没有任何项目", self)
         self._prepareWrappedLabel(title, centered=True)
         self.emptyLayout.addWidget(title)
-        description = BodyLabel(
-            "项目用于组织语料、分析结果和 AI 解读，所有研究数据都保存在本地。",
-            self,
+        descriptionText = (
+            "项目用于组织语料和分析结果，所有研究数据都保存在本地。"
+            if INTERNAL_TEST_MODE
+            else "项目用于组织语料、分析结果和 AI 解读，所有研究数据都保存在本地。"
         )
+        description = BodyLabel(descriptionText, self)
         self._prepareWrappedLabel(description, centered=True)
         self.emptyLayout.addWidget(description)
-        bullets = BodyLabel(
-            "• 自动归档词频、网络、KWIC 等分析结果\n"
+        bulletsText = (
+            "• 自动归档词频、网络、KWIC 等结果\n"
+            "• 项目数据仅保存在本机"
+            if INTERNAL_TEST_MODE
+            else "• 自动归档词频、网络、KWIC 等分析结果\n"
             "• 一键生成并归档 AI 研究报告\n"
-            "• 本地保存，登录后可使用跨设备能力",
-            self,
+            "• 本地保存，登录后可使用跨设备能力"
         )
+        bullets = BodyLabel(bulletsText, self)
         self._prepareWrappedLabel(bullets)
         self.emptyLayout.addWidget(bullets)
         button = PrimaryPushButton(FluentIcon.ADD, "创建第一个项目", self)

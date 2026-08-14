@@ -91,6 +91,7 @@ from app.view.widgets.prismatica_theme import pageBackgroundColor
 from app.core.services.hsk_local_corpus_service import hskLocalCorpusService
 from app.core.utils.data_paths import HSK_CORPUS_DB
 from app.core.utils.constant import hskCountryDict, hskEssayList
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.freq_analyzer.worker_utils import WorkerMixin
 from app.view.widgets.hsk_corpus.hsk_corpus_model import HskCorpusModel
 from app.view.widgets.hsk_corpus.hsk_corpus_detail_drawer import (
@@ -1077,19 +1078,21 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         """仅在语料资源不可用时显示单一恢复入口。"""
         if self._resourceActionButton is None:
             return
-        self._resourceActionButton.setVisible(bool(isVisible))
+        self._resourceActionButton.setVisible(bool(isVisible) and not INTERNAL_TEST_MODE)
         self._resourceActionButton.setEnabled(not self._isPreparingResources)
         self._resourceActionButton.setText(
             "正在准备…" if self._isPreparingResources else "准备作文资源"
         )
 
     def _onResourcePreparationClicked(self) -> None:
-        if self._isPreparingResources:
+        if self._isPreparingResources or INTERNAL_TEST_MODE:
             return
         self.resourcePreparationRequested.emit()
 
     def startResourcePreparation(self) -> None:
         """在本页面续接资源检查、自动修复与刷新流程。"""
+        if INTERNAL_TEST_MODE:
+            return
         if self._isPreparingResources:
             dialog = self._resourceDialog
             if dialog is not None:
@@ -1406,8 +1409,12 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             if self._dbPathLabel:
                 self._dbPathLabel.setText("作文资源尚未准备完成，可在当前页面自动处理。")
             self._showEmptyState(
-                "准备好资源，即可开始检索",
-                "点击一次即可完成登录（如需要）、检查和下载，不必前往设置页。",
+                "作文资源尚未安装",
+                (
+                    "内测本地模式不连接 Prismatica 资源服务器；请使用已随测试包提供的本地数据库。"
+                    if INTERNAL_TEST_MODE
+                    else "点击一次即可完成登录（如需要）、检查和下载，不必前往设置页。"
+                ),
             )
             self._setResourceActionVisible(True)
             return

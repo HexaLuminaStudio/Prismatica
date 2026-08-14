@@ -2,6 +2,7 @@
 """设置页主题模式卡片回归测试。"""
 from __future__ import annotations
 
+import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QBoxLayout
@@ -11,6 +12,12 @@ from app.core.utils import cfg, qconfig
 from app.view import setting_interface as settingModule
 from app.view.setting_interface import DisplaySettingWidget, SettingInterface
 from app.view.widgets.prismatica_theme import shellPalette
+
+
+@pytest.fixture(autouse=True)
+def _useFullSettingsLayout(monkeypatch):
+    """本文件验证正式版完整设置布局，显式恢复云功能卡片。"""
+    monkeypatch.setattr(settingModule, "INTERNAL_TEST_MODE", False)
 
 
 def testThemeAndDpiControlsShareDisplayGroup(qtbot) -> None:

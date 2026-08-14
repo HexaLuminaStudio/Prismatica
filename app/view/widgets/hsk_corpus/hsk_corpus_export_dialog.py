@@ -61,6 +61,7 @@ from qfluentwidgets import (
 )
 
 from app.core.services import HSK_ESSAY_EXPORT_FEATURE, getPricingCatalog
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 
@@ -108,7 +109,8 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         self._priceLabel: Optional[BodyLabel] = None
 
         self._buildUi()
-        getPricingCatalog().catalogChanged.connect(self._onCatalogChanged)
+        if not INTERNAL_TEST_MODE:
+            getPricingCatalog().catalogChanged.connect(self._onCatalogChanged)
         self._computePreview()
         self._updatePreviewLabel()
         self._updatePriceLabel()
@@ -233,7 +235,9 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
 
         self._priceLabel = BodyLabel("", self.widget)
         self._priceLabel.setWordWrap(True)
-        self.viewLayout.addWidget(self._priceLabel)
+        self._priceLabel.setVisible(not INTERNAL_TEST_MODE)
+        if not INTERNAL_TEST_MODE:
+            self.viewLayout.addWidget(self._priceLabel)
 
     # ------------------------------------------------------------------
     # 辅助
@@ -386,6 +390,11 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         if self._priceLabel is None:
             return
         willExport = self._previewWithTitle + self._previewNoTitle
+        if INTERNAL_TEST_MODE:
+            self.quotedCost = 0 if willExport > 0 else None
+            self.yesButton.setText("开始导出")
+            self.yesButton.setEnabled(willExport > 0)
+            return
         if willExport <= 0:
             self.quotedCost = None
             self._priceLabel.setText("当前没有可计费的作文")
@@ -452,8 +461,9 @@ class HskCorpusExportOptionsDialog(MessageBoxBase):
         super().accept()
 
     def closeEvent(self, event) -> None:
-        try:
-            getPricingCatalog().catalogChanged.disconnect(self._onCatalogChanged)
-        except Exception:
-            pass
+        if not INTERNAL_TEST_MODE:
+            try:
+                getPricingCatalog().catalogChanged.disconnect(self._onCatalogChanged)
+            except Exception:
+                pass
         super().closeEvent(event)

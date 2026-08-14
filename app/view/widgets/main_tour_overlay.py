@@ -50,6 +50,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import BodyLabel, CaptionLabel, PushButton, TransparentPushButton
 
 from app.core.utils import cfg, logger, qconfig
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import shellPalette
 
 
@@ -431,7 +432,7 @@ class MainTourOverlay(QWidget):
             TourStep(
                 title="⑥ 项目管理",
                 body=(
-                    "把每次研究封装为「项目」,独立管理资源池、笔记与 AI 解读。"
+                    "把每次研究封装为「项目」,独立管理资源池与研究成果。"
                     "在仪表盘可一键跳转到对应分析模块。"
                 ),
                 targetResolver=lambda _mw=None: _navItem("projectInterface"),
@@ -444,7 +445,7 @@ class MainTourOverlay(QWidget):
                 title="任务管理 + 设置",
                 body=(
                     "底部导航的「任务管理」用于查看下载进度与历史记录;"
-                    "「设置」用于配置下载路径、Token、API Key、主题等。"
+                    "「设置」用于配置下载路径、Token、分析规则与主题等。"
                 ),
                 targetResolver=lambda _mw=None: _navItem("TaskInterface")
                 or _navItem("SettingInterface"),
@@ -463,6 +464,15 @@ class MainTourOverlay(QWidget):
                 prefer="bottom",
             ),
         ]
+        if INTERNAL_TEST_MODE:
+            self._steps = [
+                step for step in self._steps if step.switchTo != "chatInterface"
+            ]
+            self._steps[0].body = (
+                f"接下来会用 {len(self._steps)} 个步骤带你认识主界面。"
+                "每一步会高亮一个区域,并在旁边显示说明文字。"
+                "你随时可以点击「跳过引导」直接结束。"
+            )
 
     # ------------------------------------------------------------------
     # 启动 / 步骤推进

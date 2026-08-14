@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import pytest
 from PySide6.QtCore import QObject, Qt, Signal
 
 from app.core.services.cloud_api import CloudApiError
 from app.core.services.official_corpus import requestOfficialCorpusToken
 from app.core.utils import cfg
 from app.view.widgets import guide_window as guideModule
+
+
+@pytest.fixture(autouse=True)
+def _useOnlineGuideMode(monkeypatch):
+    """本文件验证正式版官方账号入口，显式关闭内测本地裁剪。"""
+    monkeypatch.setattr(guideModule, "INTERNAL_TEST_MODE", False)
 
 
 class FakeConfig:

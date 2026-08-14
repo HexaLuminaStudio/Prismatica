@@ -41,6 +41,7 @@ from app.core.models.project import AiInsight, Project, Resource
 from app.core.services import projectManager
 from app.core.services.research_report_service import researchReportService
 from app.core.utils import logger
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.project_manager_dialogs import RenameProjectDialog
 from app.view.widgets.project_ui_helpers import PRIMARY_HEIGHT, normalizeButton
 from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
@@ -308,6 +309,7 @@ class ProjectDashboardWidget(QWidget):
         self.leftPanel = self._buildResourceSummary()
         self.centerPanel = self._buildRecentResources()
         self.rightPanel = self._buildInsights()
+        self.rightPanel.setVisible(not INTERNAL_TEST_MODE)
         contentLayout.addLayout(self.columns)
         contentLayout.addStretch(1)
         pageLayout.addWidget(self.contentHost, 1)
@@ -419,7 +421,8 @@ class ProjectDashboardWidget(QWidget):
         head = QHBoxLayout()
         head.addWidget(SubtitleLabel("最近资源", panel))
         head.addStretch(1)
-        self.resourceScopeLabel = CaptionLabel("报告范围：全部", panel)
+        scopeTitle = "当前范围" if INTERNAL_TEST_MODE else "报告范围"
+        self.resourceScopeLabel = CaptionLabel(f"{scopeTitle}：全部", panel)
         self.resourceScopeLabel.setObjectName("scopeLabel")
         head.addWidget(self.resourceScopeLabel)
         layout.addLayout(head)
@@ -450,10 +453,11 @@ class ProjectDashboardWidget(QWidget):
     def _connectSignals(self) -> None:
         projectManager.activeProjectChanged.connect(self._onActiveProjectChanged)
         projectManager.projectListChanged.connect(self._syncFromManager)
-        researchReportService.reportStarted.connect(self._onReportStarted)
-        researchReportService.reportProgress.connect(self._onReportProgress)
-        researchReportService.reportFinished.connect(self._onReportFinished)
-        researchReportService.reportFailed.connect(self._onReportFailed)
+        if not INTERNAL_TEST_MODE:
+            researchReportService.reportStarted.connect(self._onReportStarted)
+            researchReportService.reportProgress.connect(self._onReportProgress)
+            researchReportService.reportFinished.connect(self._onReportFinished)
+            researchReportService.reportFailed.connect(self._onReportFailed)
         qconfig.themeChanged.connect(self._applyTheme)
 
     def _syncFromManager(self) -> None:
@@ -475,14 +479,16 @@ class ProjectDashboardWidget(QWidget):
             self.projectDescriptionLabel.setText("请从项目列表选择一个项目")
             self._clearLayout(self.categoryLayout)
             self._clearLayout(self.resourceLayout)
-            self._clearLayout(self.insightLayout)
+            if not INTERNAL_TEST_MODE:
+                self._clearLayout(self.insightLayout)
             return
         self._renderHeader(project)
         resources = list(projectManager.listResources(project.id))
-        insights = list(projectManager.listAiInsights(project.id))
         self._renderCategories(resources)
         self._renderResources(resources)
-        self._renderInsights(insights)
+        if not INTERNAL_TEST_MODE:
+            insights = list(projectManager.listAiInsights(project.id))
+            self._renderInsights(insights)
 
     def _renderHeader(self, project: Project) -> None:
         status = {"active": "进行中", "paused": "已暂停", "archived": "已归档"}
@@ -588,7 +594,8 @@ class ProjectDashboardWidget(QWidget):
         if self._resourceScope:
             match = next((r for r in resources if r.id == self._resourceScope), None)
             scope = match.title if match else "全部"
-        self.resourceScopeLabel.setText(f"报告范围：{scope}")
+        scopeTitle = "当前范围" if INTERNAL_TEST_MODE else "报告范围"
+        self.resourceScopeLabel.setText(f"{scopeTitle}：{scope}")
 
     def _renderInsights(self, insights: list[AiInsight]) -> None:
         self._clearLayout(self.insightLayout)
@@ -632,17 +639,23 @@ class ProjectDashboardWidget(QWidget):
         QTimer.singleShot(0, self._reflowPanels)
 
     def _reflowPanels(self, force: bool = False) -> None:
-        panelColumns = 3 if self.scrollArea.viewport().width() >= 1120 else 1
+        isWide = self.scrollArea.viewport().width() >= 1120
+        panelColumns = (2 if INTERNAL_TEST_MODE else 3) if isWide else 1
         if not force and panelColumns == self._panelColumns:
             return
         self._panelColumns = panelColumns
-        if panelColumns == 3:
-            positions = ((self.leftPanel, 0, 0), (self.centerPanel, 0, 1), (self.rightPanel, 0, 2))
-            stretches = (0, 1, 0)
+        if panelColumns in (2, 3):
+            positions = (
+                ((self.leftPanel, 0, 0), (self.centerPanel, 0, 1))
+                if INTERNAL_TEST_MODE
+                else ((self.leftPanel, 0, 0), (self.centerPanel, 0, 1), (self.rightPanel, 0, 2))
+            )
+            stretches = (0, 1) if INTERNAL_TEST_MODE else (0, 1, 0)
             self.leftPanel.setMinimumWidth(280)
             self.leftPanel.setMaximumWidth(280)
-            self.rightPanel.setMinimumWidth(320)
-            self.rightPanel.setMaximumWidth(320)
+            if not INTERNAL_TEST_MODE:
+                self.rightPanel.setMinimumWidth(320)
+                self.rightPanel.setMaximumWidth(320)
             self.headerGrid.addWidget(
                 self.backButton, 0, 0, Qt.AlignmentFlag.AlignLeft
             )
@@ -654,7 +667,11 @@ class ProjectDashboardWidget(QWidget):
             self.headerGrid.setColumnStretch(1, 1)
             self.headerGrid.setColumnStretch(2, 0)
         else:
-            positions = ((self.leftPanel, 0, 0), (self.centerPanel, 1, 0), (self.rightPanel, 2, 0))
+            positions = (
+                ((self.leftPanel, 0, 0), (self.centerPanel, 1, 0))
+                if INTERNAL_TEST_MODE
+                else ((self.leftPanel, 0, 0), (self.centerPanel, 1, 0), (self.rightPanel, 2, 0))
+            )
             stretches = (1,)
             self.leftPanel.setMinimumWidth(0)
             self.leftPanel.setMaximumWidth(16777215)
@@ -703,7 +720,11 @@ class ProjectDashboardWidget(QWidget):
             return
         box = MessageBox(
             "删除项目",
-            f"确定删除“{project.name}”吗？项目内资源与 AI 解读将一并删除。",
+            (
+                f"确定删除“{project.name}”吗？项目内资源将一并删除。"
+                if INTERNAL_TEST_MODE
+                else f"确定删除“{project.name}”吗？项目内资源与 AI 解读将一并删除。"
+            ),
             self.window(),
         )
         box.yesButton.setText("删除")

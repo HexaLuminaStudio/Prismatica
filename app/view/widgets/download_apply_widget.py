@@ -4,6 +4,7 @@ from typing import Literal, Dict, Any
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QFrame
 from PySide6.QtCore import Qt
 from app.core.utils import logger
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import setThemeRole
 
 from qfluentwidgets import (
@@ -190,7 +191,7 @@ class DownloadApplyWidget(MessageBoxBase):
         self.downloadType = downloadType
         self.infoDict = infoDict
         self.totalCount = 0
-        self.quotedCost: int | None = None
+        self.quotedCost: int | None = 0 if INTERNAL_TEST_MODE else None
 
         # 根据下载类型选择图标
         iconName = "Hsk" if downloadType == "Hsk" else "Global"
@@ -229,13 +230,17 @@ class DownloadApplyWidget(MessageBoxBase):
         self.priceItem = InfoItem(
             ":app/icons/Number.svg", "预计费用：", "等待数量确认", self.cardWidget
         )
+        # 仅仅不加入布局并不会隐藏有 parent 的 QWidget；它会以默认坐标
+        # 浮在卡片左上角，造成内测模式下的重叠和错位。
+        self.priceItem.setVisible(not INTERNAL_TEST_MODE)
 
         # 添加到卡片布局
         self.cardLayout.addWidget(self.downloadTypeItem)
         self.cardLayout.addWidget(self.paramsLabel)
         self.cardLayout.addWidget(self.paramsDisplay)
         self.cardLayout.addWidget(self.numberItem)
-        self.cardLayout.addWidget(self.priceItem)
+        if not INTERNAL_TEST_MODE:
+            self.cardLayout.addWidget(self.priceItem)
 
         # 添加到视图布局
         self.viewLayout.addWidget(self.titleLabel, 0, Qt.AlignmentFlag.AlignCenter)
@@ -251,7 +256,8 @@ class DownloadApplyWidget(MessageBoxBase):
 
         # 启动查询线程
         self.worker = None
-        getPricingCatalog().catalogChanged.connect(self._onCatalogChanged)
+        if not INTERNAL_TEST_MODE:
+            getPricingCatalog().catalogChanged.connect(self._onCatalogChanged)
         self.startQuery()
 
     def startQuery(self):
@@ -271,7 +277,12 @@ class DownloadApplyWidget(MessageBoxBase):
         self.totalCount = max(0, int(total))
         if total > 0:
             self.numberItem.updateValue(f"{total} 条")
-            self._updatePrice()
+            if INTERNAL_TEST_MODE:
+                self.quotedCost = 0
+                self.yesButton.setText("确认创建下载任务")
+                self.yesButton.setEnabled(True)
+            else:
+                self._updatePrice()
         else:
             self.numberItem.updateValue("未找到数据")
             self.priceItem.updateValue("无可计费内容")
@@ -283,6 +294,11 @@ class DownloadApplyWidget(MessageBoxBase):
             self._updatePrice()
 
     def _updatePrice(self) -> None:
+        if INTERNAL_TEST_MODE:
+            self.quotedCost = 0
+            self.yesButton.setText("确认创建下载任务")
+            self.yesButton.setEnabled(self.totalCount > 0)
+            return
         featureCode = (
             HSK_DOWNLOAD_FEATURE
             if self.downloadType == "Hsk"
@@ -360,10 +376,11 @@ class DownloadApplyWidget(MessageBoxBase):
 
     def closeEvent(self, event):
         """对话框关闭时清理资源"""
-        try:
-            getPricingCatalog().catalogChanged.disconnect(self._onCatalogChanged)
-        except Exception:
-            pass
+        if not INTERNAL_TEST_MODE:
+            try:
+                getPricingCatalog().catalogChanged.disconnect(self._onCatalogChanged)
+            except Exception:
+                pass
         self.cleanupWorker()
         super().closeEvent(event)
 

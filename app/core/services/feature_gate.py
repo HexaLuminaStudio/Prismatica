@@ -31,6 +31,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
 
 from app.core.utils import logger, signalBus
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 from .cloud_api import CloudApiError, getCloudApi
 from .cloud_auth import getCloudAuth
@@ -81,6 +82,23 @@ class FeatureGate(QObject):
         idempotencyKey: str | None = None,
     ) -> GateResult:
         """主入口:检查登录 + 余额 → preauth → 返回 settle / refund 闭包。"""
+        if INTERNAL_TEST_MODE:
+            operationId = idempotencyKey or str(uuid.uuid4())
+            return GateResult(
+                ok=True,
+                reason="local_mode",
+                message="内测本地模式不进行云端鉴权或计费",
+                context={
+                    "preauth": {},
+                    "settle": lambda *_args, **_kwargs: {},
+                    "refund": lambda: {},
+                    "featureCode": featureCode,
+                    "estimatedCost": 0,
+                    "resourceUsed": max(0, int(resourceUsed)),
+                    "operationId": operationId,
+                    "localMode": True,
+                },
+            )
         auth = getCloudAuth()
         api = getCloudApi()
         operationId = idempotencyKey or str(uuid.uuid4())

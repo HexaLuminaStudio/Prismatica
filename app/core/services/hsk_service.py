@@ -11,6 +11,7 @@ from PySide6.QtCore import QThread, Signal
 from app.core.services.cloud_api import CloudApiError
 from app.core.services.official_corpus import requestOfficialCorpusToken
 from app.core.utils import log
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 
 class HskTokenRefreshThread(QThread):
@@ -37,7 +38,7 @@ class HskTokenRefreshThread(QThread):
 
         self.username = username
         self.password = password
-        self.useOfficial = bool(useOfficial)
+        self.useOfficial = bool(useOfficial) and not INTERNAL_TEST_MODE
 
     def run(self):
         if self.useOfficial:

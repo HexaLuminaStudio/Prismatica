@@ -46,6 +46,7 @@ from app.core.services import (
     batchApplyService,
     getPricingCatalog,
 )
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 
 
@@ -283,7 +284,8 @@ class DownloadTaskWorkbench(QWidget):
         self._initUi(title, subtitle, pageIcon, modes)
         self._connectSignals()
         batchApplyService.itemsChanged.connect(self._onBatchItemsChanged)
-        getPricingCatalog().catalogChanged.connect(self._onPricingCatalogChanged)
+        if not INTERNAL_TEST_MODE:
+            getPricingCatalog().catalogChanged.connect(self._onPricingCatalogChanged)
         self._onBatchItemsChanged(batchApplyService.getCount())
         self._applyTheme()
         qconfig.themeChangedFinished.connect(self._applyTheme)
@@ -752,8 +754,14 @@ class DownloadTaskWorkbench(QWidget):
 
         count = len(items)
         featureCode = "hsk_download" if self._downloadType == "Hsk" else "global_download"
-        costs = [getPricingCatalog().meteredCost(featureCode, item.total) for item in items]
-        if count > 0 and all(cost is not None for cost in costs):
+        costs = (
+            []
+            if INTERNAL_TEST_MODE
+            else [getPricingCatalog().meteredCost(featureCode, item.total) for item in items]
+        )
+        if INTERNAL_TEST_MODE:
+            self.batchDownloadButton.setText(f"提交批量任务 ({count})")
+        elif count > 0 and all(cost is not None for cost in costs):
             totalCost = sum(int(cost or 0) for cost in costs)
             self.batchDownloadButton.setText(f"提交批量任务 ({count} 项 · {totalCost} 点)")
         else:
@@ -787,9 +795,11 @@ class DownloadTaskWorkbench(QWidget):
         summaryLabel.setWordWrap(True)
         textLayout.addWidget(summaryLabel)
         featureCode = "hsk_download" if self._downloadType == "Hsk" else "global_download"
-        cost = getPricingCatalog().meteredCost(featureCode, item.total)
+        cost = None if INTERNAL_TEST_MODE else getPricingCatalog().meteredCost(featureCode, item.total)
         totalText = (
-            f"预计 {item.total:,} 条 · {cost} 点"
+            f"预计 {item.total:,} 条"
+            if INTERNAL_TEST_MODE and item.total > 0
+            else f"预计 {item.total:,} 条 · {cost} 点"
             if item.total > 0 and cost is not None
             else f"预计 {item.total:,} 条 · 价格同步中"
             if item.total > 0
@@ -973,12 +983,13 @@ class DownloadTaskWorkbench(QWidget):
             )
         except Exception:
             pass
-        try:
-            getPricingCatalog().catalogChanged.disconnect(
-                self._onPricingCatalogChanged
-            )
-        except Exception:
-            pass
+        if not INTERNAL_TEST_MODE:
+            try:
+                getPricingCatalog().catalogChanged.disconnect(
+                    self._onPricingCatalogChanged
+                )
+            except Exception:
+                pass
         self._cleanupBatchPreviewWorker()
         super().closeEvent(event)
 

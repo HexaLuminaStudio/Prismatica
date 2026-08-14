@@ -14,6 +14,7 @@ from qfluentwidgets import (
 
 from app.core.utils import signalBus, logger
 from app.core.utils.config import cfg, qconfig
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.core.services import getCloudApi, taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .widgets.prismatica_navigation import PrismaticaNavigationBar
@@ -62,6 +63,7 @@ class MainWindow(MSFluentWindow):
         self._screenChangeConnected = False
         self._observedScreen = None
         self._startupShown = False  # 是否已通过 _showAfterStartup() 显示过
+        self._firstShowPending = True
         self._postLoginInterface = None
         self._resumeHskResourcePreparation = False
         # 项目管理页「锁定态」:AI 报告生成期间锁住页面交互,
@@ -95,20 +97,22 @@ class MainWindow(MSFluentWindow):
         self._reportProgress(58, "构造任务管理界面")
         self.taskInterface = TaskInterface(self)
 
-        self._reportProgress(65, "构造 AI 聊天界面")
-        self.chatInterface = ChatInterface(self)
+        if not INTERNAL_TEST_MODE:
+            self._reportProgress(65, "构造 AI 聊天界面")
+            self.chatInterface = ChatInterface(self)
 
         self._reportProgress(72, "构建设置界面")
         self.settingInterface = SettingInterface(self)
 
-        # 认证是主窗口内的独立业务页面，不再使用模态登录弹窗。
-        self.loginInterface = LoginInterface(self)
-        self.loginInterface.loginSucceeded.connect(self._onLoginSucceeded)
-        self.hskCorpusInterface.resourcePreparationRequested.connect(
-            self._onHskCorpusResourcePreparationRequested
-        )
-        self.accountInterface = AccountInterface(self)
-        self.accountInterface.loggedOut.connect(self._onAccountLoggedOut)
+        if not INTERNAL_TEST_MODE:
+            # 认证是主窗口内的独立业务页面，不再使用模态登录弹窗。
+            self.loginInterface = LoginInterface(self)
+            self.loginInterface.loginSucceeded.connect(self._onLoginSucceeded)
+            self.hskCorpusInterface.resourcePreparationRequested.connect(
+                self._onHskCorpusResourcePreparationRequested
+            )
+            self.accountInterface = AccountInterface(self)
+            self.accountInterface.loggedOut.connect(self._onAccountLoggedOut)
 
         # PRD-002:项目管理子界面(REQ-PROJ-001)
         self._reportProgress(80, "构造项目管理界面")
@@ -232,13 +236,14 @@ class MainWindow(MSFluentWindow):
         except Exception as e:
             logger.warning(f"[MainWindow] 连接导航信号失败: {e}")
 
-        # 2026-08-07 P0-A(M11/M13):云端会话 / 余额 / 设备变化 → 通知 accountNav
-        try:
-            signalBus.sessionChanged.connect(self._onCloudSessionChanged)
-            signalBus.balanceChanged.connect(self._onCloudBalanceChanged)
-            signalBus.maxDevicesReached.connect(self._onMaxDevicesReached)
-        except Exception as e:
-            logger.warning(f"[MainWindow] 连接云端信号失败: {e}")
+        if not INTERNAL_TEST_MODE:
+            # 2026-08-07 P0-A(M11/M13):云端会话 / 余额 / 设备变化 → 通知 accountNav
+            try:
+                signalBus.sessionChanged.connect(self._onCloudSessionChanged)
+                signalBus.balanceChanged.connect(self._onCloudBalanceChanged)
+                signalBus.maxDevicesReached.connect(self._onMaxDevicesReached)
+            except Exception as e:
+                logger.warning(f"[MainWindow] 连接云端信号失败: {e}")
 
     def _onProjectBusyChanged(self, busy: bool) -> None:
         """项目管理页 AI 报告生成状态变化。"""
@@ -298,6 +303,8 @@ class MainWindow(MSFluentWindow):
 
     def _onHskCorpusResourcePreparationRequested(self) -> None:
         """把登录与资源准备串成一次可自动续接的页面动作。"""
+        if INTERNAL_TEST_MODE:
+            return
         if getCloudApi().isLoggedIn():
             self.hskCorpusInterface.startResourcePreparation()
             return
@@ -540,12 +547,13 @@ class MainWindow(MSFluentWindow):
         self.navigationInterface.addSectionHeader(
             "研究", NavigationItemPosition.SCROLL
         )
-        self.addSubInterface(
-            self.chatInterface,
-            FluentIcon.CHAT,
-            "AI 聊天",
-            position=NavigationItemPosition.SCROLL,
-        )
+        if not INTERNAL_TEST_MODE:
+            self.addSubInterface(
+                self.chatInterface,
+                FluentIcon.CHAT,
+                "AI 聊天",
+                position=NavigationItemPosition.SCROLL,
+            )
 
         # PRD-002:项目管理(REQ-PROJ-001)— 低频操作,放 SCROLL
         # 注:MVP 阶段复用 Save.svg 作为项目图标(项目 = 已保存的研究单元),
@@ -574,23 +582,24 @@ class MainWindow(MSFluentWindow):
             position=NavigationItemPosition.BOTTOM,
         )
 
-        # 认证页和个人中心都由账户入口驱动，不额外占用普通导航按钮。
-        for accountPage in (self.loginInterface, self.accountInterface):
-            accountPage.setProperty("isStackedTransparent", False)
-            self.stackedWidget.addWidget(accountPage)
+        if not INTERNAL_TEST_MODE:
+            # 认证页和个人中心都由账户入口驱动，不额外占用普通导航按钮。
+            for accountPage in (self.loginInterface, self.accountInterface):
+                accountPage.setProperty("isStackedTransparent", False)
+                self.stackedWidget.addWidget(accountPage)
 
-        # 2026-08-07 P0-A(M11):账户入口(M13 信号总线驱动头像状态切换)
-        from app.view.widgets.account.account_nav import AccountNavWidget
+            # 2026-08-07 P0-A(M11):账户入口(M13 信号总线驱动头像状态切换)
+            from app.view.widgets.account.account_nav import AccountNavWidget
 
-        self.accountNav = AccountNavWidget(self)
-        self.accountNav.setMaximumHeight(60)
-        self.navigationInterface.addWidget(
-            "accountNav",
-            self.accountNav,
-            position=NavigationItemPosition.BOTTOM,
-        )
-        # 账户入口始终在主窗口导航栈内完成切页。
-        self.accountNav.clicked.connect(self._openAccountPage)
+            self.accountNav = AccountNavWidget(self)
+            self.accountNav.setMaximumHeight(60)
+            self.navigationInterface.addWidget(
+                "accountNav",
+                self.accountNav,
+                position=NavigationItemPosition.BOTTOM,
+            )
+            # 账户入口始终在主窗口导航栈内完成切页。
+            self.accountNav.clicked.connect(self._openAccountPage)
         self._connectTaskNavigationBadge()
 
         self.splashScreen.finish()
@@ -646,8 +655,11 @@ class MainWindow(MSFluentWindow):
             self,
             self._PREFERRED_SIZE,
             self._BASE_MINIMUM_SIZE,
-            keepCurrentSize=True,
+            # 首次显示时不沿用页面构建过程中变化过的 sizeHint；后续显示
+            # 才保留用户已经调整的窗口尺寸。
+            keepCurrentSize=not self._firstShowPending,
         )
+        self._firstShowPending = False
         windowHandle = self.windowHandle()
         if windowHandle is not None and not self._screenChangeConnected:
             windowHandle.screenChanged.connect(self._onScreenChanged)
@@ -723,6 +735,13 @@ class MainWindow(MSFluentWindow):
                     self.setWindowFlags(flags & ~Qt.WindowType.WindowStaysOnTopHint)
             except Exception:
                 pass
+            # 在交给原生窗口系统绘制之前恢复最终启动尺寸，避免内部页面
+            # 数量变化导致隐藏窗口先缩小、showEvent 再放大的视觉跳变。
+            fitWindowToAvailableScreen(
+                self,
+                self._PREFERRED_SIZE,
+                self._BASE_MINIMUM_SIZE,
+            )
             self.show()
             QApplication.processEvents()
             # raise_() 让窗口激活到前台(Win10 上 show() 不一定抢焦点)

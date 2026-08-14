@@ -49,6 +49,7 @@ from app.core.services import (
 )
 from app.core.services.startup_database_service import StartupDatabaseService
 from app.core.utils import cfg, qconfig, logger, signalBus
+from app.core.utils.setting import INTERNAL_TEST_MODE
 from app.view.widgets.prismatica_theme import pageBackgroundColor, shellPalette
 from app.view.widgets.pricing_status_dialog import PricingStatusDialog
 from app.view.widgets.resource_verification_dialog import (
@@ -742,7 +743,9 @@ class SoftwareSettingWidget(OverviewGroupCard):
             self.resourceVerifyButton.setText("再次校验")
             return
         self.resourceVerifyBadge.setConfigured(False, missingText="需修复")
-        self.resourceVerifyButton.setText("继续处理")
+        self.resourceVerifyButton.setText(
+            "再次校验" if INTERNAL_TEST_MODE else "继续处理"
+        )
 
     def _showSuccessMessage(self, title: str, content: str):
         """显示成功提示"""
@@ -1486,6 +1489,7 @@ class AgreementLabelWidget(QWidget):
         self.pricingStatusLabel = HyperlinkLabel("当前定价", self)
         self.pricingStatusLabel.setAccessibleName("查看当前定价")
         self.pricingStatusLabel.clicked.connect(self._showPricingStatus)
+        self.pricingStatusLabel.setVisible(not INTERNAL_TEST_MODE)
 
         # 用户协议链接
         self.userAgreementLabel = HyperlinkLabel("用户协议", self)
@@ -1494,12 +1498,14 @@ class AgreementLabelWidget(QWidget):
         # 分隔符
         self.separator = VerticalSeparator(self)
         self.separator.setFixedHeight(15)
+        self.separator.setVisible(not INTERNAL_TEST_MODE)
 
-        # 添加组件
-        hBoxLayout.addWidget(self.pricingStatusLabel, 0, Qt.AlignmentFlag.AlignCenter)
-        hBoxLayout.addSpacing(10)
-        hBoxLayout.addWidget(self.separator)
-        hBoxLayout.addSpacing(10)
+        # 内测本地模式不展示任何定价入口。
+        if not INTERNAL_TEST_MODE:
+            hBoxLayout.addWidget(self.pricingStatusLabel, 0, Qt.AlignmentFlag.AlignCenter)
+            hBoxLayout.addSpacing(10)
+            hBoxLayout.addWidget(self.separator)
+            hBoxLayout.addSpacing(10)
         hBoxLayout.addWidget(self.userAgreementLabel, 0, Qt.AlignmentFlag.AlignCenter)
 
     def _showPricingStatus(self) -> None:
@@ -1587,11 +1593,14 @@ class SettingInterface(ScrollArea):
         # 分析规则设置组件
         self.analysisSettingWidget = AnalysisSettingWidget(self.scrollWidget)
 
-        # AI 聊天设置组件
-        self.aiChatSettingWidget = AiChatSettingWidget(self.scrollWidget)
+        self.aiChatSettingWidget = None
+        self.aiInsightSettingWidget = None
+        if not INTERNAL_TEST_MODE:
+            # AI 聊天设置组件
+            self.aiChatSettingWidget = AiChatSettingWidget(self.scrollWidget)
 
-        # AI 解读设置组件（PRD-001 REQ-AI-001）
-        self.aiInsightSettingWidget = AiInsightSettingWidget(self.scrollWidget)
+            # AI 解读设置组件（PRD-001 REQ-AI-001）
+            self.aiInsightSettingWidget = AiInsightSettingWidget(self.scrollWidget)
 
         # 关于设置组件
         self.aboutSettingWidget = AboutSettingWidget(self.scrollWidget)
@@ -1658,8 +1667,10 @@ class SettingInterface(ScrollArea):
         self.contentLayout.addWidget(self.displaySettingWidget)
         self.contentLayout.addWidget(self.analysisSettingWidget)
         self.contentLayout.addWidget(self.softwareSettingWidget)
-        self.contentLayout.addWidget(self.aiChatSettingWidget)
-        self.contentLayout.addWidget(self.aiInsightSettingWidget)
+        if self.aiChatSettingWidget is not None:
+            self.contentLayout.addWidget(self.aiChatSettingWidget)
+        if self.aiInsightSettingWidget is not None:
+            self.contentLayout.addWidget(self.aiInsightSettingWidget)
         self.contentLayout.addWidget(self.aboutSettingWidget)
         self.contentLayout.addWidget(self.footerWidget)
 
@@ -1676,13 +1687,14 @@ class SettingInterface(ScrollArea):
         self.expandLayout.setContentsMargins(sideMargin, 40, sideMargin, 40)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         showSummary = not isCompact
-        for card in (
+        cards = (
             self.displaySettingWidget,
             self.analysisSettingWidget,
             self.softwareSettingWidget,
             self.aiChatSettingWidget,
             self.aiInsightSettingWidget,
             self.aboutSettingWidget,
-        ):
+        )
+        for card in (item for item in cards if item is not None):
             card.headerSummaryLabel.setVisible(showSummary)
             card.setCompactLayout(isCompact)

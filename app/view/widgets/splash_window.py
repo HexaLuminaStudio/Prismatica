@@ -22,6 +22,7 @@
 from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
+    QSize,
     Qt,
     QTimer,
     Signal,
@@ -48,6 +49,8 @@ TEXT_COLOR_LIGHT = QColor("#202020")
 TEXT_COLOR_DARK = QColor("#ffffff")
 SUBTEXT_COLOR = QColor("#888888")
 BACKGROUND_COLOR = QColor("#ffffff")
+SPLASH_CARD_SIZE = QSize(480, 360)
+SPLASH_WINDOW_SIZE = QSize(520, 400)
 
 # 动画参数
 FADE_OUT_DURATION_MS = 350
@@ -113,6 +116,10 @@ class SplashWindow(QWidget):
         self._targetProgress = 5
 
         self._buildUi()
+        # 顶层窗口必须在首次 show() 前就拥有最终尺寸。若只依赖布局的
+        # sizeHint，Windows 会先绘制 QWidget 默认的 640x480，再收缩到
+        # 520x400，启动时会出现一次明显的窗口跳变。
+        self.setFixedSize(SPLASH_WINDOW_SIZE)
         self._applyShadow()
         self._wireProgressAnimation()
 
@@ -134,7 +141,7 @@ class SplashWindow(QWidget):
         # 卡片容器(实际显示背景 + 内容)
         self._card = QWidget(self)
         self._card.setObjectName("splashCard")
-        self._card.setFixedSize(480, 360)
+        self._card.setFixedSize(SPLASH_CARD_SIZE)
 
         cardLayout = QVBoxLayout(self._card)
         cardLayout.setContentsMargins(38, 28, 38, 26)

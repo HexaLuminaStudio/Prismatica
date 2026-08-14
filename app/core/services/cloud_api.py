@@ -33,6 +33,7 @@ import requests
 from requests.exceptions import ConnectionError, RequestException, Timeout
 
 from app.core.utils import cfg, logger
+from app.core.utils.setting import INTERNAL_TEST_MODE
 
 from .responsive_call import runResponsiveCall
 
@@ -172,6 +173,8 @@ class CloudApi:
         self._session = CloudSession()
 
     def isLoggedIn(self) -> bool:
+        if INTERNAL_TEST_MODE:
+            return False
         return bool(self._session.accessToken) and self._session.userId > 0
 
     def setRefreshCallback(self, callback) -> None:
@@ -185,6 +188,11 @@ class CloudApi:
     # ------------------------------------------------------------------
 
     def _baseUrl(self) -> str:
+        if INTERNAL_TEST_MODE:
+            raise CloudApiError(
+                "CLOUD_DISABLED",
+                "内测本地模式已停用 Prismatica 云端服务",
+            )
         url = (cfg.cloudBaseUrl.value or "").strip().rstrip("/")
         if not url:
             raise CloudApiError("NETWORK_ERROR", "未配置云端 API 地址(cfg.cloudBaseUrl)")
