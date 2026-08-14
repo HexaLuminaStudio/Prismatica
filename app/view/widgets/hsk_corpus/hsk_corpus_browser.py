@@ -99,6 +99,7 @@ from app.view.widgets.hsk_corpus.hsk_corpus_detail_drawer import (
 from app.view.widgets.hsk_corpus.hsk_corpus_search_worker import (
     HskCorpusSearchWorker,
 )
+from app.view.widgets.resource_verification_dialog import ResourceVerificationDialog
 
 
 # 主线程拉取 worker snapshot 的节流间隔(60ms ≈ 16fps)
@@ -454,6 +455,8 @@ class _ConditionRow(QWidget):
 class HskCorpusBrowser(QWidget, WorkerMixin):
     """HSK 语料检索主面板(现代化简洁 UI · 多条件组合检索)。"""
 
+    resourcePreparationRequested = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         QWidget.__init__(self, parent)
         WorkerMixin.__init__(self)
@@ -505,6 +508,9 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         self._emptyState: Optional[QWidget] = None
         self._emptyStateTitle: Optional[StrongBodyLabel] = None
         self._emptyStateCaption: Optional[CaptionLabel] = None
+        self._resourceActionButton: Optional[PrimaryPushButton] = None
+        self._resourceDialog: Optional[ResourceVerificationDialog] = None
+        self._isPreparingResources = False
         self._corpusCountLabel: Optional[CaptionLabel] = None
         self._conditionSummary: Optional[QFrame] = None
         self._conditionSummaryTitle: Optional[StrongBodyLabel] = None
@@ -767,6 +773,24 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         emptyLayout.addWidget(self._emptyStateCaption)
+        self._resourceActionButton = PrimaryPushButton(
+            "准备作文资源",
+            self._emptyState,
+            FluentIcon.DOWNLOAD,
+        )
+        self._resourceActionButton.setAccessibleName("自动准备 HSK 作文资源")
+        self._resourceActionButton.setToolTip(
+            "自动完成登录（如需要）、资源检查、下载与页面刷新"
+        )
+        self._resourceActionButton.clicked.connect(
+            self._onResourcePreparationClicked
+        )
+        self._resourceActionButton.hide()
+        emptyLayout.addWidget(
+            self._resourceActionButton,
+            0,
+            Qt.AlignmentFlag.AlignHCenter,
+        )
         emptyLayout.addStretch(1)
         self._resultStack.addWidget(self._emptyState)
 
@@ -1049,9 +1073,89 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
         if self._resultStack is not None and self._emptyState is not None:
             self._resultStack.setCurrentWidget(self._emptyState)
 
+    def _setResourceActionVisible(self, isVisible: bool) -> None:
+        """仅在语料资源不可用时显示单一恢复入口。"""
+        if self._resourceActionButton is None:
+            return
+        self._resourceActionButton.setVisible(bool(isVisible))
+        self._resourceActionButton.setEnabled(not self._isPreparingResources)
+        self._resourceActionButton.setText(
+            "正在准备…" if self._isPreparingResources else "准备作文资源"
+        )
+
+    def _onResourcePreparationClicked(self) -> None:
+        if self._isPreparingResources:
+            return
+        self.resourcePreparationRequested.emit()
+
+    def startResourcePreparation(self) -> None:
+        """在本页面续接资源检查、自动修复与刷新流程。"""
+        if self._isPreparingResources:
+            dialog = self._resourceDialog
+            if dialog is not None:
+                dialog.raise_()
+                dialog.activateWindow()
+            return
+
+        self._isPreparingResources = True
+        self._setResourceActionVisible(True)
+        self._setStatusRunning("正在准备语料库")
+        self._showEmptyState(
+            "正在准备作文资源",
+            "应用会自动检查并下载缺失数据，完成后即可直接检索。",
+        )
+
+        dialog = ResourceVerificationDialog(
+            parent=self.window(),
+            autoRepair=True,
+        )
+        self._resourceDialog = dialog
+        dialog.resourcesReady.connect(self._activatePreparedResources)
+        dialog.finished.connect(self._onResourceDialogFinished)
+        dialog.exec()
+
+    def _activatePreparedResources(self) -> None:
+        """资源安装完成后立即让当前页面读取新数据库。"""
+        try:
+            self._service.setDbPath(BOUND_HSK_DB_PATH)
+            self._service.ensureSchema()
+            if self.model is not None:
+                self.model.reset()
+                self._applyColumnVisibility()
+            self._updateDbStatus()
+            if self._service.isAvailable():
+                InfoBar.success(
+                    title="作文资源已就绪",
+                    content="现在可以直接设置条件并检索，无需重置页面。",
+                    parent=self,
+                    duration=2500,
+                    position=InfoBarPosition.TOP,
+                )
+        except Exception as error:
+            logger.exception(f"[HskCorpusBrowser] 激活作文资源失败: {error}")
+            self._setStatusBad("语料库加载失败")
+            self._showEmptyState(
+                "资源已下载，但加载失败",
+                "请点击下方按钮重试；若问题持续出现，请检查磁盘权限。",
+            )
+
+    def _onResourceDialogFinished(self, _result: int) -> None:
+        self._resourceDialog = None
+        self._isPreparingResources = False
+        self._updateDbStatus()
+
     def _showTableState(self) -> None:
         if self._resultStack is not None and self.tableView is not None:
             self._resultStack.setCurrentWidget(self.tableView)
+
+    def showEvent(self, event) -> None:
+        """每次回到页面都自动刷新资源状态，不依赖手动重置。"""
+        super().showEvent(event)
+        QTimer.singleShot(0, self.refreshResourceState)
+
+    def refreshResourceState(self) -> None:
+        """重新读取本地资源状态并同步当前页面。"""
+        self._updateDbStatus()
 
     # ------------------------------------------------------------------
     # 结果列、条件摘要与详情抽屉
@@ -1292,7 +1396,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
     def _updateDbStatus(self) -> None:
         if not self.statusLabel:
             return
-        # ---- 路径不存在 → 通用提示,不向用户暴露文件位置 ----
+        # ---- 路径不存在 → 在当前页面提供唯一恢复动作 ----
         if not self._dbPath.exists():
             self._setStatusBad("语料库未就绪")
             if self._corpusCountLabel:
@@ -1300,21 +1404,19 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             if self.searchBtn:
                 self.searchBtn.setEnabled(False)
             if self._dbPathLabel:
-                self._dbPathLabel.setText("语料库文件缺失，请联系管理员补全数据。")
+                self._dbPathLabel.setText("作文资源尚未准备完成，可在当前页面自动处理。")
             self._showEmptyState(
-                "语料库尚未就绪",
-                "补全本地 HSK 语料库数据后即可开始检索。",
+                "准备好资源，即可开始检索",
+                "点击一次即可完成登录（如需要）、检查和下载，不必前往设置页。",
             )
-            InfoBar.error(
-                title="语料库未找到",
-                content="语料库文件缺失,请联系管理员补全数据后重试。",
-                parent=self,
-                duration=4000,
-                position=InfoBarPosition.TOP,
-            )
+            self._setResourceActionVisible(True)
             return
         # ---- 文件存在但无数据 ----
-        n = self._service.rowCount()
+        try:
+            n = self._service.rowCount()
+        except Exception as error:
+            logger.warning(f"[HskCorpusBrowser] 读取语料库状态失败: {error}")
+            n = 0
         if n == 0:
             self._setStatusBad("语料库暂无数据")
             if self._corpusCountLabel:
@@ -1322,11 +1424,12 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             if self.searchBtn:
                 self.searchBtn.setEnabled(False)
             if self._dbPathLabel:
-                self._dbPathLabel.setText("语料库为空，请等待数据导入完成后重试。")
+                self._dbPathLabel.setText("作文资源为空或不完整，可在当前页面自动修复。")
             self._showEmptyState(
-                "语料库暂无数据",
-                "数据导入完成后，本页面会自动恢复检索能力。",
+                "准备好资源，即可开始检索",
+                "应用会自动下载并校验作文数据，完成后页面会立即恢复。",
             )
+            self._setResourceActionVisible(True)
             return
         # ---- schema 校验(列是否齐全)----
         cols = self._service.availableColumns()
@@ -1336,6 +1439,13 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
                 self._corpusCountLabel.setText("结构异常")
             if self.searchBtn:
                 self.searchBtn.setEnabled(False)
+            if self._dbPathLabel:
+                self._dbPathLabel.setText("作文资源结构异常，可在当前页面自动修复。")
+            self._showEmptyState(
+                "作文资源需要修复",
+                "点击下方按钮自动重新检查并下载，不必离开当前页面。",
+            )
+            self._setResourceActionVisible(True)
             return
         # ---- 一切正常 ----
         self._setStatusOk(f"已加载 {n:,} 条语料")
@@ -1345,6 +1455,7 @@ class HskCorpusBrowser(QWidget, WorkerMixin):
             self.searchBtn.setEnabled(True)
         if self._dbPathLabel:
             self._dbPathLabel.setText("")
+        self._setResourceActionVisible(False)
 
     def _setStatus(self, text: str, state: str) -> None:
         if not self.statusLabel:

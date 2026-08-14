@@ -13,7 +13,7 @@ HSK 作文语料检索主页面
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from app.core.utils import log
@@ -23,12 +23,17 @@ from app.view.widgets.hsk_corpus.hsk_corpus_browser import HskCorpusBrowser
 class HskCorpusInterface(QWidget):
     """HSK 作文语料检索主页面(与 HSK 下载同级)。"""
 
+    resourcePreparationRequested = Signal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent=parent)
         self.setObjectName("HskCorpusInterface")
 
         # 浏览器实例(整个页面只有一个)
         self.browser = HskCorpusBrowser(self)
+        self.browser.resourcePreparationRequested.connect(
+            self.resourcePreparationRequested.emit
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -42,3 +47,11 @@ class HskCorpusInterface(QWidget):
             HskCorpusService.instance().ensureSchema()
         except Exception as e:
             log.warning(f"[HskCorpusInterface] ensureSchema 失败: {e}")
+
+    def startResourcePreparation(self) -> None:
+        """登录完成后从当前页面继续资源准备。"""
+        self.browser.startResourcePreparation()
+
+    def refreshResourceState(self) -> None:
+        """外部资源发生变化后立即刷新检索可用状态。"""
+        self.browser.refreshResourceState()

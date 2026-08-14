@@ -301,7 +301,7 @@ class LoginInterface(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(90, 30, 90, 24)
         layout.setSpacing(0)
-        self._addBrandHeader(
+        self._loginSubtitleLabel = self._addBrandHeader(
             layout,
             "登录 Prismatica",
             "使用邮箱登录，继续你的语料研究",
@@ -409,7 +409,12 @@ class LoginInterface(QWidget):
         self._addFooter(layout)
         return page
 
-    def _addBrandHeader(self, layout: QVBoxLayout, title: str, subtitle: str) -> None:
+    def _addBrandHeader(
+        self,
+        layout: QVBoxLayout,
+        title: str,
+        subtitle: str,
+    ) -> QLabel:
         brandRow = QHBoxLayout()
         brandRow.addStretch(1)
         brandRow.addWidget(_AuthBrandMark())
@@ -425,6 +430,7 @@ class LoginInterface(QWidget):
         layout.addWidget(titleLabel)
         layout.addSpacing(6)
         layout.addWidget(subtitleLabel)
+        return subtitleLabel
 
     def _addFieldLabel(self, layout: QVBoxLayout, text: str) -> None:
         label = QLabel(text)
@@ -510,6 +516,13 @@ class LoginInterface(QWidget):
             self._loginWorker is not None and self._loginWorker.isRunning()
         )
         self._restoreActionButton(self._registerBtn, "创建账号并登录")
+
+    def prepareForLogin(self, contextMessage: str = "") -> None:
+        """切回登录表单，并按来源说明登录后的自动续接动作。"""
+        self._switchTab(0, animate=False)
+        self._loginSubtitleLabel.setText(
+            contextMessage or "使用邮箱登录，继续你的语料研究"
+        )
 
     def _currentStatus(self) -> _StatusBanner:
         return self._registerStatus if self._stack.currentIndex() else self._loginStatus

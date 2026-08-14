@@ -14,7 +14,7 @@ from qfluentwidgets import (
 
 from app.core.utils import signalBus, logger
 from app.core.utils.config import cfg, qconfig
-from app.core.services import taskManager
+from app.core.services import getCloudApi, taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .widgets.prismatica_navigation import PrismaticaNavigationBar
 from .widgets.prismatica_theme import (
@@ -62,6 +62,8 @@ class MainWindow(MSFluentWindow):
         self._screenChangeConnected = False
         self._observedScreen = None
         self._startupShown = False  # 是否已通过 _showAfterStartup() 显示过
+        self._postLoginInterface = None
+        self._resumeHskResourcePreparation = False
         # 项目管理页「锁定态」:AI 报告生成期间锁住页面交互,
         # 此时不允许通过导航栏离开项目管理页,也不允许直接关闭主窗口。
         self._projectBusy: bool = False
@@ -102,6 +104,9 @@ class MainWindow(MSFluentWindow):
         # 认证是主窗口内的独立业务页面，不再使用模态登录弹窗。
         self.loginInterface = LoginInterface(self)
         self.loginInterface.loginSucceeded.connect(self._onLoginSucceeded)
+        self.hskCorpusInterface.resourcePreparationRequested.connect(
+            self._onHskCorpusResourcePreparationRequested
+        )
         self.accountInterface = AccountInterface(self)
         self.accountInterface.loggedOut.connect(self._onAccountLoggedOut)
 
@@ -280,17 +285,42 @@ class MainWindow(MSFluentWindow):
         try:
             from app.core.services import getCloudAuth
 
+            self._postLoginInterface = None
+            self._resumeHskResourcePreparation = False
             if getCloudAuth()._api.isLoggedIn():
                 self.switchTo(self.accountInterface)
                 self.accountInterface.refresh()
             else:
+                self.loginInterface.prepareForLogin()
                 self.switchTo(self.loginInterface)
         except Exception as exc:
             logger.exception(f"[MainWindow] 打开个人中心页面失败: {exc}")
 
+    def _onHskCorpusResourcePreparationRequested(self) -> None:
+        """把登录与资源准备串成一次可自动续接的页面动作。"""
+        if getCloudApi().isLoggedIn():
+            self.hskCorpusInterface.startResourcePreparation()
+            return
+
+        self._postLoginInterface = self.hskCorpusInterface
+        self._resumeHskResourcePreparation = True
+        self.loginInterface.prepareForLogin(
+            "登录后将自动返回 HSK 作文检索，并继续准备所需资源"
+        )
+        self.switchTo(self.loginInterface)
+
     def _onLoginSucceeded(self) -> None:
         try:
             self._onCloudSessionChanged(True)
+            targetInterface = self._postLoginInterface
+            shouldResumeHskPreparation = self._resumeHskResourcePreparation
+            self._postLoginInterface = None
+            self._resumeHskResourcePreparation = False
+            if targetInterface is not None:
+                self.switchTo(targetInterface)
+                if shouldResumeHskPreparation:
+                    targetInterface.startResourcePreparation()
+                return
             self.switchTo(self.accountInterface)
             self.accountInterface.refresh()
         except Exception:
@@ -298,7 +328,10 @@ class MainWindow(MSFluentWindow):
 
     def _onAccountLoggedOut(self) -> None:
         """退出账户后停留在主窗口内，并切换到登录页。"""
+        self._postLoginInterface = None
+        self._resumeHskResourcePreparation = False
         self._onCloudSessionChanged(False)
+        self.loginInterface.prepareForLogin()
         self.switchTo(self.loginInterface)
 
     def _onCloudSessionChanged(self, loggedIn: bool) -> None:

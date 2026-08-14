@@ -20,8 +20,8 @@ from qfluentwidgets import (
     qconfig,
 )
 
-from app.core.api.database_download import DatabaseDownloadCancelled
 from app.core.services.startup_database_service import (
+    DatabaseDownloadCancelled,
     DatabaseResource,
     DatabaseVerificationResult,
     DatabaseVerificationThread,
@@ -191,13 +191,18 @@ class _DatabaseDownloadWorker(QObject):
 class ResourceVerificationDialog(MessageBoxBase):
     """使用 Fluent MessageBoxBase 的资源校验、结果与修复流程。"""
 
+    resourcesReady = Signal()
+
     def __init__(
         self,
         service: Optional[StartupDatabaseService] = None,
         parent=None,
+        autoRepair: bool = False,
     ) -> None:
         super().__init__(parent)
         self._service = service or StartupDatabaseService()
+        self._autoRepair = bool(autoRepair)
+        self._readyEmitted = False
         self._verificationThread: Optional[DatabaseVerificationThread] = None
         self._downloadThread: Optional[QThread] = None
         self._downloadWorker: Optional[_DatabaseDownloadWorker] = None
@@ -220,10 +225,17 @@ class ResourceVerificationDialog(MessageBoxBase):
         self.viewLayout.setContentsMargins(24, 18, 24, 8)
         self.viewLayout.setSpacing(12)
 
-        titleLabel = SubtitleLabel("HSK 作文资源校验", self)
+        titleLabel = SubtitleLabel(
+            "正在准备 HSK 作文资源" if self._autoRepair else "HSK 作文资源校验",
+            self,
+        )
         self.viewLayout.addWidget(titleLabel)
         descriptionLabel = BodyLabel(
-            "检查作文数据表与正文库的 SQLite 完整性。发现异常时可在此直接重新下载修复。",
+            (
+                "首次使用会自动检查并下载所需数据，完成后即可直接检索。"
+                if self._autoRepair
+                else "检查作文数据表与正文库的 SQLite 完整性。发现异常时可在此直接重新下载修复。"
+            ),
             self,
         )
         descriptionLabel.setWordWrap(True)
@@ -295,11 +307,18 @@ class ResourceVerificationDialog(MessageBoxBase):
         if invalidResults:
             self._state = "needsRepair"
             self.overviewLabel.setText(
-                f"发现 {len(invalidResults)} 个异常资源，可重新下载并自动复检。"
+                (
+                    f"发现 {len(invalidResults)} 个资源需要准备，正在自动下载…"
+                    if self._autoRepair
+                    else f"发现 {len(invalidResults)} 个异常资源，可重新下载并自动复检。"
+                )
             )
-            self.yesButton.setText("修复资源")
+            self.yesButton.setText("正在准备…" if self._autoRepair else "修复资源")
             self.cancelButton.setText("关闭")
             self.cancelButton.show()
+            if self._autoRepair:
+                self.yesButton.setEnabled(False)
+                QTimer.singleShot(0, self._startRepair)
             return
 
         self._state = "completed"
@@ -310,6 +329,16 @@ class ResourceVerificationDialog(MessageBoxBase):
         )
         self.yesButton.setText("完成")
         self.cancelButton.hide()
+        self._emitResourcesReady()
+        if self._autoRepair:
+            QTimer.singleShot(700, self.accept)
+
+    def _emitResourcesReady(self) -> None:
+        """资源首次进入完整状态时通知调用页面。"""
+        if self._readyEmitted:
+            return
+        self._readyEmitted = True
+        self.resourcesReady.emit()
 
     @Slot(str)
     def _onVerificationFailed(self, message: str) -> None:
