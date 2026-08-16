@@ -143,6 +143,7 @@ class ConstructionWorker(QThread):
 
             allTokens: List[str] = []
             allPosTags: List[str] = []
+            sequenceBoundaries: List[int] = []
 
             from app.view.widgets.freq_analyzer.freq_engine import posTag
 
@@ -170,6 +171,7 @@ class ConstructionWorker(QThread):
                     posTags = posTags[:minLen]
                 allTokens.extend(tokens)
                 allPosTags.extend(posTags)
+                sequenceBoundaries.append(len(allTokens))
 
                 pct = 10 + int(70 * idx / n)
                 self.progress.emit(pct, f"分词 {idx}/{n}")
@@ -189,6 +191,7 @@ class ConstructionWorker(QThread):
                 minFreq=self._minFreq,
                 topN=self._topN,
                 slotMiThreshold=self._slotMiThreshold,
+                sequenceBoundaries=sequenceBoundaries,
             )
 
             if self._cancel:

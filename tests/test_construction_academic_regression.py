@@ -42,3 +42,31 @@ def testSlotMiThresholdIsLabeledAsAssociationStrength() -> None:
     assert "MI 是效应强度,不是 p 值" in prompt
     assert "Log-Likelihood=" not in prompt
 
+
+def testConstructionDoesNotMatchAcrossFileBoundary() -> None:
+    result = ConstructionEngine().analyze(
+        tokens=["run", "mid", "see"],
+        posTags=["v", "d", "v"],
+        patternStr="<V> mid <V>",
+        minFreq=1,
+        sequenceBoundaries=[2, 3],
+    )
+
+    assert result.matchCount == 0
+
+
+def testSpanCollocatesExcludeConstructionInteriorAndKeepRightContext() -> None:
+    result = ConstructionEngine().analyze(
+        tokens=["before", "alpha", "mid", "beta", "after"],
+        posTags=["x", "n", "d", "n", "x"],
+        patternStr="<N> mid <N>",
+        leftSpan=1,
+        rightSpan=2,
+        minFreq=1,
+        slotMiThreshold=0.0,
+        sequenceBoundaries=[5],
+    )
+
+    collocateWords = {entry.collocate for entry in result.collocates}
+    assert collocateWords == {"before", "after"}
+    assert {"alpha", "mid", "beta"}.isdisjoint(collocateWords)

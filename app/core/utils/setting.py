@@ -15,7 +15,7 @@ APP_NAME = "Prismatica"
 
 # 内测本地模式：发布不接入 Prismatica 自有账号、鉴权、计费、价格与 AI 云端。
 # HSK / Global 语料站点等第三方数据源不受此开关影响。
-INTERNAL_TEST_MODE = True
+INTERNAL_TEST_MODE = False
 
 
 def getInstallDir() -> Path:

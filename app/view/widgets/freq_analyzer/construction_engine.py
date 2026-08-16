@@ -159,6 +159,7 @@ class ConstructionEngine:
         minFreq: int = 2,
         topN: int = 100,
         slotMiThreshold: float = 3.0,
+        sequenceBoundaries: Optional[Sequence[int]] = None,
     ) -> ConstructionResult:
         """构式搭配强度分析
 
@@ -171,6 +172,8 @@ class ConstructionEngine:
             minFreq: 最低共现频次
             topN: 搭配词 Top-N
             slotMiThreshold: slot 词 MI 关联强度展示阈值,不表示统计显著性
+            sequenceBoundaries: 每个文件在拼接 token 流中的结束位置(右开区间)。
+                模式匹配和跨距窗口都不会跨越这些边界。
 
         Returns:
             ConstructionResult
@@ -200,9 +203,32 @@ class ConstructionEngine:
         totalFreq: Counter = Counter(tokens)
         V = len(totalFreq)
 
-        # 3) 匹配构式
+        # 3) 按文件边界匹配构式。边界使用右开区间，例如 [3, 8] 表示
+        # tokens[0:3] 与 tokens[3:8] 是两个独立文件。
         tokenPosPairs = list(zip(tokens, posTags))
-        matches: List[PatternMatch] = pattern.match(tokenPosPairs)
+        boundaries = sorted(
+            {
+                int(boundary)
+                for boundary in (sequenceBoundaries or [N])
+                if 0 < int(boundary) <= N
+            }
+        )
+        if not boundaries or boundaries[-1] != N:
+            boundaries.append(N)
+
+        matches: List[PatternMatch] = []
+        segmentStart = 0
+        for segmentEnd in boundaries:
+            segmentMatches = pattern.match(tokenPosPairs[segmentStart:segmentEnd])
+            matches.extend(
+                PatternMatch(
+                    startIdx=match.startIdx + segmentStart,
+                    endIdx=match.endIdx + segmentStart,
+                    matched=match.matched,
+                )
+                for match in segmentMatches
+            )
+            segmentStart = segmentEnd
         matchCount = len(matches)
         constructionFreq = matchCount  # 构式总频次 O_c
 
@@ -388,15 +414,26 @@ class ConstructionEngine:
         # 9) 跨距搭配:把构式整体视为"节点",统计跨距内词的 MI 等
         #    复用 CollocationEngine 的窗口共现统计
         if constructionFreq > 0 and (leftSpan > 0 or rightSpan > 0):
-            # 构造一个虚拟"节点词":构式匹配起点的归一化标识
+            # 构造一个虚拟"节点词"，并把每个完整匹配跨度折叠成该节点。
+            # 不能只替换起点，否则构式内部 token 会被当作外部搭配词，右侧
+            # 真正语境也会因窗口从起点计数而被遗漏。
             nodeKey = f"__CONSTR__{patternStr}__"
-            # 在 token 流上以每个 match 的 startIdx 作为节点位置
-            # 把节点位置 token 替换为 nodeKey,其余保持不变
-            syntheticTokens: List[str] = list(tokens)
-            for m in matches:
-                if m.startIdx < 0 or m.startIdx >= N:
-                    continue
-                syntheticTokens[m.startIdx] = nodeKey
+            matchByStart = {match.startIdx: match for match in matches}
+            syntheticTokens: List[str] = []
+            syntheticBoundaries: List[int] = []
+            segmentStart = 0
+            for segmentEnd in boundaries:
+                index = segmentStart
+                while index < segmentEnd:
+                    match = matchByStart.get(index)
+                    if match is not None and match.endIdx < segmentEnd:
+                        syntheticTokens.append(nodeKey)
+                        index = match.endIdx + 1
+                    else:
+                        syntheticTokens.append(tokens[index])
+                        index += 1
+                syntheticBoundaries.append(len(syntheticTokens))
+                segmentStart = segmentEnd
 
             # 调用 CollocationEngine.analyze
             collResult = self._collEngine.analyze(
@@ -408,6 +445,7 @@ class ConstructionEngine:
                 topN=topN,
                 caseSensitive=True,  # synthetic token 已带特殊前缀,无需小写
                 miThreshold=slotMiThreshold,
+                documentBoundaryIndices=syntheticBoundaries[:-1],
             )
             # 转写到 CollocateEntry
             for ce in collResult.collocates:

@@ -998,7 +998,16 @@ def buildNgramClusterPrompt(
 # ===========================================================================
 def summarizeSentimentData(result: Any, topSampleN: int = 5) -> Dict[str, Any]:
     if result is None:
-        return {"docCount": 0}
+        return {
+            "docCount": 0,
+            "sentenceCount": 0,
+            "positiveSentenceCount": 0,
+            "negativeSentenceCount": 0,
+            "neutralSentenceCount": 0,
+            "positiveDocumentCount": 0,
+            "negativeDocumentCount": 0,
+            "neutralDocumentCount": 0,
+        }
     docs = getattr(result, "documents", []) or []
     polarityCounter = {"positive": 0, "negative": 0, "neutral": 0}
     scores = []
@@ -1022,11 +1031,20 @@ def summarizeSentimentData(result: Any, topSampleN: int = 5) -> Dict[str, Any]:
             sampleNegative.append({"file": d.fileName, "score": score, "text": txt})
 
     avgScore = sum(scores) / len(scores) if scores else 0.0
+    positiveSentenceCount = int(getattr(result, "positiveCount", 0) or 0)
+    negativeSentenceCount = int(getattr(result, "negativeCount", 0) or 0)
+    neutralSentenceCount = int(getattr(result, "neutralCount", 0) or 0)
     return {
         "docCount": len(docs),
-        "positiveCount": getattr(result, "positiveCount", polarityCounter["positive"]),
-        "negativeCount": getattr(result, "negativeCount", polarityCounter["negative"]),
-        "neutralCount": getattr(result, "neutralCount", polarityCounter["neutral"]),
+        "sentenceCount": (
+            positiveSentenceCount + negativeSentenceCount + neutralSentenceCount
+        ),
+        "positiveSentenceCount": positiveSentenceCount,
+        "negativeSentenceCount": negativeSentenceCount,
+        "neutralSentenceCount": neutralSentenceCount,
+        "positiveDocumentCount": polarityCounter["positive"],
+        "negativeDocumentCount": polarityCounter["negative"],
+        "neutralDocumentCount": polarityCounter["neutral"],
         "avgScore": round(avgScore, 3),
         "samplePositive": samplePositive,
         "sampleNegative": sampleNegative,
@@ -1042,12 +1060,18 @@ def buildSentimentPrompt(
     parts: List[str] = []
     parts.append(
         f"用户对语料「{corpusMeta.get('corpusName', '未命名')}」"
-        f"的 {sentimentSummary.get('docCount', 0)} 个文档执行了情感分析。"
+        f"的 {sentimentSummary.get('docCount', 0)} 个文档执行了情感分析，"
+        f"共识别 {sentimentSummary.get('sentenceCount', 0)} 个句子。"
     )
     parts.append(
-        f"情感分布：正面 {sentimentSummary.get('positiveCount', 0)} 篇、"
-        f"负面 {sentimentSummary.get('negativeCount', 0)} 篇、"
-        f"中性 {sentimentSummary.get('neutralCount', 0)} 篇,"
+        f"句子级情感分布：正面 "
+        f"{sentimentSummary.get('positiveSentenceCount', 0)} 句、"
+        f"负面 {sentimentSummary.get('negativeSentenceCount', 0)} 句、"
+        f"中性 {sentimentSummary.get('neutralSentenceCount', 0)} 句；"
+        f"文档级平均分归类：正面 "
+        f"{sentimentSummary.get('positiveDocumentCount', 0)} 篇、"
+        f"负面 {sentimentSummary.get('negativeDocumentCount', 0)} 篇、"
+        f"中性 {sentimentSummary.get('neutralDocumentCount', 0)} 篇，"
         f"平均分 = {sentimentSummary.get('avgScore', '?')}（-1~+1）。"
     )
     if sentimentSummary.get("samplePositive"):

@@ -1,4 +1,10 @@
+from app.core.services.insight_prompts import (
+    buildSentimentPrompt,
+    summarizeSentimentData,
+)
 from app.view.widgets.freq_analyzer.sentiment_engine import (
+    CorpusSentimentResult,
+    DocumentSentiment,
     Polarity,
     SentenceSentiment,
     SentimentEngine,
@@ -30,3 +36,28 @@ def testDocumentScoreWeightsSentenceEvidenceInsteadOfSentenceCount():
     )
 
     assert score == 0.5
+
+
+def testSentimentPromptSeparatesSentenceAndDocumentCounts() -> None:
+    sentences = [_sentence(0.8, 1), _sentence(0.6, 1)]
+    document = DocumentSentiment(
+        fileName="demo.txt",
+        text="good. great.",
+        score=0.7,
+        polarity=Polarity.POSITIVE,
+        sentences=sentences,
+        positiveCount=2,
+    )
+    result = CorpusSentimentResult(
+        documents=[document],
+        positiveCount=2,
+    )
+
+    summary = summarizeSentimentData(result)
+    prompt = buildSentimentPrompt(summary, {"corpusName": "demo"})["user"]
+
+    assert summary["positiveSentenceCount"] == 2
+    assert summary["positiveDocumentCount"] == 1
+    assert "正面 2 句" in prompt
+    assert "正面 1 篇" in prompt
+    assert "正面 2 篇" not in prompt

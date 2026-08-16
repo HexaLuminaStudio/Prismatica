@@ -16,6 +16,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.core.api.task_control import taskControl
 from app.core.utils.config import qconfig, cfg
+from app.core.utils.excel import sanitizeExcelCellValue
 
 
 class GlobalDownloadWorker(QThread):
@@ -223,30 +224,19 @@ class GlobalDownloadWorker(QThread):
             if df.empty:
                 return False
 
-            # 清理数据
-            objectColumns = df.select_dtypes(include=["object"]).columns
-            for col in objectColumns:
-                df[col] = df[col].astype(str)
-
-            # 处理非法字符
-            from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-
-            def cleanIllegal(val):
-                if isinstance(val, str):
-                    return ILLEGAL_CHARACTERS_RE.sub("", val)
-                return val
+            # 清理所有文本字段，避免任一非法控制字符导致整份工作簿保存失败。
+            textColumns = [
+                col
+                for col in df.columns
+                if pd.api.types.is_object_dtype(df[col].dtype)
+                or pd.api.types.is_string_dtype(df[col].dtype)
+            ]
+            for col in textColumns:
+                df[col] = df[col].astype(str).map(sanitizeExcelCellValue)
+            df.columns = [sanitizeExcelCellValue(col) for col in df.columns]
 
             # 保存Excel
-            try:
-                df.to_excel(outputPath, index=False)
-            except Exception as e:
-                logger.warning(
-                    f"[Global] 首次写入Excel失败,清理非法字符后重试, "
-                    f"taskId={self.taskId}, type={type(e).__name__}"
-                )
-                for col in objectColumns:
-                    df[col] = df[col].apply(cleanIllegal)
-                df.to_excel(outputPath, index=False)
+            df.to_excel(outputPath, index=False)
 
             return True
 

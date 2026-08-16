@@ -18,6 +18,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.core.api.task_control import taskControl
 from app.core.utils.config import qconfig, Config
+from app.core.utils.excel import sanitizeExcelCellValue
 from .hsk_author_info import splitAuthorInfoColumn
 
 
@@ -302,10 +303,17 @@ class HSKDownloadWorker(QThread):
             # 拆分 auther_info 为多列（保留原列以便向后兼容）
             df = splitAuthorInfoColumn(df)
 
-            # 确保所有列都是字符串类型
-            objectColumns = df.select_dtypes(include=["object"]).columns
-            for col in objectColumns:
-                df[col] = df[col].astype(str)
+            # 确保所有文本列都是字符串类型，并在写入前移除 OpenXML 禁止的控制字符。
+            # HSK 原始语料偶尔会混入不可见字符；任一单元格非法都会导致整份文件保存失败。
+            textColumns = [
+                col
+                for col in df.columns
+                if pd.api.types.is_object_dtype(df[col].dtype)
+                or pd.api.types.is_string_dtype(df[col].dtype)
+            ]
+            for col in textColumns:
+                df[col] = df[col].astype(str).map(sanitizeExcelCellValue)
+            df.columns = [sanitizeExcelCellValue(col) for col in df.columns]
 
             # 保存Excel
             df.to_excel(outputPath, index=False)

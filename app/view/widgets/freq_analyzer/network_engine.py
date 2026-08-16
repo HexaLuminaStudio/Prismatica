@@ -261,10 +261,12 @@ class CooccurrenceEngine:
         # 3) 在 token 流上滑动窗口,统计共现
         if progressCallback:
             progressCallback(f"扫描共现窗口 (候选词 {len(candidates)} 个)...")
-        coMatrix: Dict[Tuple[str, str], int] = defaultdict(int)
+        baseCoMatrix: Dict[Tuple[str, str], int] = defaultdict(int)
         totalStreams = len(tokenStreams)
         for streamIdx, tokens in enumerate(tokenStreams, start=1):
-            self._scanCooccurrence(tokens, candidates, params.windowSize, coMatrix)
+            self._scanCooccurrence(
+                tokens, candidates, params.windowSize, baseCoMatrix
+            )
             if (
                 progressCallback
                 and totalStreams > 0
@@ -274,8 +276,10 @@ class CooccurrenceEngine:
                 progressCallback(f"共现扫描 {streamIdx}/{totalStreams} ({pct}%)")
 
         # 3.5) FR-CON-010 P0-fix 2026-07-20:统一过滤模式(关键词 + 词性结构)
-        # 解析 filterExpr,对每个匹配区间内的候选词两两配对,加入共现矩阵
+        # 解析 filterExpr。结构过滤必须使用独立矩阵；若把匹配边叠加到全量
+        # 窗口矩阵，不可能命中的结构也会错误返回完整网络。
         unifiedFilter = None
+        patternCoMatrix: Dict[Tuple[str, str], int] = defaultdict(int)
         try:
             from app.view.widgets.freq_analyzer.pos_pattern import (
                 NetworkFilter,
@@ -289,8 +293,9 @@ class CooccurrenceEngine:
         if unifiedFilter and not unifiedFilter.isEmpty():
             if progressCallback:
                 progressCallback(f"应用过滤模式: {params.filterExpr}")
+            candidateSet = set(candidates)
+            seenPatternOccurrences = set()
             # 处理所有 POS 结构子句(对每个子句执行一次扫描)
-            patternCount = 0
             for clause in unifiedFilter.clauses:
                 if not clause.hasPosPattern:
                     continue
@@ -298,7 +303,7 @@ class CooccurrenceEngine:
                 keywordsInClause = clause.keywords  # 可能为空(纯 POS 子句)
                 # 是否需要限定关键词(combined 子句)
                 needKw = bool(keywordsInClause)
-                matchedKwByEdge: Dict[Tuple[str, str], int] = defaultdict(int)
+                patternCount = 0
                 for streamIdx, text in enumerate(fileToText.values()):
                     posTokens = tokenizeForPos(text, useJieba=params.useJieba)
                     if not posTokens:
@@ -306,9 +311,13 @@ class CooccurrenceEngine:
                     matches = pattern.match(posTokens)
                     for match in matches:
                         # 在匹配区间内的所有候选词(去重)
-                        wordsInMatch = [
-                            w for w, _ in match.matched if w in set(candidates.keys())
-                        ]
+                        wordsInMatch = []
+                        for word, _ in match.matched:
+                            normalizedWord = (
+                                word if params.caseSensitive else word.lower()
+                            )
+                            if normalizedWord in candidateSet:
+                                wordsInMatch.append(normalizedWord)
                         seen = set()
                         uniqueWords = []
                         for w in wordsInMatch:
@@ -330,36 +339,47 @@ class CooccurrenceEngine:
                             for j in range(i + 1, len(uniqueWords)):
                                 a, b = uniqueWords[i], uniqueWords[j]
                                 key = (a, b) if a < b else (b, a)
-                                coMatrix[key] += 1
-                                matchedKwByEdge[key] += 1
+                                occurrence = (
+                                    streamIdx,
+                                    match.startIdx,
+                                    match.endIdx,
+                                    key,
+                                )
+                                if occurrence in seenPatternOccurrences:
+                                    continue
+                                seenPatternOccurrences.add(occurrence)
+                                patternCoMatrix[key] += 1
                         patternCount += 1
                 logger.info(
                     f"[CooccurrenceEngine] 子句 {clause.raw!r} 匹配 {patternCount} 次"
                 )
 
-        # 4) 应用关键词过滤(若指定)与共现频次阈值
+        # 4) 按 OR 子句组合过滤后的矩阵，再应用共现频次阈值。
+        # 纯关键词子句从全量窗口矩阵筛边；POS/组合子句只使用结构匹配矩阵。
+        coMatrix: Dict[Tuple[str, str], int] = defaultdict(int)
+        hasUnifiedFilter = bool(unifiedFilter and not unifiedFilter.isEmpty())
+        if hasUnifiedFilter:
+            keywordOnlySet = {
+                keyword if params.caseSensitive else keyword.lower()
+                for clause in unifiedFilter.clauses
+                if not clause.hasPosPattern
+                for keyword in clause.keywords
+            }
+            if keywordOnlySet:
+                for key, count in baseCoMatrix.items():
+                    if any(keyword in key for keyword in keywordOnlySet):
+                        coMatrix[key] = count
+            for key, count in patternCoMatrix.items():
+                coMatrix[key] += count
+        else:
+            coMatrix.update(baseCoMatrix)
+
         candidateSet = set(candidates)
         edgesToAdd: List[Tuple[str, str, int]] = []
-        # 从统一过滤中提取纯关键词部分(向后兼容 keyword 字段)
-        if unifiedFilter and not unifiedFilter.isEmpty():
-            filterKeywords = unifiedFilter.keywords()
-            filterKeywordsLower = [
-                k if params.caseSensitive else k.lower() for k in filterKeywords
-            ]
-        else:
-            filterKeywords = []
-            filterKeywordsLower = []
         for (a, b), w in coMatrix.items():
             if w < params.minCoFreq:
                 continue
-            if filterKeywordsLower:
-                # 任一关键词命中(a 或 b 任一)即保留
-                if not any(
-                    kw in (a, b) or kw in (a.lower(), b.lower())
-                    for kw in filterKeywordsLower
-                ):
-                    continue
-            elif params.keyword:
+            if not hasUnifiedFilter and params.keyword:
                 # 向后兼容旧版 keyword 字段
                 kw = params.keyword if params.caseSensitive else params.keyword.lower()
                 if kw and kw not in (a, b) and kw not in (a.lower(), b.lower()):
@@ -371,7 +391,15 @@ class CooccurrenceEngine:
 
         # 5) 构图(FR-CON-008 P0-fix 2026-07-20:边权归一化)
         graph = nx.Graph()
+        visibleNodes = {
+            word
+            for source, target, _ in edgesToAdd
+            for word in (source, target)
+        }
+        restrictNodes = hasUnifiedFilter or bool(params.keyword)
         for word, freq in candidates.items():
+            if restrictNodes and word not in visibleNodes:
+                continue
             graph.add_node(word, freq=freq)
         if params.edgeWeight == EdgeWeight.FREQUENCY:
             # 默认:绝对共现频次作为边权
@@ -389,7 +417,9 @@ class CooccurrenceEngine:
                     continue
                 graph.add_edge(a, b, weight=float(wNorm), rawCount=int(w))
         network.graph = graph
-        network.nodeFreq = dict(candidates)
+        network.nodeFreq = {
+            word: freq for word, freq in candidates.items() if word in graph
+        }
 
         # 6) 社区发现(FR-CON-005)
         if params.enableCommunity and graph.number_of_nodes() > 0:

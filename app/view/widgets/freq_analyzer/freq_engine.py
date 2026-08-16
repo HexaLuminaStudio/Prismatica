@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import math
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
@@ -689,6 +690,43 @@ class FrequencyAnalyzer:
             return []
         return [tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
 
+    @staticmethod
+    def _splitNgramSegments(text: str) -> List[str]:
+        """按标点和换行切分 N-gram 邻接序列。
+
+        分词器本身不会返回标点 token。如果先分词再过滤，标点两侧的词会被
+        错误视为相邻。这里在任何 Unicode 标点或换行处先建立硬边界；英文
+        单词内部的撇号保留，避免把 ``don't`` 错拆为两个序列。
+        """
+        if not text:
+            return []
+
+        segments: List[str] = []
+        current: List[str] = []
+        textLength = len(text)
+        for index, char in enumerate(text):
+            isInnerApostrophe = (
+                char in {"'", "’"}
+                and 0 < index < textLength - 1
+                and text[index - 1].isalnum()
+                and text[index + 1].isalnum()
+            )
+            isBoundary = char in {"\r", "\n"} or (
+                unicodedata.category(char).startswith("P") and not isInnerApostrophe
+            )
+            if isBoundary:
+                segment = "".join(current).strip()
+                if segment:
+                    segments.append(segment)
+                current = []
+                continue
+            current.append(char)
+
+        segment = "".join(current).strip()
+        if segment:
+            segments.append(segment)
+        return segments
+
     def analyzeNgrams(
         self,
         fileToText: Dict[str, str],
@@ -712,42 +750,48 @@ class FrequencyAnalyzer:
         globalCounter: Counter = Counter()
         ngramToSources: Dict[Tuple[str, ...], set] = defaultdict(set)
 
-        cleaned = self._precleanCorpus(fileToText)
+        segmentRecords: List[Tuple[str, str]] = []
+        for fileName, text in fileToText.items():
+            # 必须在清洗规则移除标点之前建立边界，否则无法恢复原始邻接关系。
+            for segment in self._splitNgramSegments(text or ""):
+                cleanedSegment = self.cleaner.clean(segment)
+                if cleanedSegment.strip():
+                    segmentRecords.append((fileName, cleanedSegment))
 
-        # P2-7 修复:词性过滤场景下,需要同时获取每个 token 的词性。
-        # 按文件批量调用 posTagBatch,避免逐文件重复 import。
-        # posTagBatch 与本类同模块,可直接引用。
+        # 过滤仅用于判断一个原始 N-gram 是否整体有效，不能先删除 token 再
+        # 生成窗口，否则停用词、词长或 POS 过滤会制造不存在的相邻关系。
         usePosFilter = bool(self.posEnabled and self.posTags)
 
         if usePosFilter:
-            # 走词性过滤路径
-            fileNames = list(cleaned.keys())
-            texts = [cleaned[name] or "" for name in fileNames]
+            fileNames = [fileName for fileName, _ in segmentRecords]
+            texts = [text for _, text in segmentRecords]
             posResults = posTagBatch(texts)
             for fileName, tagged in zip(fileNames, posResults):
-                keptTokens: List[str] = []
+                normalizedTagged: List[Tuple[str, str]] = []
                 for word, tag in tagged:
-                    if not word or not tag:
-                        continue
-                    if tag not in self.posTags:
-                        continue
                     normalized = self._normalize(word)
-                    if self._isValidToken(normalized):
-                        keptTokens.append(normalized)
-                ngrams = self.generateNgrams(keptTokens, n=n)
+                    normalizedTagged.append((normalized, tag or ""))
+                ngrams: List[Tuple[str, ...]] = []
+                for index in range(len(normalizedTagged) - n + 1):
+                    window = normalizedTagged[index : index + n]
+                    if not all(
+                        self._isValidToken(word) and tag in self.posTags
+                        for word, tag in window
+                    ):
+                        continue
+                    ngrams.append(tuple(word for word, _ in window))
                 globalCounter.update(ngrams)
                 for ng in set(ngrams):
                     ngramToSources[ng].add(fileName)
         else:
-            # 默认路径(无词性过滤)
-            for fileName, text in cleaned.items():
+            for fileName, text in segmentRecords:
                 tokens = self.segmenter.tokenize(text or "", useJieba=self.useJieba)
-                normalized = [
-                    self._normalize(t)
-                    for t in tokens
-                    if self._isValidToken(self._normalize(t))
+                normalized = [self._normalize(token) for token in tokens]
+                ngrams = [
+                    ngram
+                    for ngram in self.generateNgrams(normalized, n=n)
+                    if all(self._isValidToken(token) for token in ngram)
                 ]
-                ngrams = self.generateNgrams(normalized, n=n)
                 globalCounter.update(ngrams)
                 for ng in set(ngrams):
                     ngramToSources[ng].add(fileName)

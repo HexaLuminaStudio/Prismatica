@@ -9,6 +9,7 @@ import pytest
 from app.view.widgets.freq_analyzer.network_engine import (
     CooccurrenceEngine,
     EdgeWeight,
+    NetworkBuildParams,
 )
 
 
@@ -75,3 +76,43 @@ def testWideWindowWeightsStayInProbabilityBounds(method: EdgeWeight) -> None:
 
     assert weights
     assert all(-1.0 <= value <= 1.0 for value in weights.values())
+
+
+def testImpossibleStructureFilterReturnsNoBaseNetwork() -> None:
+    engine = CooccurrenceEngine(useJieba=True)
+    params = NetworkBuildParams(
+        windowSize=1,
+        minWordFreq=1,
+        minCoFreq=1,
+        keepTopK=10,
+        useJieba=False,
+        filterExpr="<V> <V>",
+        enableCommunity=False,
+    )
+
+    network = engine.build({"demo.txt": "a b c d"}, params=params)
+
+    assert network.edgeCount == 0
+    assert network.nodeCount == 0
+
+
+def testStructureFilterContainsOnlyMatchedStructureEdges() -> None:
+    engine = CooccurrenceEngine(useJieba=True)
+    params = NetworkBuildParams(
+        windowSize=1,
+        minWordFreq=1,
+        minCoFreq=1,
+        keepTopK=10,
+        filterExpr="* b *",
+        enableCommunity=False,
+    )
+
+    network = engine.build({"demo.txt": "a b c d"}, params=params)
+    edges = {frozenset((source, target)) for source, target in network.graph.edges()}
+
+    assert edges == {
+        frozenset(("a", "b")),
+        frozenset(("a", "c")),
+        frozenset(("b", "c")),
+    }
+    assert frozenset(("c", "d")) not in edges
