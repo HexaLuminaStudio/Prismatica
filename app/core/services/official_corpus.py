@@ -12,14 +12,14 @@ OfficialCorpusProvider = Literal["hsk", "global"]
 def requestOfficialCorpusToken(
     provider: OfficialCorpusProvider,
     api: CloudApi | None = None,
+    *,
+    allowInternalTestGuideRequest: bool = False,
 ) -> str:
     """请求云端代登录，只接收签发 Token，不接触官方账号密码。"""
     cloudApi = api or getCloudApi()
-    payload = cloudApi.post(
-        "/v1/resources/official-token",
-        body={"provider": provider},
-        withAuth=False,
-        timeout=35.0,
+    payload = cloudApi.requestOfficialCorpusToken(
+        provider,
+        allowInternalTestGuideRequest=allowInternalTestGuideRequest,
     )
     if not isinstance(payload, dict):
         raise CloudApiError("BAD_RESPONSE", "官方账号服务响应格式无效")

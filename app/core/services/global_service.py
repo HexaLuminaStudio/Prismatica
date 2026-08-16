@@ -21,7 +21,13 @@ class GlobalTokenRefreshThread(QThread):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, userId=None, password=None, useOfficial=None):
+    def __init__(
+        self,
+        userId=None,
+        password=None,
+        useOfficial=None,
+        allowInternalTestGuideRequest: bool = False,
+    ):
         super().__init__()
         from app.core.utils.config import qconfig, Config
 
@@ -39,7 +45,10 @@ class GlobalTokenRefreshThread(QThread):
 
         self.userId = userId
         self.password = password
-        self.useOfficial = bool(useOfficial) and not INTERNAL_TEST_MODE
+        self.allowInternalTestGuideRequest = bool(allowInternalTestGuideRequest)
+        self.useOfficial = bool(useOfficial) and (
+            not INTERNAL_TEST_MODE or self.allowInternalTestGuideRequest
+        )
 
     @staticmethod
     def md5(text):
@@ -52,7 +61,12 @@ class GlobalTokenRefreshThread(QThread):
         if self.useOfficial:
             try:
                 log.info("[GlobalTokenRefresh] 开始通过 Prismatica 官方账号刷新 Token")
-                self.finished.emit(requestOfficialCorpusToken("global"))
+                self.finished.emit(
+                    requestOfficialCorpusToken(
+                        "global",
+                        allowInternalTestGuideRequest=self.allowInternalTestGuideRequest,
+                    )
+                )
             except CloudApiError as error:
                 log.warning(
                     f"[GlobalTokenRefresh] 官方账号刷新失败: code={error.code}"

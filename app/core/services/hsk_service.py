@@ -20,7 +20,13 @@ class HskTokenRefreshThread(QThread):
     finished = Signal(str)
     error = Signal(str)
 
-    def __init__(self, username=None, password=None, useOfficial=None):
+    def __init__(
+        self,
+        username=None,
+        password=None,
+        useOfficial=None,
+        allowInternalTestGuideRequest: bool = False,
+    ):
         super().__init__()
         from app.core.utils.config import qconfig, Config
 
@@ -38,13 +44,21 @@ class HskTokenRefreshThread(QThread):
 
         self.username = username
         self.password = password
-        self.useOfficial = bool(useOfficial) and not INTERNAL_TEST_MODE
+        self.allowInternalTestGuideRequest = bool(allowInternalTestGuideRequest)
+        self.useOfficial = bool(useOfficial) and (
+            not INTERNAL_TEST_MODE or self.allowInternalTestGuideRequest
+        )
 
     def run(self):
         if self.useOfficial:
             try:
                 log.info("[HskTokenRefresh] 开始通过 Prismatica 官方账号刷新 Token")
-                self.finished.emit(requestOfficialCorpusToken("hsk"))
+                self.finished.emit(
+                    requestOfficialCorpusToken(
+                        "hsk",
+                        allowInternalTestGuideRequest=self.allowInternalTestGuideRequest,
+                    )
+                )
             except CloudApiError as error:
                 log.warning(
                     f"[HskTokenRefresh] 官方账号刷新失败: code={error.code}"

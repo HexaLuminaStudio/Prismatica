@@ -39,6 +39,54 @@ def testCloudApiRejectsBeforeCreatingHttpRequest(monkeypatch) -> None:
     assert api.isLoggedIn() is False
 
 
+def testInternalOfficialTokenExceptionUsesOnlyFixedUnauthenticatedRoute(
+    monkeypatch,
+) -> None:
+    api = cloudApiModule.CloudApi()
+    calls = []
+    monkeypatch.setattr(
+        cloudApiModule.cfg.cloudBaseUrl,
+        "value",
+        "https://internal-guide.example.test",
+    )
+
+    assert api._baseUrl(allowInternalTestOfficialCorpus=True) == (
+        "https://internal-guide.example.test"
+    )
+
+    def fakeRequestBlocking(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return {"provider": "hsk", "token": "guide-token"}
+
+    monkeypatch.setattr(api, "_requestBlocking", fakeRequestBlocking)
+
+    payload = api.requestOfficialCorpusToken(
+        "hsk",
+        allowInternalTestGuideRequest=True,
+    )
+
+    assert payload == {"provider": "hsk", "token": "guide-token"}
+    assert calls == [
+        (
+            "POST",
+            "/v1/resources/official-token",
+            {
+                "body": {"provider": "hsk"},
+                "withAuth": False,
+                "idempotencyKey": None,
+                "timeout": 35.0,
+                "allowInternalTestOfficialCorpus": True,
+            },
+        )
+    ]
+
+    with pytest.raises(ValueError):
+        api.requestOfficialCorpusToken(
+            "billing",
+            allowInternalTestGuideRequest=True,
+        )
+
+
 def testLocalPaidActionsSkipCatalogGateAndBilling(monkeypatch) -> None:
     monkeypatch.setattr(paidExportModule, "INTERNAL_TEST_MODE", True)
     monkeypatch.setattr(paidMeteredModule, "INTERNAL_TEST_MODE", True)
@@ -75,6 +123,38 @@ def testOfficialCorpusGatewayForcedOffButCustomSourceRemains(monkeypatch) -> Non
 
     assert hskService.useOfficial is False
     assert globalService.useOfficial is False
+
+    hskGuideService = hskServiceModule.HskTokenRefreshThread(
+        useOfficial=True,
+        allowInternalTestGuideRequest=True,
+    )
+    globalGuideService = globalServiceModule.GlobalTokenRefreshThread(
+        useOfficial=True,
+        allowInternalTestGuideRequest=True,
+    )
+
+    assert hskGuideService.useOfficial is True
+    assert globalGuideService.useOfficial is True
+
+    calls = []
+    monkeypatch.setattr(
+        hskServiceModule,
+        "requestOfficialCorpusToken",
+        lambda provider, **kwargs: calls.append((provider, kwargs)) or "hsk-token",
+    )
+    monkeypatch.setattr(
+        globalServiceModule,
+        "requestOfficialCorpusToken",
+        lambda provider, **kwargs: calls.append((provider, kwargs)) or "global-token",
+    )
+
+    hskGuideService.run()
+    globalGuideService.run()
+
+    assert calls == [
+        ("hsk", {"allowInternalTestGuideRequest": True}),
+        ("global", {"allowInternalTestGuideRequest": True}),
+    ]
 
 
 def testAiInsightButtonNotExposedInLocalMode(qtbot, monkeypatch) -> None:

@@ -349,6 +349,11 @@ class _TokenGuideBase(_BaseGuidePage):
 
         # 是否已通过验证(初始值由 _hasExistingToken() 决定)
         self._validated = self._hasExistingToken()
+        self._officialRequestCompleted = bool(
+            INTERNAL_TEST_MODE
+            and self._validated
+            and qconfig.get(getattr(cfg, self._useOfficialConfigKey))
+        )
 
         self.tokenUsernameEdit = LineEdit()
         self.tokenPasswordEdit = PasswordLineEdit()
@@ -392,7 +397,6 @@ class _TokenGuideBase(_BaseGuidePage):
         buttonRow.addWidget(self.refreshButton)
         buttonRow.addStretch(1)
         self.contentLayout.addLayout(buttonRow)
-        self.officialAccountButton.setVisible(not INTERNAL_TEST_MODE)
 
         # ---- 状态 / 安全说明 ----
         self.statusLabel = CaptionLabel("")
@@ -400,7 +404,8 @@ class _TokenGuideBase(_BaseGuidePage):
         self.contentLayout.addWidget(self.statusLabel)
 
         noticeLabel = CaptionLabel(
-            "账号密码仅由本机发送给对应语料平台。"
+            "使用官方账号时，仅在点击后向 Prismatica 服务器请求 Token，成功后不会重复请求；"
+            "使用自己的账号时，密码仅由本机发送给对应语料平台。"
             if INTERNAL_TEST_MODE
             else "使用自己的账号时，密码仅由本机发送给对应语料平台；"
             "使用官方账号时，客户端不会获取或保存官方密码。"
@@ -413,8 +418,7 @@ class _TokenGuideBase(_BaseGuidePage):
         if self._validated:
             accountLabel = (
                 "官方账号"
-                if not INTERNAL_TEST_MODE
-                and qconfig.get(getattr(cfg, self._useOfficialConfigKey))
+                if qconfig.get(getattr(cfg, self._useOfficialConfigKey))
                 else "自己的账号"
             )
             self._setStatus(
@@ -424,7 +428,7 @@ class _TokenGuideBase(_BaseGuidePage):
         else:
             self._setStatus(
                 (
-                    "尚未配置 Token，请填写对应语料平台的账号与密码。"
+                    "尚未配置 Token。推荐使用官方账号，也可以填写自己的账号。"
                     if INTERNAL_TEST_MODE
                     else "尚未配置 Token。推荐直接使用官方账号，也可以填写自己的账号。"
                 ),
@@ -464,14 +468,20 @@ class _TokenGuideBase(_BaseGuidePage):
         raise NotImplementedError
 
     def _setFormBusy(self, isBusy: bool):
-        self.officialAccountButton.setEnabled(not isBusy)
+        self.officialAccountButton.setEnabled(
+            not isBusy and not self._officialRequestCompleted
+        )
         self.refreshButton.setEnabled(not isBusy)
         self.tokenUsernameEdit.setEnabled(not isBusy)
         self.tokenPasswordEdit.setEnabled(not isBusy)
         self.officialAccountButton.setText(
-            "连接中..."
-            if isBusy and self._activeRefreshMode == "official"
-            else "使用官方账号"
+            "已使用官方账号"
+            if self._officialRequestCompleted
+            else (
+                "连接中..."
+                if isBusy and self._activeRefreshMode == "official"
+                else "使用官方账号"
+            )
         )
         self.refreshButton.setText(
             "验证中..."
@@ -488,7 +498,7 @@ class _TokenGuideBase(_BaseGuidePage):
         self._refreshThread.start()
 
     def _onOfficialAccountClicked(self):
-        if INTERNAL_TEST_MODE:
+        if self._officialRequestCompleted:
             return
         logger.info(f"[Guide] 用户选择官方账号 ({self._tokenConfigKey})")
         self._setStatus("正在连接 Prismatica 官方账号，请稍候...", warn=True)
@@ -507,8 +517,10 @@ class _TokenGuideBase(_BaseGuidePage):
         self._startRefresh(self._createRefreshThread(username, password), "custom")
 
     def _onTokenRefreshed(self, token: str):
-        self._setFormBusy(False)
         isOfficial = self._activeRefreshMode == "official"
+        if INTERNAL_TEST_MODE and isOfficial:
+            self._officialRequestCompleted = True
+        self._setFormBusy(False)
         if not isOfficial:
             qconfig.set(
                 getattr(cfg, self._usernameConfigKey),
@@ -575,7 +587,10 @@ class HskTokenGuideInterface(_TokenGuideBase):
             iconPath=":/app/icons/Hsk.svg",
             title="HSK 令牌配置",
             introLines=(
-                ["填写自己的 HSK 账号，仅直连 HSK 语料平台获取 Token。"]
+                [
+                    "推荐使用 Prismatica 官方账号，一键获取并保存 HSK Token。",
+                    "成功后不会重复请求；也可以填写自己的账号直连 HSK 平台。",
+                ]
                 if INTERNAL_TEST_MODE
                 else [
                     "推荐使用 Prismatica 提供的官方账号，一键获取并保存 HSK Token。",
@@ -599,7 +614,10 @@ class HskTokenGuideInterface(_TokenGuideBase):
     def _createOfficialRefreshThread(self):
         from app.core.services import HskTokenRefreshThread
 
-        return HskTokenRefreshThread(useOfficial=True)
+        return HskTokenRefreshThread(
+            useOfficial=True,
+            allowInternalTestGuideRequest=INTERNAL_TEST_MODE,
+        )
 
 
 # ----------------------------------------------------------------------
@@ -613,7 +631,10 @@ class GlobalTokenGuideInterface(_TokenGuideBase):
             iconPath=":/app/icons/Global.svg",
             title="Global 令牌配置",
             introLines=(
-                ["填写自己的 Global 账号，仅直连 Global 语料平台获取 Token。"]
+                [
+                    "推荐使用 Prismatica 官方账号，一键获取并保存 Global Token。",
+                    "成功后不会重复请求；也可以填写自己的账号直连 Global 平台。",
+                ]
                 if INTERNAL_TEST_MODE
                 else [
                     "推荐使用 Prismatica 提供的官方账号，一键获取并保存 Global Token。",
@@ -637,7 +658,10 @@ class GlobalTokenGuideInterface(_TokenGuideBase):
     def _createOfficialRefreshThread(self):
         from app.core.services import GlobalTokenRefreshThread
 
-        return GlobalTokenRefreshThread(useOfficial=True)
+        return GlobalTokenRefreshThread(
+            useOfficial=True,
+            allowInternalTestGuideRequest=INTERNAL_TEST_MODE,
+        )
 
 
 # ----------------------------------------------------------------------

@@ -187,8 +187,8 @@ class CloudApi:
     # 工具
     # ------------------------------------------------------------------
 
-    def _baseUrl(self) -> str:
-        if INTERNAL_TEST_MODE:
+    def _baseUrl(self, *, allowInternalTestOfficialCorpus: bool = False) -> str:
+        if INTERNAL_TEST_MODE and not allowInternalTestOfficialCorpus:
             raise CloudApiError(
                 "CLOUD_DISABLED",
                 "内测本地模式已停用 Prismatica 云端服务",
@@ -298,6 +298,27 @@ class CloudApi:
             )
         )
 
+    def requestOfficialCorpusToken(
+        self,
+        provider: str,
+        *,
+        allowInternalTestGuideRequest: bool = False,
+    ) -> Any:
+        """请求官方语料 Token；内测例外仅覆盖首次引导的固定端点。"""
+        if provider not in {"hsk", "global"}:
+            raise ValueError(f"不支持的官方语料来源: {provider}")
+        return runResponsiveCall(
+            lambda: self._requestBlocking(
+                "POST",
+                "/v1/resources/official-token",
+                body={"provider": provider},
+                withAuth=False,
+                idempotencyKey=None,
+                timeout=35.0,
+                allowInternalTestOfficialCorpus=allowInternalTestGuideRequest,
+            )
+        )
+
     def _requestOnce(
         self,
         method: str,
@@ -334,8 +355,12 @@ class CloudApi:
         withAuth: bool,
         idempotencyKey: str | None,
         timeout: float | tuple[float, float],
+        allowInternalTestOfficialCorpus: bool = False,
     ) -> Any:
-        url = f"{self._baseUrl()}{path}"
+        baseUrl = self._baseUrl(
+            allowInternalTestOfficialCorpus=allowInternalTestOfficialCorpus
+        )
+        url = f"{baseUrl}{path}"
         headers = self._headers(
             withAuth=withAuth,
             idempotencyKey=idempotencyKey,

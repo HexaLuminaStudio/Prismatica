@@ -49,8 +49,8 @@ class FakeCloudApi:
         self.payload = payload
         self.calls = []
 
-    def post(self, path: str, **kwargs):
-        self.calls.append((path, kwargs))
+    def requestOfficialCorpusToken(self, provider: str, **kwargs):
+        self.calls.append((provider, kwargs))
         return self.payload
 
 
@@ -62,14 +62,57 @@ def testOfficialCorpusClientUsesUnauthenticatedCloudGateway() -> None:
     assert token == "cloud-token"
     assert api.calls == [
         (
-            "/v1/resources/official-token",
+            "hsk",
             {
-                "body": {"provider": "hsk"},
-                "withAuth": False,
-                "timeout": 35.0,
+                "allowInternalTestGuideRequest": False,
             },
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("pageClass", "tokenConfigItem", "officialConfigItem", "issuedToken"),
+    [
+        (
+            guideModule.HskTokenGuideInterface,
+            cfg.HSKLoginToken,
+            cfg.HSKUseOfficialAccount,
+            "hsk-internal-official-token",
+        ),
+        (
+            guideModule.GlobalTokenGuideInterface,
+            cfg.GlobalLoginToken,
+            cfg.GlobalUseOfficialAccount,
+            "global-internal-official-token",
+        ),
+    ],
+)
+def testInternalGuideKeepsOfficialAccountAsOneTimeAction(
+    qtbot,
+    monkeypatch,
+    pageClass,
+    tokenConfigItem,
+    officialConfigItem,
+    issuedToken,
+) -> None:
+    fakeConfig = FakeConfig()
+    monkeypatch.setattr(guideModule, "INTERNAL_TEST_MODE", True)
+    monkeypatch.setattr(guideModule, "qconfig", fakeConfig)
+    page = pageClass()
+    qtbot.addWidget(page)
+    monkeypatch.setattr(
+        page,
+        "_createOfficialRefreshThread",
+        lambda: FakeRefreshThread(issuedToken),
+    )
+
+    assert page.officialAccountButton.isHidden() is False
+    qtbot.mouseClick(page.officialAccountButton, Qt.MouseButton.LeftButton)
+
+    assert fakeConfig.values[tokenConfigItem] == issuedToken
+    assert fakeConfig.values[officialConfigItem] is True
+    assert page.officialAccountButton.isEnabled() is False
+    assert page.officialAccountButton.text() == "已使用官方账号"
 
 
 def testOfficialCorpusClientRejectsMismatchedProvider() -> None:
