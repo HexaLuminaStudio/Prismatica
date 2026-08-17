@@ -51,8 +51,11 @@ def _priceText(rule: dict[str, Any]) -> str:
         unitName = str(rule.get("unitName") or "次")
         return f"{int(rule.get('fixedCost', 0) or 0):,} 点 / {unitName}"
     if mode == "token":
-        inputCost = int(rule.get("inputTokenCostPer1K", 0) or 0)
-        outputCost = int(rule.get("outputTokenCostPer1K", 0) or 0)
+        isNewPricing = int(rule.get("tokenPricingVersion", 1) or 1) >= 2
+        inputKey = "inputTokenCostPerUnit" if isNewPricing else "inputTokenCostPer1K"
+        outputKey = "outputTokenCostPerUnit" if isNewPricing else "outputTokenCostPer1K"
+        inputCost = int(rule.get(inputKey, 0) or 0)
+        outputCost = int(rule.get(outputKey, 0) or 0)
         return f"输入 {inputCost:,} · 输出 {outputCost:,} 点"
     if mode == "metered":
         unitCost = int(rule.get("perUnitCost", 0) or 0)
@@ -67,6 +70,9 @@ def _ruleDetail(rule: dict[str, Any]) -> str:
     if mode == "token":
         minimum = int(rule.get("minCost", 0) or 0)
         minimumText = f"，最低 {minimum:,} 点" if minimum > 0 else ""
+        if int(rule.get("tokenPricingVersion", 1) or 1) >= 2:
+            unitSize = max(1, int(rule.get("unitSize", 1_000_000) or 1_000_000))
+            return f"每 {unitSize:,} Token 计价，输入、输出加权合计后向上取整{minimumText}"
         return f"输入、输出分别按每千 Token 向上取整{minimumText}"
     if mode == "metered":
         unitSize = max(1, int(rule.get("unitSize", 1) or 1))

@@ -59,9 +59,11 @@ def _catalogSnapshot() -> dict:
                 "featureCode": "ai_chat",
                 "displayName": "AI 聊天",
                 "billingMode": "token",
-                "unitName": "千 Token",
-                "inputTokenCostPer1K": 1,
-                "outputTokenCostPer1K": 2,
+                "unitName": "Token",
+                "unitSize": 1_000_000,
+                "inputTokenCostPerUnit": 1,
+                "outputTokenCostPerUnit": 2,
+                "tokenPricingVersion": 2,
                 "minCost": 1,
                 "enabled": True,
             },
@@ -97,6 +99,7 @@ def testPricingStatusDialogShowsCurrentVersionAndAllBillingModes(qtbot) -> None:
     ]
     assert "每 1,000 条为一档" in dialog._ruleRows[1].detailLabel.text()
     assert "最低 1 点" in dialog._ruleRows[2].detailLabel.text()
+    assert "每 1,000,000 Token 计价" in dialog._ruleRows[2].detailLabel.text()
     assert catalog.refreshCalls == 1
 
 

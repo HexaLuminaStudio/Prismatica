@@ -353,12 +353,22 @@ class AnalysisDesktopWidget(QWidget):
         else:
             parts.append(f"分析结果导出固定 {exportCost} 点/次，与分析量无关")
         if aiRule:
-            inputCost = int(aiRule.get("inputTokenCostPer1K", 0) or 0)
-            outputCost = int(aiRule.get("outputTokenCostPer1K", 0) or 0)
-            parts.append(
-                f"AI 按真实 Token 另计：输入 {inputCost} 点/千 Token，"
-                f"输出 {outputCost} 点/千 Token"
-            )
+            isNewPricing = int(aiRule.get("tokenPricingVersion", 1) or 1) >= 2
+            if isNewPricing:
+                inputCost = int(aiRule.get("inputTokenCostPerUnit", 0) or 0)
+                outputCost = int(aiRule.get("outputTokenCostPerUnit", 0) or 0)
+                unitSize = max(1, int(aiRule.get("unitSize", 1_000_000) or 1_000_000))
+                parts.append(
+                    f"AI 按真实 Token 另计：每 {unitSize:,} Token 输入 {inputCost} 点、"
+                    f"输出 {outputCost} 点，合计后取整"
+                )
+            else:
+                inputCost = int(aiRule.get("inputTokenCostPer1K", 0) or 0)
+                outputCost = int(aiRule.get("outputTokenCostPer1K", 0) or 0)
+                parts.append(
+                    f"AI 按真实 Token 另计：输入 {inputCost} 点/千 Token，"
+                    f"输出 {outputCost} 点/千 Token"
+                )
         else:
             parts.append("AI 价格加载中")
         if version:
