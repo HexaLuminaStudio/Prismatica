@@ -17,6 +17,10 @@ APP_NAME = "Prismatica"
 # HSK / Global 语料站点等第三方数据源不受此开关影响。
 INTERNAL_TEST_MODE = False
 
+# 暂时隐藏 AI 聊天入口(2026-08-17)：仅从主窗口导航中移除展示，
+# ChatInterface / ChatService 等功能代码完整保留，改回 False 即可恢复。
+HIDE_AI_CHAT = True
+
 
 def getInstallDir() -> Path:
     """

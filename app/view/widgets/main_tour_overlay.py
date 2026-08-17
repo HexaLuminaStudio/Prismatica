@@ -50,7 +50,7 @@ from PySide6.QtWidgets import (
 from qfluentwidgets import BodyLabel, CaptionLabel, PushButton, TransparentPushButton
 
 from app.core.utils import cfg, logger, qconfig
-from app.core.utils.setting import INTERNAL_TEST_MODE
+from app.core.utils.setting import INTERNAL_TEST_MODE, HIDE_AI_CHAT
 from app.view.widgets.prismatica_theme import shellPalette
 
 
@@ -464,7 +464,7 @@ class MainTourOverlay(QWidget):
                 prefer="bottom",
             ),
         ]
-        if INTERNAL_TEST_MODE:
+        if INTERNAL_TEST_MODE or HIDE_AI_CHAT:
             self._steps = [
                 step for step in self._steps if step.switchTo != "chatInterface"
             ]

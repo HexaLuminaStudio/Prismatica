@@ -14,7 +14,7 @@ from qfluentwidgets import (
 
 from app.core.utils import signalBus, logger
 from app.core.utils.config import cfg, qconfig
-from app.core.utils.setting import INTERNAL_TEST_MODE
+from app.core.utils.setting import INTERNAL_TEST_MODE, HIDE_AI_CHAT
 from app.core.services import getCloudApi, taskManager
 from .widgets.titlebar_widget import CustomTitleBar
 from .widgets.prismatica_navigation import PrismaticaNavigationBar
@@ -97,7 +97,7 @@ class MainWindow(MSFluentWindow):
         self._reportProgress(58, "构造任务管理界面")
         self.taskInterface = TaskInterface(self)
 
-        if not INTERNAL_TEST_MODE:
+        if not INTERNAL_TEST_MODE and not HIDE_AI_CHAT:
             self._reportProgress(65, "构造 AI 聊天界面")
             self.chatInterface = ChatInterface(self)
 
@@ -547,7 +547,7 @@ class MainWindow(MSFluentWindow):
         self.navigationInterface.addSectionHeader(
             "研究", NavigationItemPosition.SCROLL
         )
-        if not INTERNAL_TEST_MODE:
+        if not INTERNAL_TEST_MODE and not HIDE_AI_CHAT:
             self.addSubInterface(
                 self.chatInterface,
                 FluentIcon.CHAT,
