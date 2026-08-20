@@ -35,6 +35,7 @@ ruff_cache/
 *.manifest
 
 .venv/
+.vs/
 venv/
 env/
 ENV/
