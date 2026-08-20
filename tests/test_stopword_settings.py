@@ -100,7 +100,7 @@ def testAnalysisPagesHaveNoLocalStopwordControls(
     monkeypatch,
     isolatedStopwordConfig,
 ) -> None:
-    monkeypatch.setattr(freqWidgetModule, "ProRoundTableWidget", QTableWidget)
+    monkeypatch.setattr(freqWidgetModule, "PrismaticaTableWidget", QTableWidget)
     widgets = [FreqAnalyzerWidget(), KeywordListWidget(), NetworkWidget()]
     for widget in widgets:
         qtbot.addWidget(widget)
@@ -118,7 +118,7 @@ def testAllAnalysisConsumersReadGlobalStopwordConfig(
 ) -> None:
     stopwordService.saveWords(["我们", "their"], save=False)
     stopwordService.setEnabled(True, save=False)
-    monkeypatch.setattr(freqWidgetModule, "ProRoundTableWidget", QTableWidget)
+    monkeypatch.setattr(freqWidgetModule, "PrismaticaTableWidget", QTableWidget)
 
     class FakeFreqWorker:
         captured = {}

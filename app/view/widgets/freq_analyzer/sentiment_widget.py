@@ -97,6 +97,7 @@ from app.core.models.project import RESOURCE_TYPE_SENTIMENT
 from app.view.widgets.freq_analyzer.result_summary import MetricColor
 from app.view.widgets.freq_analyzer.ai_insight_mixin import AiInsightMixin
 from app.view.widgets.freq_analyzer.resource_sink_mixin import ResourceSinkMixin
+from app.view.widgets.prismatica_table import PrismaticaTableWidget
 from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
 
 # P0-A2 fix 2026-07-18:改用统一的 loguru logger,享受敏感信息过滤 + 文件轮转
@@ -397,16 +398,7 @@ class SentimentWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         layout.addLayout(row)
 
         # 句子列表
-        from qfluentwidgetspro import (
-            RoundTableWidget as ProRoundTableWidget,
-        )  # noqa: F401
-
-        try:
-            from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
-        except ImportError:
-            from qfluentwidgets.components.widgets.table_view import TableWidget as ProRoundTableWidget  # type: ignore  # noqa: E501
-
-        self.sentenceTable = ProRoundTableWidget(card)
+        self.sentenceTable = PrismaticaTableWidget(card)
         self.sentenceTable.setColumnCount(4)
         self.sentenceTable.setHorizontalHeaderLabels(
             ["句子", "情感极性", "得分", "情感词"]

@@ -149,12 +149,11 @@ class AiInsightMixin:
         if getattr(self, "_aiInsightService", None) is not None:
             return
         # 延迟导入避免启动期开销
-        from qfluentwidgetspro import Drawer, DrawerPosition
-
         from app.core.services import AiInsightService
         from app.view.widgets.freq_analyzer.ai_insight_drawer_view import (
             AiInsightDrawerView,
         )
+        from app.view.widgets.prismatica_drawer import PrismaticaDrawer
 
         self._aiInsightService = AiInsightService(self)
         self._aiInsightView = AiInsightDrawerView(self)
@@ -169,7 +168,7 @@ class AiInsightMixin:
         self._aiInsightService.streamFinished.connect(self._onAiInsightFinished)
         self._aiInsightService.failed.connect(self._aiInsightView.setError)
 
-        self._aiInsightDrawer = Drawer(self._aiInsightView, self, DrawerPosition.RIGHT)
+        self._aiInsightDrawer = PrismaticaDrawer(self._aiInsightView, self)
         # 关闭「点击外部自动收起」:避免动画期间被状态机吞掉
         self._aiInsightDrawer.setHiddenOnClickOutside(False)
 

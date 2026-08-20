@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QObject, Signal
-from qfluentwidgets import PrimaryPushButton
 
 from app.core.services import cloud_api as cloudApiModule
 from app.core.services.cloud_auth import CloudAuth, CloudLoginWorker
@@ -394,18 +393,6 @@ def testCloudLoginWorkerRunsServiceOffMainThread(qtbot) -> None:
     assert worker._password == ""
 
 
-class _ProgressButton(PrimaryPushButton):
-    def __init__(self, *args, **kwargs) -> None:
-        self.loading = False
-        super().__init__(*args, **kwargs)
-
-    def load(self) -> None:
-        self.loading = True
-
-    def normal(self) -> None:
-        self.loading = False
-
-
 class _LoginWorker(QObject):
     succeeded = Signal(object)
     failed = Signal(object)
@@ -442,11 +429,6 @@ def testLoginInterfaceShowsProgressAndBlocksDuplicateSubmission(
     monkeypatch,
 ) -> None:
     _LoginWorker.instances = []
-    monkeypatch.setattr(
-        loginDialogModule,
-        "IndeterminateProgressPushButton",
-        _ProgressButton,
-    )
     monkeypatch.setattr(loginDialogModule, "CloudLoginWorker", _LoginWorker)
     interface = loginDialogModule.LoginInterface()
     qtbot.addWidget(interface)

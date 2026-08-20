@@ -21,12 +21,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import FluentIcon, PrimaryPushButton, PushButton, CheckBox
-from qfluentwidgetspro import IndeterminateProgressPushButton
 
 from app.core.services import CloudApiError, getCloudAuth
 from app.core.services.cloud_auth import CloudLoginWorker
 from app.core.utils import logger, qconfig
 from app.view.resource import resource as _resource
+from app.view.widgets.prismatica_button import PrismaticaProgressButton
 from app.view.widgets.prismatica_theme import ACCENT, shellPalette
 
 
@@ -325,7 +325,7 @@ class LoginInterface(QWidget):
         layout.addLayout(options)
         layout.addSpacing(20)
 
-        self._loginBtn = IndeterminateProgressPushButton("登录")
+        self._loginBtn = PrismaticaProgressButton("登录")
         self._loginBtn.setFixedHeight(44)
         self._loginBtn.clicked.connect(self._onLogin)
         layout.addWidget(self._loginBtn)

@@ -68,7 +68,7 @@ def test_restored_frequency_panel_is_populated_by_initial_sync(
     monkeypatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setattr(freqWidgetModule, "ProRoundTableWidget", QTableWidget)
+    monkeypatch.setattr(freqWidgetModule, "PrismaticaTableWidget", QTableWidget)
     dbPath = tmp_path / "panel-restart.db"
     store = CorpusStore(dbPath=str(dbPath))
     store.addRawText("restored.txt", "重启后仍可分析")

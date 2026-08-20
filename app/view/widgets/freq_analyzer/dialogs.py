@@ -44,8 +44,8 @@ from app.core.services.stopword_service import (
     saveStopwordsToFile,
 )
 from app.core.utils import qconfig
+from app.view.widgets.prismatica_table import PrismaticaTableWidget
 from app.view.widgets.prismatica_theme import setThemeRole, shellPalette
-from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 
 from .ui_helpers import (
     _makeAlignedItem,
@@ -191,17 +191,19 @@ class NgramDialog(MessageBoxBase):
         )
 
         # 表格
-        self.table = ProRoundTableWidget(self)
+        self.table = PrismaticaTableWidget(self)
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
             ["排名", self.label, "频次", "范围", "占比"]
         )
         self.table.setSortingEnabled(True)
         self.table.setSelectionBehavior(
-            ProRoundTableWidget.SelectionBehavior.SelectRows
+            PrismaticaTableWidget.SelectionBehavior.SelectRows
         )
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(ProRoundTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            PrismaticaTableWidget.EditTrigger.NoEditTriggers
+        )
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(
@@ -315,14 +317,16 @@ class SelectColumnDialog(MessageBoxBase):
         setThemeRole(infoLabel, "muted", "font-size: 12px;")
 
         # 左侧：列名列表
-        self.columnList = ProRoundTableWidget(self)
+        self.columnList = PrismaticaTableWidget(self)
         self.columnList.setColumnCount(3)
         self.columnList.setHorizontalHeaderLabels(["列名", "类型", "状态"])
         self.columnList.setSelectionBehavior(
-            ProRoundTableWidget.SelectionBehavior.SelectRows
+            PrismaticaTableWidget.SelectionBehavior.SelectRows
         )
         self.columnList.verticalHeader().setVisible(False)
-        self.columnList.setEditTriggers(ProRoundTableWidget.EditTrigger.NoEditTriggers)
+        self.columnList.setEditTriggers(
+            PrismaticaTableWidget.EditTrigger.NoEditTriggers
+        )
         self.columnList.setShowGrid(False)
         # 注意：itemSelectionChanged 在 previewTable 创建之后再连接（见下方）
         self.columnList.horizontalHeader().setSectionResizeMode(
@@ -377,12 +381,12 @@ class SelectColumnDialog(MessageBoxBase):
         leftWrap = _makeScrollArea(self, self.columnList)
 
         # 右侧：预览
-        self.previewTable = ProRoundTableWidget(self)
+        self.previewTable = PrismaticaTableWidget(self)
         self.previewTable.setColumnCount(2)
         self.previewTable.setHorizontalHeaderLabels(["文件", "前 5 行预览"])
         self.previewTable.verticalHeader().setVisible(False)
         self.previewTable.setEditTriggers(
-            ProRoundTableWidget.EditTrigger.NoEditTriggers
+            PrismaticaTableWidget.EditTrigger.NoEditTriggers
         )
         self.previewTable.setShowGrid(False)
         self.previewTable.horizontalHeader().setSectionResizeMode(

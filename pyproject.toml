@@ -21,7 +21,8 @@ dependencies = [
     "pandas",
     "psutil>=7.2.2",
     "pyperclip>=1.11.0",
-    "pyside6-fluent-widgets-pro",
+    "pycryptodome>=3.23.0",
+    "pyside6-fluent-widgets>=1.11.2,<2",
     "python-docx>=1.2.0",
     "requests>=2.34.2",
     "tiktoken>=0.13.0",
@@ -41,7 +42,6 @@ default = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
-pyside6-fluent-widgets-pro = { path = "pyside6_fluent_widgets_pro-0.13.0-cp311-cp311-win_amd64.whl" }
 
 [tool.pytest.ini_options]
 minversion = "8.0"

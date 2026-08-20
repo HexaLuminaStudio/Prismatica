@@ -33,8 +33,6 @@ warnings.filterwarnings(
 
 from PySide6.QtCore import QThreadPool, Qt
 from PySide6.QtWidgets import QApplication
-from qfluentwidgetspro import setLicense
-
 from app.core.utils import cfg, configureLogging, log, qconfig
 from app.core.utils.application_lifecycle import beginApplicationShutdown
 from app.core.utils.setting import INTERNAL_TEST_MODE, MODE
@@ -51,10 +49,6 @@ from app.view.main_window import (
     MainWindow,
 )  # noqa: F401(主窗口构造期会再次使用)
 from app.view.resource.resource import *
-
-setLicense(
-    "jGEwKHNnQYGLMk+G3DD0REwDKhaSyZ3jj+st63emdDJPlj2M1D2aJ8ediZJVyVG75FyXv56z1BBUk7LFrFBwh2DuEy8f3YuMtezFbY/PSiMRXFdLKM23VSZuEatCBjunKrsOo3Y5D+/0/6B/ulVDxm2YIstlNar6OedvxZSDf4R8tQzIvrrfg0DEMEdqnHvHNcGny39/U2iGzF6HjA+OwKEqZSdP1tG+icDOlfT5AmxWG0oGH1uAzylMnip+NB4OeFQQOG3xGyyVARwPVp35Xg=="
-)
 
 # enable dpi scale
 _dpi_scale = cfg.get(cfg.DpiScale)

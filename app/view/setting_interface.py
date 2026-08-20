@@ -1001,7 +1001,7 @@ class AiChatSettingWidget(OverviewGroupCard):
     """
 
     def __init__(self, parent=None):
-        super().__init__("AI 聊天设置", FluentIcon.CHAT, "平台 AI · Token 计费", parent)
+        super().__init__("AI 聊天", FluentIcon.CHAT, "平台 AI · Token 计费", parent)
 
         self.platformAiLabel = CaptionLabel("由 Prismatica 云端安全提供，无需填写 API Key")
 

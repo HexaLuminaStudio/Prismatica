@@ -2,7 +2,7 @@
 """
 平台 AI 聊天服务
 
-参考 qfluentwidgetspro/chat demo 实现:
+配合 Prismatica 项目内置聊天视图实现:
 - LLMThread: 后台调用 PrismaticaAPI，由服务端持有供应商 API Key 并按真实 Token 结算
 - ChatService: 顶层服务,持有 LLMThread 并对外暴露业务接口
 

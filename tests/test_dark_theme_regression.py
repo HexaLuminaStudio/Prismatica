@@ -7,14 +7,13 @@ from matplotlib import colors as matplotlibColors
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import QApplication, QWidget
-from qfluentwidgets import PrimaryPushButton, TableWidget, Theme, setTheme
+from qfluentwidgets import TableWidget, Theme, setTheme
 
 from app.core.utils import cfg, qconfig
 from app.view import bias_interface as biasModule
 from app.view.bias_interface import AssociationRulesDialog
 from app.view.setting_interface import AiChatSettingWidget, SoftwareSettingWidget
 from app.view.task_interface import TaskInterface
-from app.view.widgets.account import login_dialog as loginModule
 from app.view.widgets.account.login_dialog import LoginInterface
 from app.view.widgets.freq_analyzer.result_summary import (
     MetricCard,
@@ -43,11 +42,6 @@ def testLoginTaskAndAiSettingsUseDarkSurfaces(
     monkeypatch,
     darkTheme,
 ) -> None:
-    monkeypatch.setattr(
-        loginModule,
-        "IndeterminateProgressPushButton",
-        PrimaryPushButton,
-    )
     login = LoginInterface()
     task = TaskInterface()
     aiSettings = AiChatSettingWidget()
@@ -87,7 +81,7 @@ def testAssociationRuleLabelsRemainReadableInDarkTheme(
     monkeypatch,
     darkTheme,
 ) -> None:
-    monkeypatch.setattr(biasModule, "RoundTableWidget", TableWidget)
+    monkeypatch.setattr(biasModule, "PrismaticaTableWidget", TableWidget)
     monkeypatch.setattr(AssociationRulesDialog, "_recompute", lambda self: None)
     parent = QWidget()
     qtbot.addWidget(parent)
@@ -130,11 +124,6 @@ def testExistingComponentsRefreshWhenThemeChanges(
     monkeypatch,
 ) -> None:
     previousTheme = qconfig.get(cfg.themeMode)
-    monkeypatch.setattr(
-        loginModule,
-        "IndeterminateProgressPushButton",
-        PrimaryPushButton,
-    )
     try:
         setTheme(Theme.LIGHT, save=False)
         QApplication.processEvents()

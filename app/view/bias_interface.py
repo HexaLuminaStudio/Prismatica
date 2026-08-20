@@ -55,8 +55,7 @@ from qfluentwidgets import (
     SpinBox,
     TableView,
 )
-from qfluentwidgetspro import RoundTableWidget
-
+from app.view.widgets.prismatica_table import PrismaticaTableWidget
 from app.view.widgets.result_table_models import BiasResultTableModel
 from app.view.widgets.prismatica_theme import shellPalette
 
@@ -406,13 +405,17 @@ class CountResultDialog(MessageBoxBase):
         closeBtn.clicked.connect(self.accept)
 
         # 表格
-        self.table = RoundTableWidget(self)
+        self.table = PrismaticaTableWidget(self)
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["偏误类型", "计数", "占比"])
         self.table.setSortingEnabled(True)
-        self.table.setSelectionBehavior(RoundTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionBehavior(
+            PrismaticaTableWidget.SelectionBehavior.SelectRows
+        )
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(RoundTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            PrismaticaTableWidget.EditTrigger.NoEditTriggers
+        )
         self.table.setShowGrid(False)
 
         # 填充数据
@@ -1337,7 +1340,7 @@ class AssociationRulesDialog(MessageBoxBase):
         self.viewSegment.currentItemChanged.connect(self._onViewChanged)
 
         # --- 表格视图 ---
-        self.table = RoundTableWidget(self)
+        self.table = PrismaticaTableWidget(self)
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(
             [
@@ -1353,9 +1356,13 @@ class AssociationRulesDialog(MessageBoxBase):
             ]
         )
         self.table.setSortingEnabled(True)
-        self.table.setSelectionBehavior(RoundTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionBehavior(
+            PrismaticaTableWidget.SelectionBehavior.SelectRows
+        )
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(RoundTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            PrismaticaTableWidget.EditTrigger.NoEditTriggers
+        )
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setSectionResizeMode(

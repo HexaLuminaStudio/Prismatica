@@ -8,10 +8,8 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
-from qfluentwidgets import PushButton
 
 import app.view.main_window as mainWindowModule
-import app.view.widgets.account.login_dialog as loginDialogModule
 import app.view.widgets.hsk_corpus.hsk_corpus_browser as hskCorpusModule
 import app.view.widgets.resource_verification_dialog as resourceDialogModule
 from app.core.services.startup_database_service import (
@@ -193,11 +191,6 @@ def testLoggedInUserStartsPreparationWithoutLeavingPage(monkeypatch) -> None:
 
 
 def testLoginPageExplainsAutomaticReturn(qtbot, monkeypatch) -> None:
-    monkeypatch.setattr(
-        loginDialogModule,
-        "IndeterminateProgressPushButton",
-        PushButton,
-    )
     interface = LoginInterface()
     qtbot.addWidget(interface)
     interface._switchTab(1, animate=False)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概览
 
-**Prismatica（棱溯客户端）** —— 中文学术语料处理桌面应用。基于 PySide6 + qfluentwidgets（Pro 版），提供 HSK / 全球中介语语料库下载、偏误统计、词频 / KWIC / 共现网络 / 句法依存 / 词云 / 情感 / 词语分析等功能，对标 AntConc 的中文场景。Python 3.11（见 `.python-version`），打包工具为 PyInstaller / Nuitka。
+**Prismatica（棱溯客户端）** —— 中文学术语料处理桌面应用。基于 PySide6 + qfluentwidgets（社区版），提供 HSK / 全球中介语语料库下载、偏误统计、词频 / KWIC / 共现网络 / 句法依存 / 词云 / 情感 / 词语分析等功能，对标 AntConc 的中文场景。Python 3.11（见 `.python-version`），打包工具为 PyInstaller / Nuitka。
 
 完整命名规范（强制优先于 PEP 8）见 [.trae\rules\命名规则.md](.trae\rules\命名规则.md) —— **每次修改 Python 代码前必须重读**。提交信息规范见 [.trae/rules/git-commit-message.md](.trae/rules/git-commit-message.md)，目录职责见 [.trae/rules/代码存放规则.md](.trae/rules/代码存放规则.md)。每次给用户的回答必须是中文！
 
@@ -18,7 +18,7 @@ python main.py
 ```
 
 ### 依赖管理（uv）
-项目使用 `uv`，`pyproject.toml` + `uv.lock` 是依赖权威来源。`pyside6-fluent-widgets-pro` 不在 PyPI 上，通过本地 whl 安装（路径已在 `[tool.uv.sources]` 配置）。清华源已配置为默认 index。
+项目使用 `uv`，`pyproject.toml` + `uv.lock` 是依赖权威来源。社区版 `pyside6-fluent-widgets` 由配置的清华 PyPI 镜像安装，不依赖仓库外的本地 wheel。清华源已配置为默认 index。
 ```bash
 uv sync                          # 安装所有依赖
 uv add <pkg>                     # 新增依赖
@@ -37,7 +37,7 @@ uv run python main.py            # 在 venv 中运行
 ## 架构
 
 ### 入口与生命周期
-- [main.py](main.py) —— 入口脚本。设置 `qfluentwidgetspro` License、通过 `configureLogging(MODE)` 初始化统一日志、配置 DPI 缩放、创建 `QApplication`、实例化 `MainWindow`。
+- [main.py](main.py) —— 入口脚本。通过 `configureLogging(MODE)` 初始化统一日志、配置 DPI 缩放、创建 `QApplication`、实例化 `MainWindow`。
 - `MainWindow` (`app/view/main_window.py`) 继承自 `MSFluentWindow`，通过 `qfluentwidgets` 的 `NavigationItemPosition` 注册 6 个子界面（Hsk / Global / Bias / FreqAnalyzer 顶部，Task / Setting 底部）。`closeEvent` 会拦截有未完成任务时的退出。
 
 ### 分层（视图只能调服务，服务可调 API + Models）
@@ -113,7 +113,7 @@ app/
 使用 loguru（`app/core/utils/logger.py`），仅允许入口脚本通过 `configureLogging(MODE)` 初始化一次。运行日志统一写入 `<INSTALL_DIR>/logs/prismatica.log`，不再拆分 debug / error / audit / startup 文件。业务代码统一从 `app.core.utils` 导入 `log`，**不要直接 `from loguru import logger`**。模块自带 API key、Token、邮箱、手机号、身份证号等敏感信息过滤。
 
 ### 关键第三方依赖
-- `PySide6` + `qfluentwidgetspro`（本地 whl）—— UI
+- `PySide6` + `qfluentwidgets`（社区版 PyPI 包）—— UI
 - `hanlp-restful` —— 桌面端直连 HanLP（当前凭据按产品决策硬编码）
 - `jieba` —— 备用分词（fallback）
 - `pandas`, `openpyxl`, `python-docx` —— 语料导入

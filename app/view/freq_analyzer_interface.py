@@ -82,7 +82,6 @@ from qfluentwidgets import (
     TransparentToggleToolButton,
     ToolTipPosition,
 )
-from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
 import matplotlib  # noqa: E402
 
 # matplotlib 后端切换要点:

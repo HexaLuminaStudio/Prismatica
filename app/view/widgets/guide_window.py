@@ -2,7 +2,7 @@
 """
 首次启动引导窗口
 
-参照 qfluentwidgetspro.GuideWindow 的多页引导样式,在用户首次启动时
+使用项目内置多页引导窗口,在用户首次启动时
 展示软件基本功能介绍 + 文件保存路径 + HSK / Global 令牌配置流程。
 
 包含页面:
@@ -17,7 +17,7 @@
 启动逻辑(由 main.py 协调):
     - 读取 cfg.FirstLaunch;若为 True 则弹出本窗口
     - 用户点击「完成」后,将 cfg.FirstLaunch 设为 False,主窗口继续启动
-    - 用户关闭引导窗口等同于完成引导(同样写入 False)
+    - 用户未完成时关闭引导窗口会中止本次启动
 
 设计约定:
     - 左侧图标 96×96,右侧标题 + 正文,水平 spacing 24,垂直间距统一 10
@@ -48,6 +48,7 @@ from PySide6.QtWidgets import QSizePolicy
 
 from app.core.utils import cfg, logger, qconfig
 from app.core.utils.setting import INTERNAL_TEST_MODE
+from app.view.widgets.prismatica_guide import PrismaticaGuideWindow
 from app.view.widgets.prismatica_theme import setThemeRole
 from app.view.widgets.window_geometry import fitWindowToAvailableScreen
 
@@ -851,7 +852,7 @@ class FinalInterface(_BaseGuidePage):
 class GuideWindow(QObject):
     """首次启动引导窗口(轻量包装)
 
-    使用 qfluentwidgetspro.GuideWindow 作为底层窗口,
+    使用项目内置 PrismaticaGuideWindow 作为底层窗口,
     在第一次启动时依次展示 5 个页面。
     完成或关闭后,通过 cfg.FirstLaunch 持久化为 False,
     下次启动不再弹出。
@@ -859,8 +860,8 @@ class GuideWindow(QObject):
     实现要点:
         - 继承 QObject 才能让 `finished = Signal()` 作为类属性正常工作
           (在 __init__ 里实例化 Signal 会得到 Signal 类本身,没有 connect)。
-        - 通过动态继承 ProGuideWindow 并重写 closeEvent,避免对原生窗口
-          做 monkey-patch(原 closeEvent 是 C 层方法,赋值会丢失绑定)。
+        - 通过动态继承 PrismaticaGuideWindow 并重写 closeEvent，避免对窗口
+          实例做 monkey-patch。
         - exec() 用 QEventLoop 阻塞,直到用户完成引导或关闭窗口。
     """
 
@@ -870,7 +871,7 @@ class GuideWindow(QObject):
     # main.py 据此选择退出整个程序
     rejected = Signal()
 
-    # 紧凑窗口尺寸:跟随 ProGuideWindow 默认,但显式设一个合理范围
+    # 紧凑窗口尺寸：显式限制在可用屏幕工作区内。
     _WINDOW_MIN_SIZE = (640, 420)
     _WINDOW_DEFAULT_SIZE = (860, 540)
 
@@ -879,11 +880,8 @@ class GuideWindow(QObject):
         # 防止 _onFinished 被重复触发的重入锁
         self._finished = False
 
-        # 延迟导入 pro 组件,避免主程序未安装 pro 时影响启动
-        from qfluentwidgetspro import GuideWindow as ProGuideWindow
-
-        # 动态继承 ProGuideWindow,重写 closeEvent 把"关闭"等同"完成引导"。
-        class _GuideWindowImpl(ProGuideWindow):
+        # 动态继承项目内置引导窗口，集中处理未完成时的关闭请求。
+        class _GuideWindowImpl(PrismaticaGuideWindow):
             """包装后的引导窗口,关闭时通知外部"""
 
             _outer = None  # 反向引用,由 GuideWindow.__init__ 注入
@@ -899,18 +897,6 @@ class GuideWindow(QObject):
                 self.previousButton.setText("上一步")
                 self.nextButton.setText("下一步")
                 self.launchButton.setText("完成")
-
-                # stackedWidget 允许在小屏压缩，页面自身负责纵向滚动。
-                sw = getattr(self, "stackedWidget", None)
-                if sw is not None:
-                    try:
-                        sw.setMinimumWidth(0)
-                        sw.setSizePolicy(
-                            QSizePolicy.Policy.Expanding,
-                            QSizePolicy.Policy.Expanding,
-                        )
-                    except Exception:
-                        pass
 
             def showEvent(self, event):
                 """窗口首次显示时按当前屏幕工作区再次校准尺寸。"""
@@ -1013,7 +999,7 @@ class GuideWindow(QObject):
             - 否则 → 启用
         """
         try:
-            # currentPage 是 method(ProGuideWindow 的 Cython 实现),必须调用
+            # currentPage 是窗口方法，调用后返回当前页面。
             currentPage = self._window.currentPage()
         except Exception:
             currentPage = None
@@ -1038,11 +1024,9 @@ class GuideWindow(QObject):
             1. token 页未通过验证 → 禁用 nextButton,通常点不到
             2. 即使用户通过其它方式触发(键盘 / a11y),这里再次拦截
 
-        ProGuideWindow 会在我们返回后自动切到下一页。
+        校验通过后由项目内置引导窗口切到下一页。
         """
         try:
-            # ProGuideWindow 暴露的当前页接口是 currentPage()(method),
-            # 不是属性。
             currentPage = self._window.currentPage()
             if currentPage is None:
                 return
@@ -1066,7 +1050,10 @@ class GuideWindow(QObject):
 
             validateFn = getattr(currentPage, "validate", None)
             if callable(validateFn):
-                validateFn()
+                isValid = validateFn()
+                if isValid is False:
+                    return
+            self._window.nextPage()
         except Exception as e:
             logger.warning(f"[Guide] 校验当前页失败: {e}")
 

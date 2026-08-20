@@ -50,7 +50,8 @@ from qfluentwidgets import (
     PrimaryPushButton,
     TransparentPushButton,
 )
-from qfluentwidgetspro import RoundTableWidget as ProRoundTableWidget
+
+from app.view.widgets.prismatica_table import PrismaticaTableWidget
 
 from app.view.widgets.freq_analyzer.result_summary import (
     MetricColor,
@@ -383,17 +384,19 @@ class FreqAnalyzerWidget(AiInsightMixin, ResourceSinkMixin, QWidget):
         tableTitle = StrongBodyLabel("词频统计表", self)
         tableLayout.addWidget(tableTitle)
 
-        self.table = ProRoundTableWidget(self)
+        self.table = PrismaticaTableWidget(self)
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(
             ["排名", "词", "频次", "范围", "占比", "Zipf参考"]
         )
         self.table.setSortingEnabled(True)
         self.table.setSelectionBehavior(
-            ProRoundTableWidget.SelectionBehavior.SelectRows
+            PrismaticaTableWidget.SelectionBehavior.SelectRows
         )
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(ProRoundTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            PrismaticaTableWidget.EditTrigger.NoEditTriggers
+        )
         self.table.setShowGrid(False)
         self.table.setAlternatingRowColors(True)
 

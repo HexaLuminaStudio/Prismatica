@@ -2,7 +2,7 @@
 """
 AI 聊天子界面
 
-参照 test/demo.py 实现 qfluentwidgetspro.ChatWidget 的集成,
+使用 Prismatica 项目内置聊天组件,
 适配 Prismatica 项目规范:
     - 视图层通过 ChatService 调用 LLM,不分直接依赖 openai
     - 顶部为 HeaderWidget(机器人图标 + 标题 + 副标题 + 保存按钮)
@@ -35,11 +35,11 @@ from qfluentwidgets import (
     VerticalSeparator,
     themeColor,
 )
-from qfluentwidgetspro.chat import (
+from app.view.widgets.prismatica_chat import (
     ChatMessage,
     ChatRole,
-    ChatWidget,
     FileChatMessage,
+    PrismaticaChatWidget,
     SimpleChatTextEdit,
 )
 
@@ -102,7 +102,7 @@ class ChatInterface(QWidget):
 
         # ---- UI ----
         self.headerWidget = _ChatHeader(self)
-        self.chatPage = ChatWidget(self)
+        self.chatPage = PrismaticaChatWidget(self)
         self.messageTextEdit = SimpleChatTextEdit(self)
 
         self.progressRing = IndeterminateProgressRing()
