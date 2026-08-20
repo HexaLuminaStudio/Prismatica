@@ -252,7 +252,7 @@ class _OverviewPage(QWidget):
             return
         self._loading = True
         self._refreshButton.setEnabled(False)
-        self._devicesHint.setText("正在刷新账户信息…")
+        self._devicesHint.setText("刷新账户信息…")
         _runAccountTask(
             lambda: (getCloudAccount().me(), getCloudAccount().listDevices()),
             self._onRefreshSucceeded,
