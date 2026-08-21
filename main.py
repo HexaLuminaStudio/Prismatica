@@ -1,6 +1,7 @@
 # coding:utf-8
 import os
 import sys
+sys.path.append(".")
 import warnings
 
 from app.core.bootstrap.single_instance import SingleInstanceGuard

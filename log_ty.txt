@@ -1,0 +1,23 @@
+2026-8-21 10:13:34 重新打开引导窗口步骤 猫贰零
+#每次需再次运行set_firstlaunch.py
+
+步骤 1 — 在项目根创建一个小脚本（推荐，避免命令行引号问题）
+•	新建文件 D:\Python\Prismatica-UI\set_firstlaunch.py，内容如下：
+
+
+import sys
+sys.path.append(r'D:\Python\Prismatica-UI')
+from app.core.utils import qconfig, cfg
+
+# 标记为首次启动，下一次运行主程序会弹出 GuideWindow
+qconfig.set(cfg.FirstLaunch, True)
+print("设置完成: cfg.FirstLaunch = True")
+
+
+步骤 2 — 运行脚本以写入配置
+•	打开 PowerShell，执行： cd D:\Python\Prismatica-UI python set_firstlaunch.py
+你应该看到“设置完成: cfg.FirstLaunch = True”。
+或直接在visual studio中运行 set_firstlaunch.py 脚本
+步骤 3 — 启动主程序（程序会检测 FirstLaunch 并弹出引导）
+•	在同一目录运行主入口。常见命令（如果项目通过 main.py 启动）： python main.py
+•	程序启动后应自动弹出首次启动引导窗口（GuideWindow）。若项目有其他启动方式，请按现有启动脚本/快捷方式启动。

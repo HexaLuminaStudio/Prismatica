@@ -990,6 +990,25 @@ class GuideWindow(QObject):
     def _onPageChanged(self, _index: int) -> None:
         """页面切换:更新「下一步」按钮状态"""
         self._updateNextButtonState()
+        # 当切换到令牌配置页且尚未验证时，自动尝试使用官方账号获取 Token，
+        # 以免用户必须手动点击“使用官方账号”。
+        try:
+            currentPage = self._window.currentPage()
+            if isinstance(currentPage, _TokenGuideBase):
+                # 仅在未通过验证且官方请求尚未完成时触发自动请求
+                if not currentPage.isValidated() and not getattr(
+                    currentPage, "_officialRequestCompleted", False
+                ):
+                    # 防御性检查:若已在发起官方请求则不重复触发
+                    active = getattr(currentPage, "_activeRefreshMode", None)
+                    if active != "official":
+                        try:
+                            currentPage._onOfficialAccountClicked()
+                        except Exception:
+                            # 忽略自动触发中的异常，避免影响界面切换
+                            pass
+        except Exception:
+            pass
 
     def _updateNextButtonState(self) -> None:
         """根据当前页的验证状态启用 / 禁用「下一步」按钮
