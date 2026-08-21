@@ -21,4 +21,3 @@ print("设置完成: cfg.FirstLaunch = True")
 步骤 3 — 启动主程序（程序会检测 FirstLaunch 并弹出引导）
 •	在同一目录运行主入口。常见命令（如果项目通过 main.py 启动）： python main.py
 •	程序启动后应自动弹出首次启动引导窗口（GuideWindow）。若项目有其他启动方式，请按现有启动脚本/快捷方式启动。
-
